@@ -811,6 +811,8 @@ window.ARSCloud = (() => {
     }
   }
 
+  let lastPullMetaSig = null; /* [REBUILD FIX 72] */
+
   async function pullFarm(farmId, options = {}) {
     loadSessionOnce();
     if (!token) return { success: false, reason: 'Authentication required.' };
@@ -826,13 +828,6 @@ window.ARSCloud = (() => {
     try {
       const f = ensureFarmObject(farmId);
       const localBefore = clone(f);
-      /* [REBUILD FIX 71] change detection: signature of everything a pull can
-         replace. performBackgroundPull uses this to skip renderAll() when the
-         cloud data is identical to what is already on screen — previously the
-         18-second heartbeat re-rendered the whole app (and wiped open medicine
-         search results) on every poll even when nothing changed. */
-      const sigOf = o => JSON.stringify([o.name || '', o.logo || o.logo_url || null, o.settings || null, o.reminderSettings || null, o.feedPlan || null].concat(Object.keys(entityMap).map(k => o[k] || [])));
-      const sigBefore = sigOf(f);
       let serverMeta = null;
       let pulledFeedPlanIsCanonical = false;
       try {
@@ -897,6 +892,20 @@ window.ARSCloud = (() => {
       // scoped farm_logo record, but retain that legacy value as a safe fallback.
       if (!pulledLogo && serverMeta?.logo_url) pulledLogo = serverMeta.logo_url;
 
+      /* [REBUILD FIX 72] cheap change detection: compare per-row updated_at
+         versions against the previous pull (instead of stringify-ing the whole
+         farm every 18 s — that caused noticeable lag on phones). */
+      const farmKeys = Array.from(cloudVersions.keys()).filter(key => key.startsWith(`${farmId}:::`));
+      let changed = nextVersions.size !== farmKeys.length;
+      if (!changed) nextVersions.forEach((value, key) => {
+        if (changed) return;
+        const old = cloudVersions.get(key);
+        if (!old || old.updated_at !== value.updated_at) changed = true;
+      });
+      const metaSig = JSON.stringify([serverMeta ? serverMeta.name : null, pulledLogo || null, pulledSettings || null, pulledFeedPlan || null]);
+      if (!changed && metaSig !== lastPullMetaSig) changed = true;
+      lastPullMetaSig = metaSig;
+
       // Preserve the previous local state as a recovery reference before the
       // cloud-authoritative replacement. It is never uploaded automatically.
       saveLocalRecovery(farmId, localBefore, 'before cloud-authoritative replacement');
@@ -941,7 +950,6 @@ window.ARSCloud = (() => {
       window.__arsLastSavedFarmById = window.__arsLastSavedFarmById || {};
       window.__arsLastSavedFarmById[farmId] = clone(f);
       if (window.applyCustomLogo) window.applyCustomLogo();
-      const changed = sigOf(f) !== sigBefore; /* [REBUILD FIX 71] */
       return { success: true, count: rows.length, cloudTotal: result.expectedTotal, farm: f, changed };
     } catch (error) {
       console.warn('[ARSCloud] pullFarm blocked:', error);

@@ -135,6 +135,7 @@
           ${isFloating ? `
             <button type="button" class="btn small" style="background:#0ea5e9;color:#fff;font-weight:750" onclick="allocateFloatingSlot(${origIndex})">⚡ Allocate Slot</button>
             <button type="button" class="btn ghost small" onclick="editReservation(${origIndex})">Edit</button>
+            <button type="button" class="btn ghost small" style="color:#f59e0b" onclick="reservationAction(${origIndex},'cancelled')" title="Cancel waitlist reservation">Cancel</button>
           ` : (!['released', 'cancelled'].includes(r.status) ? `
             <button type="button" class="btn ghost small" style="color:var(--ok);font-weight:700" onclick="reservationAction(${origIndex},'released')">Release</button>
             <button type="button" class="btn ghost small" onclick="editReservation(${origIndex})">Edit</button>
@@ -386,6 +387,27 @@
     return `<button type="button" onclick="selectReservationBatch('${b.id}')"><span><b>${b.id}</b><br><small>Sow: ${b.dam_name||b.sow||'—'} · Breed: ${b.breed||'—'}</small></span><span>Male: ${a.m}<br>Female: ${a.f}</span></button>`;
   }
 
+  /* [REBUILD FIX 73] UPCOMING FARROWING BATCHES — virtual reservation targets
+     built from pregnant sows (inseminated, not yet farrowed) so customers can
+     reserve a litter that is not born yet. Always saved as Floating Waitlist;
+     once the sow farrows and the real batch exists, re-assign via Edit. */
+  function upcomingBatches() {
+    return (F().sows || []).filter(s => {
+      const active = typeof isActiveSow === 'function' ? isActiveSow(s) : !(s.culled || s.culledAt || String(s.status || '').toUpperCase() === 'CULLED');
+      return active && s.insemination && !s.farrowingDate && !s.lactationStart;
+    }).map(s => {
+      const d = new Date(String(s.insemination).slice(0, 10) + 'T00:00:00');
+      d.setDate(d.getDate() + 114);
+      return { id: 'UPC-' + (s.id || s.name), upc: true, dam_name: s.name, sow: s.name, sire_name: s.sire || s.sire_name || '', breed: s.breed || s.customBreed || '', due: d.toISOString().slice(0, 10) };
+    }).sort((a, b) => a.due.localeCompare(b.due));
+  }
+  const upcomingById = id => upcomingBatches().find(u => u.id === id) || null;
+  const batchOrUpcoming = id => batch(id) || upcomingById(id);
+
+  function upcomingSuggestionHTML(u) {
+    return `<button type="button" onclick="selectReservationBatch('${u.id}')" style="border:1.5px dashed #f59e0b"><span><b>⏳ ${esc(u.dam_name)}</b><br><small>Upcoming litter · due ~${fmtDate(u.due)} · ${esc(u.breed || '—')}</small></span><span style="color:#f59e0b;font-weight:800">Floating<br>waitlist</span></button>`;
+  }
+
   function filterReservationBatches(q) {
     let box = document.getElementById('reservationSuggestions');
     if (!box) return;
@@ -399,17 +421,29 @@
           bb = `${b.id} ${b.dam_name||b.sow||''}`.toLowerCase();
         return aa.startsWith(term) === bb.startsWith(term) ? aa.localeCompare(bb) : aa.startsWith(term) ? -1 : 1;
       });
-    box.innerHTML = matches.length ? matches.map(batchSuggestionHTML).join('') : '<div class="suggestion-empty">No matching piglet batches found.</div>';
+    /* [FIX 73] also offer upcoming farrowing litters (pregnant sows) */
+    const ups = upcomingBatches().filter(u => {
+      const text = `${u.id} ${u.dam_name} ${u.breed} upcoming litter due`.toLowerCase();
+      return !term || text.includes(term);
+    });
+    const upHead = ups.length ? '<div style="padding:8px 10px 2px;font-size:10.5px;color:#f59e0b;font-weight:800;letter-spacing:.06em">⏳ UPCOMING FARROWING LITTERS — reserve as Floating Waitlist</div>' : '';
+    const html = matches.map(batchSuggestionHTML).join('') + upHead + ups.map(upcomingSuggestionHTML).join('');
+    box.innerHTML = html || '<div class="suggestion-empty">No matching piglet batches found.</div>';
     box.classList.add('open');
     box.style.display = 'block';
   }
 
   function selectReservationBatch(id) {
-    let b = batch(id),
+    let b = batchOrUpcoming(id),
       input = document.getElementById('reservationBatchSearch');
     if (!b) return;
-    input.value = `${b.id} · ${b.dam_name||b.sow||''}`;
+    input.value = b.upc ? `⏳ ${b.dam_name||b.sow||''} · upcoming litter` : `${b.id} · ${b.dam_name||b.sow||''}`;
     document.getElementById('reservationBatchId').value = id;
+    if (b.upc) {
+      /* upcoming litters have no headcount yet → must queue as floating */
+      const chk = document.getElementById('floatingResChk');
+      if (chk && !chk.checked) { chk.checked = true; window.toggleFloatingMode && window.toggleFloatingMode(true); }
+    }
     let list = document.getElementById('reservationSuggestions');
     list.classList.remove('open');
     list.style.display = 'none';
@@ -430,7 +464,7 @@
       return false;
     };
     let id = document.getElementById('reservationBatchId')?.value,
-      b = batch(id),
+      b = batchOrUpcoming(id),
       source = document.querySelector('#reservationModal [name="source"]')?.value || 'breeder',
       gender = document.querySelector('#reservationModal [name="gender"]')?.value || 'male',
       q = +document.querySelector('#reservationModal [name="quantity"]')?.value,
@@ -441,8 +475,13 @@
     if (!b) return fail('Search and pick a piglet batch first.');
     if (!q || q < 1) return fail('Quantity must be at least 1.');
     if (isNaN(price) || price < 0) return fail('Price per piglet is required.');
+    if (b.upc && !isFloating) { /* [FIX 73] upcoming litters always queue as floating */
+      const fChk = document.getElementById('floatingResChk');
+      if (fChk) fChk.checked = true;
+      isFloating = true;
+    }
 
-    let left = Math.max(0, allocationAvailable(b, source, gender) - stagedFor(id, source, gender));
+    let left = b.upc ? Infinity : Math.max(0, allocationAvailable(b, source, gender) - stagedFor(id, source, gender));
     if (q > left && !isFloating) {
       const fPrompt = document.getElementById('floatingPromptBox');
       if (fPrompt) fPrompt.style.display = 'block';
@@ -551,11 +590,15 @@
 
   function updateReservationAvailability() {
     let id = document.getElementById('reservationBatchId')?.value,
-      b = batch(id),
+      b = batchOrUpcoming(id),
       out = document.getElementById('reservationBatchSummary'),
       g = document.querySelector('#reservationModal [name="gender"]')?.value || 'female',
       source = document.querySelector('#reservationModal [name="source"]')?.value || 'breeder';
     if (!b || !out) return;
+    if (b.upc) { /* [FIX 73] upcoming litter — no headcount yet, always floating */
+      out.innerHTML = `<div class="notice" style="border:1.5px solid #f59e0b;background:rgba(245,158,11,0.10);padding:10px 12px;border-radius:10px">⏳ <b>Upcoming litter of ${esc(b.dam_name)}</b> · due ~${fmtDate(b.due)}.<br>This customer will be queued as <b>Floating Priority Waitlist</b>; re-assign to the real batch after farrowing via Edit.</div>`;
+      return;
+    }
     let m = Math.max(0, allocationAvailable(b, source, 'male') - stagedFor(id, source, 'male')),
       f = Math.max(0, allocationAvailable(b, source, 'female') - stagedFor(id, source, 'female')),
       avail = g === 'female' ? f : m;
@@ -596,10 +639,15 @@
 
       /* quick flow: nothing staged → one line from the entry box */
       if (!lines.length && d.batch_id) {
-        let bb = batch(d.batch_id),
+        let bb = batchOrUpcoming(d.batch_id),
           q = +d.quantity;
         if (!bb) throw new Error('Select a valid piglet batch.');
         if (!q || q < 1) throw new Error('Quantity must be at least 1.');
+        if (bb.upc && !isFloating) { /* [FIX 73] upcoming litter ⇒ floating waitlist */
+          isFloating = true;
+          const fChk = document.getElementById('floatingResChk');
+          if (fChk) fChk.checked = true;
+        }
         lines = [{
           batch_id: bb.id,
           breed: bb.breed || '',
@@ -624,9 +672,10 @@
         });
         Object.keys(agg).forEach(k => {
           let [bid, source, gender] = k.split('|'),
-            bb = batch(bid),
-            have = bb ? allocationAvailable(bb, source, gender) : 0,
+            bb = batchOrUpcoming(bid),
+            have = bb ? (bb.upc ? Infinity : allocationAvailable(bb, source, gender)) : 0,
             want = agg[k];
+          if (bb && bb.upc) return; /* [FIX 73] no headcount to check for upcoming litters */
           if (want > have) {
             const fChk = document.getElementById('floatingResChk');
             if (fChk) fChk.checked = true;
@@ -754,7 +803,15 @@
       b = batch(r.lines[0].batch_id);
     }
     if (!b) {
-      toast('Piglet batch record could not be found.');
+      /* [FIX 73] waitlist tied to an upcoming litter: guide to re-assign once farrowed */
+      const isUpc = String(r.batch_id || '').startsWith('UPC-') || (Array.isArray(r.lines) && r.lines.some(l => String(l.batch_id || '').startsWith('UPC-')));
+      if (isUpc) {
+        toast('⏳ This waitlist is tied to an upcoming litter. Once the sow farrows, use Edit → Re-assign batch, then ⚡ Allocate Slot.');
+        const idx = (F().reservations || []).indexOf(r);
+        if (idx >= 0) editReservation(idx);
+      } else {
+        toast('Piglet batch record could not be found.');
+      }
       return;
     }
 
@@ -1371,6 +1428,17 @@
             </div>
           </div>
 
+          <!-- [REBUILD FIX 73] batch re-assignment -->
+          <div style="background:rgba(18,48,54,0.38);border:1.2px solid rgba(145,207,202,0.2);border-radius:10px;padding:12px;margin-bottom:14px">
+            <label style="font-size:11px;font-weight:800;color:var(--teal);margin:0 0 8px;display:block">🔁 RE-ASSIGN PIGLET BATCH (optional)</label>
+            <select name="reassign_batch" style="width:100%;padding:10px;border-radius:8px;background:var(--panel2,#0d2329);border:1px solid var(--line,#244047);color:inherit">
+              <option value="">— keep current: ${esc(r.batch_id)} —</option>
+              ${(F().piglets || []).filter(b => !b.archived).map(b => `<option value="${esc(b.id)}">${esc(b.id)} · Sow ${esc(b.dam_name || b.sow || '—')}</option>`).join('')}
+              ${upcomingBatches().map(u => `<option value="${esc(u.id)}">⏳ Upcoming litter · ${esc(u.dam_name)} · due ~${fmtDate(u.due)}</option>`).join('')}
+            </select>
+            <small class="muted" style="display:block;margin-top:6px">Moves every line of this reservation to the chosen batch. Reserved heads are returned to the old batch pool and re-reserved from the new one; if the new batch lacks heads (or an upcoming litter is picked) the reservation becomes Floating Waitlist.</small>
+          </div>
+
           <div class="form-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
             <div class="field" style="margin:0">
               <label>Tag Number(s)</label>
@@ -1421,6 +1489,44 @@
     if (d.weight) r.weight = parseFloat(d.weight || 0) || null;
     r.notes = String(d.notes || '').trim();
 
+    /* [REBUILD FIX 73] batch re-assignment (e.g. floating waitlist → real batch
+       after farrowing, or correcting a wrong batch). Ledger pools stay
+       consistent: old reserved heads returned, new heads re-reserved. */
+    const reb = String(d.reassign_batch || '').trim();
+    if (reb && reb !== r.batch_id && !['released', 'cancelled'].includes(r.status)) {
+      const nb = batchOrUpcoming(reb);
+      if (nb) {
+        const oldLines = Array.isArray(r.lines) && r.lines.length
+          ? r.lines
+          : [{ batch_id: r.batch_id, source: r.source || 'breeder', gender: r.gender, quantity: r.quantity }];
+        const now = new Date().toISOString();
+        const wasActiveConfirmed = !r.is_floating && r.status !== 'floating';
+        let shortage = false;
+        if (!nb.upc) shortage = oldLines.some(L => L.quantity > allocationAvailable(nb, L.source || 'breeder', L.gender));
+        if (wasActiveConfirmed) {
+          oldLines.forEach((L, k) => (F().pigletLedger || (F().pigletLedger = [])).push({
+            id: 'reassign-out-' + Date.now() + '-' + k, farm_id: farmId, batch_id: L.batch_id,
+            type: 'cancel_reservation', source: L.source || 'breeder', gender: L.gender, quantity: L.quantity,
+            reservation_id: r.id, reservation_no: r.no, reason: 'Re-assigned to ' + nb.id, created_at: now
+          }));
+        }
+        if (!nb.upc && !shortage) {
+          oldLines.forEach((L, k) => (F().pigletLedger || (F().pigletLedger = [])).push({
+            id: 'reassign-in-' + Date.now() + '-' + k, farm_id: farmId, batch_id: nb.id,
+            type: 'reserved', source: L.source || 'breeder', gender: L.gender, quantity: L.quantity,
+            reservation_id: r.id, reservation_no: r.no, created_at: now
+          }));
+          r.is_floating = false;
+        } else {
+          r.is_floating = true; /* upcoming litter or shortage → waitlist */
+        }
+        r.lines = oldLines.map(L => ({ ...L, batch_id: nb.id, breed: nb.breed || L.breed, dam: nb.dam_name || L.dam, sire: nb.sire_name || L.sire }));
+        r.batch_id = nb.id;
+        r.reassigned_at = now;
+        toast(shortage ? `⚠ Not enough heads in ${nb.id} — reservation moved to Floating Waitlist.` : `🔁 Reservation re-assigned to ${nb.id}.`);
+      }
+    }
+
     if (r.status === 'released') {
       // Preserves released state
     } else if (r.status === 'cancelled') {
@@ -1452,6 +1558,9 @@
 
     const rNo = String(r.no || '').trim();
     const rId = String(r.id || '').trim();
+    /* [REBUILD FIX 73] was referenced below but never defined — the resulting
+       ReferenceError killed the whole delete flow ("not pushing through"). */
+    const rCust = String(r.customer || '').trim();
     /* [FIX M9] Reservation tombstones must NOT land in the shared deleted_ids
        list: semen-reseller cleanup filters THAT list by name, so a customer's
        name could hide a same-named reseller from the hub. Keep reservations in

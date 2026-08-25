@@ -1223,11 +1223,30 @@
     </section>`;
   }
 
+  /* [REBUILD FIX 72] PERFORMANCE: the KPI aggregates (computeKpis ×5, growth,
+     reconciliation, league, parity) are expensive on phones. They now render
+     ONLY while their page is on screen, and recompute only when farm data
+     actually changed (local save counter + last cloud sync stamp + period). */
+  const __arsPcPrevSave = window.save;
+  window.save = function () {
+    window.__arsDataRev = (window.__arsDataRev || 0) + 1;
+    if (typeof __arsPcPrevSave === 'function') return __arsPcPrevSave.apply(this, arguments);
+  };
+  const pcRevKey = extra => [window.__arsDataRev || 0, window.__arsLastSuccessfulSyncAt || '', window.__arsKpiDays || 30, extra].join('|');
+  const pcMemo = { ctrlKey: null, ctrlHtml: '', ctrlWritten: null, kpiKey: null, kpiHtml: '', kpiWritten: null };
+
   function appendControlCenter() {
     const host = document.getElementById('production');
-    if (!host) return;
+    if (!host || !host.classList.contains('active')) return;
+    const key = pcRevKey('ctrl');
+    if (pcMemo.ctrlKey !== key) {
+      pcMemo.ctrlKey = key;
+      pcMemo.ctrlHtml = controlCenterHTML();
+    }
+    if (pcMemo.ctrlWritten === pcMemo.ctrlHtml && host.querySelector('#productionControlCenter')) return;
     host.querySelector('#productionControlCenter')?.remove();
-    host.insertAdjacentHTML('beforeend', controlCenterHTML());
+    host.insertAdjacentHTML('beforeend', pcMemo.ctrlHtml);
+    pcMemo.ctrlWritten = pcMemo.ctrlHtml;
   }
 
   function setProductionKpiPeriod(daysBack) {
@@ -1322,8 +1341,15 @@
 
   function renderKpiCenter() {
     const host = document.getElementById('kpis');
-    if (!host) return;
-    host.innerHTML = kpiCenterHTML(farm() || {});
+    if (!host || !host.classList.contains('active')) return; /* [FIX 72] off-screen = no work */
+    const key = pcRevKey('kpi');
+    if (pcMemo.kpiKey !== key) {
+      pcMemo.kpiKey = key;
+      pcMemo.kpiHtml = kpiCenterHTML(farm() || {});
+    }
+    if (host.innerHTML === pcMemo.kpiHtml) return;
+    host.innerHTML = pcMemo.kpiHtml;
+    pcMemo.kpiWritten = pcMemo.kpiHtml;
   }
   window.renderKpiCenter = renderKpiCenter;
 
