@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>ARSwineTech Pro</title>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#0db8ae">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="ARSwineTech">
+<link rel="icon" type="image/png" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="css/app.css?v=104-semen-save-verification">
+<!-- Live Supabase Client -->
+<script src="supabase/config.js" onerror="window.__arsCloudLoadError='Could not load secure app configuration.'"></script>
+<script src="supabase/client.js" onerror="window.__arsCloudLoadError='Could not load the secure sign-in service.'"></script>
+</head>
+<body>
+
+<!-- ══════════════════════════ SIGN-IN ══════════════════════════ -->
+<div class="login-screen" id="loginScreen">
+  <div class="login-aside">
+    <div class="brand"><img class="logo-img" src="assets/arswinetech-logo.png" alt="AR SwineTech · Breed. Feed. Predict."></div>
+    <h1>Your farm, operating at its best.</h1>
+    <p>A professional command center for breeding, piglet care, inventory, forecasting and farm finance—all protected inside your secure farm workspace.</p>
+    <div class="login-points">
+      <span>◉ Farm-isolated records</span>
+      <span>◉ Offline-ready workflow</span>
+      <span>◉ Real-time farm insights</span>
+    </div>
+  </div>
+  <div class="login-card-wrap">
+    <form class="login-card" onsubmit="login(event)" novalidate>
+      <div class="brand"><img class="logo-img" src="assets/arswinetech-logo.png" alt="AR SwineTech · Breed. Feed. Predict."></div>
+      <h2>Welcome Ka-Hog Mates!</h2>
+      <p>Sign in to access your farm workspace.</p>
+      <label>Email address</label>
+      <input type="email" id="loginEmailInput" autocomplete="email" placeholder="Enter your account email">
+      <label>Password</label>
+      <input type="password" id="loginPasswordInput" autocomplete="current-password" placeholder="••••••••">
+      <button type="button" class="btn" onclick="login(event)">Sign in securely →</button>
+      <button type="button" class="btn ghost" style="width:100%;margin-top:10px" onclick="registerAccount()">Create account</button>
+      <button type="button" class="link-btn" onclick="showResetRequest()">Forgot password?</button>
+      <div class="login-error" id="loginError" role="alert" aria-live="polite"></div>
+      <div class="auth-status" id="authStatus">Checking secure sign-in service…</div>
+      <div class="login-help">Secure email account · cloud sync activates after administrator setup</div>
+    </form>
+  </div>
+</div>
+
+<!-- ══════════════════════════ PASSWORD RECOVERY ══════════════════════════ -->
+<div class="reset-screen" id="resetScreen">
+  <div class="reset-card">
+    <button class="close-reset" onclick="closeReset()">×</button>
+    <div class="eyebrow">ACCOUNT RECOVERY</div>
+    <h2 id="resetTitle">Reset your password</h2>
+    <p id="resetText">Enter your account email and we will send a secure password reset link.</p>
+    <div id="resetRequestForm">
+      <label>Email address</label>
+      <input id="resetEmail" type="email" placeholder="you@farm.ph">
+      <button class="btn" style="width:100%;margin-top:16px" onclick="requestPasswordReset()">Send secure reset link</button>
+    </div>
+    <div id="resetNewForm" style="display:none">
+      <label>New password</label>
+      <input id="newPassword" type="password" minlength="6" placeholder="At least 6 characters">
+      <label style="margin-top:12px">Confirm new password</label>
+      <input id="confirmPassword" type="password" minlength="6" placeholder="Repeat password">
+      <button class="btn" style="width:100%;margin-top:16px" onclick="completePasswordReset()">Update password securely</button>
+    </div>
+    <div class="login-error" id="resetError" role="alert"></div>
+  </div>
+</div>
+
+<!-- ══════════════════════════ FIRST-TIME FARM ONBOARDING ══════════════════════════ -->
+<div class="onboard-screen" id="onboardScreen">
+  <form class="onboard-card" onsubmit="completeOnboarding(event)">
+    <img class="logo-img" src="assets/arswinetech-logo.png" alt="AR SwineTech">
+    <div class="eyebrow" style="margin-top:12px">WELCOME TO ARSWINETECH PRO</div>
+    <h2>Set up your farm workspace</h2>
+    <p>These details create your private farm record. You will become the farm Owner.</p>
+    <div class="onboard-form">
+      <div class="field"><label>First name *</label><input name="first_name" required></div>
+      <div class="field"><label>Last name *</label><input name="last_name" required></div>
+      <div class="field"><label>Mobile number</label><input name="mobile_number" type="tel" placeholder="09XX XXX XXXX"></div>
+      <div class="field"><label>Farm name *</label><input name="farm_name" required placeholder="e.g. Andy's Swine Farm"></div>
+      <div class="field full"><label>Farm address</label><textarea name="farm_address" placeholder="Street / sitio / farm location"></textarea></div>
+      <div class="field"><label>Barangay</label><input name="barangay"></div>
+      <div class="field"><label>Municipality / City</label><input name="municipality" placeholder="e.g. Cuenca"></div>
+      <div class="field"><label>Province</label><input name="province" placeholder="e.g. Batangas"></div>
+      <div class="form-error" id="onboardError"></div>
+    </div>
+    <div class="actions"><button type="submit" class="btn">Create my secure farm workspace →</button></div>
+    <div class="onboard-join-divider"><span>OR</span></div>
+    <button type="button" class="btn ghost onboard-join-btn" onclick="openJoinFarmModal()">🔑 Join with invitation code</button>
+    <p class="onboard-join-hint">Already invited to an existing farm? Join it without creating a new farm workspace.</p>
+  </form>
+</div>
+
+<!-- ══════════════════════════ JOIN EXISTING FARM ══════════════════════════ -->
+<div class="join-farm-screen" id="joinFarmScreen" aria-hidden="true">
+  <form class="join-farm-card" onsubmit="submitJoinFarm(event)" novalidate>
+    <button type="button" class="close-reset" onclick="closeJoinFarmModal()" aria-label="Close invitation form">×</button>
+    <div class="eyebrow">🔑 SECURE FARM INVITATION</div>
+    <h2>Join an existing farm</h2>
+    <p class="join-farm-copy">Ask the farm owner for the current invitation code. The code is case-insensitive; spaces are ignored.</p>
+    <label for="joinInvitationCode">Invitation code</label>
+    <input id="joinInvitationCode" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" placeholder="e.g. ARS-139C68" maxlength="40" required>
+    <div class="form-error" id="joinFarmError" role="alert"></div>
+    <div class="join-farm-actions">
+      <button type="button" class="btn ghost" onclick="closeJoinFarmModal()">Back</button>
+      <button type="submit" class="btn" id="joinFarmSubmit">Join farm securely →</button>
+    </div>
+    <p class="join-farm-security">Your account will receive the role encoded by the owner’s invitation. Farm records are loaded from the cloud only after your membership is verified.</p>
+  </form>
+</div>
+
+<!-- ══════════════════════════ APP SHELL ══════════════════════════ -->
+<div class="shell">
+  <aside class="sidebar" id="appSidebar">
+    <div class="brand"><img class="logo-img" src="assets/arswinetech-logo.png" alt="AR SwineTech · Breed. Feed. Predict."></div>
+    <div class="farmbox">
+      <small>Active farm · secure workspace</small>
+      <select id="farmSelect" onchange="switchFarm(this.value)"></select>
+    </div>
+    <nav class="nav" id="nav">
+      <button data-page="reservations"><span class="ico">▣</span>Reservations</button>
+      <button class="active" data-page="dashboard"><span class="ico">▦</span>Dashboard</button>
+      <button data-page="sows"><span class="ico">♀</span>Sow Management</button>
+      <button data-page="piglets"><span class="ico">●</span>Piglet Batches</button>
+      <button data-page="vaccination"><span class="ico">💉</span>Vaccination Program</button>
+      <button data-page="medicine"><span class="ico">✚</span>Medicine &amp; Treatments</button>
+      <button data-page="barns"><span class="ico">🏢</span>Barns &amp; Movements</button>
+      <button data-page="rfid"><span class="ico">📡</span>RFID / EID Center</button>
+      <button data-page="pedigree"><span class="ico">⌘</span>Pedigree &amp; Breeding</button>
+      <button data-page="feed"><span class="ico">▤</span>Feed Inventory</button>
+      <button data-page="predictor"><span class="ico">◌</span>Feed Predictor</button>
+      <button data-page="production"><span class="ico">◷</span>Production Forecast</button>
+      <button data-page="semen"><span class="ico"><img src="assets/semen-bottle.png" alt="Semen" style="height:17px;width:auto;object-fit:contain;vertical-align:middle"></span>Boar Semen</button>
+      <button data-page="financials"><span class="ico">₱</span>Financials</button>
+      <button data-page="pos"><span class="ico">⊞</span>POS Sales</button>
+      <button data-page="reminders"><span class="ico">◉</span>Reminders</button>
+      <button data-page="subscription"><span class="ico">✦</span>Subscription</button>
+      <button data-page="useradmin" id="adminNav" style="display:none"><span class="ico">♚</span>User Access</button>
+    </nav>
+    <div class="theme-toggle"><span>◐ &nbsp; Dark Mode</span><button class="switch" onclick="toggleTheme()" aria-label="Toggle theme"><i></i></button></div>
+    <div class="sidefoot">Philippines · ₱ PHP<br><span style="color:#62d0c9">●</span> Farm data isolated</div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <button class="mobile-menu-toggle" onclick="toggleMobileSidebar()" aria-label="Open navigation">☰</button>
+      <div>
+        <div class="eyebrow" id="farmLabel">ACTIVE FARM</div>
+        <h1 id="pageTitle">Farm Overview</h1>
+      </div>
+      <div class="top-actions">
+        <div class="live-sync-indicator" id="liveSyncIndicator" onclick="openDataTransferModal()" title="Live Cloud Sync: Active · Tap for Database Backup Tools">
+          <span class="sync-dot"></span>
+          <span class="sync-icon">☁️</span>
+          <span class="sync-label">Synced</span>
+        </div>
+        <button class="topbar-rfid-btn" onclick="openRfidScanner()" title="Scan Bluetooth / NFC / Barcode Ear Tag"><span class="rfid-pulse-dot"></span>📡 Scan</button>
+        <button class="icon-btn" onclick="toggleTheme()" title="Switch light / dark theme">◐</button>
+        <button class="icon-btn" onclick="go('reminders')" title="Notifications">♧</button>
+        <div class="user"><span>Farm Manager<br><b style="color:var(--ink)">Administrator</b></span><div class="avatar">FM</div></div>
+        <button class="icon-btn logout-btn" onclick="logout()" title="Log out">Log out</button>
+      </div>
+    </header>
+
+    <section class="page active" id="dashboard"></section>
+    <section class="page" id="sows"></section>
+    <section class="page" id="piglets"></section>
+    <section class="page" id="vaccination"></section>
+    <section class="page" id="barns"></section>
+    <section class="page" id="rfid"></section>
+    <section class="page" id="pedigree"></section>
+    <section class="page" id="feed"></section>
+    <section class="page" id="medicine"></section>
+    <section class="page" id="predictor"></section>
+    <section class="page" id="production"></section>
+    <section class="page" id="semen"></section>
+    <section class="page" id="financials"></section>
+    <section class="page" id="pos"></section>
+    <section class="page" id="reminders"></section>
+    <section class="page" id="reservations"></section>
+    <section class="page" id="subscription"></section>
+    <section class="page" id="useradmin"></section>
+  </main>
+
+  <nav class="bottom-nav">
+    <button class="active" data-page="dashboard"><span class="bi">▦</span>Home</button>
+    <button data-page="sows"><span class="bi">♀</span>Sows</button>
+    <button data-page="piglets"><span class="bi">●</span>Piglets</button>
+    <button data-page="vaccination"><span class="bi">💉</span>Health</button>
+    <button data-page="barns"><span class="bi">🏢</span>Barns</button>
+    <button data-page="rfid"><span class="bi">📡</span>Scan</button>
+    <button data-page="pos"><span class="bi">⊞</span>Sales</button>
+    <button data-page="reminders"><span class="bi">◉</span>Alerts</button>
+  </nav>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<!-- ══════════════════════════ GENERIC CRUD MODAL ══════════════════════════ -->
+<div class="modal-bg" id="modalBg">
+  <div class="modal">
+    <h2 id="modalTitle">Add record</h2>
+    <p class="muted" id="modalDesc">This record is saved only to the active farm.</p>
+    <form id="recordForm">
+      <div class="form-grid" id="formFields"></div>
+      <div class="actions">
+        <button type="button" class="btn ghost" onclick="closeModal()">Cancel</button>
+        <button class="btn">Save record</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Core application (was one inline <script> in the original single-file build) -->
+<script src="js/app.js"></script>
+<!-- Feature modules; load order matters — later files wrap/replace earlier globals -->
+<script src="js/reminder-engine.js"></script>
+<script src="js/sow-tools.js"></script>
+<script src="js/pedigree.js"></script>
+<script src="js/lineage.js"></script>
+<script src="js/sidebar.js"></script>
+<script src="js/registration-security.js"></script>
+<script src="js/drilldown.js"></script>
+<script src="js/modal-layer.js"></script>
+<script src="js/medicine.js"></script>
+<script src="js/piglet-ledger.js"></script>
+<script src="js/foster-batch.js"></script>
+<script src="js/ble-scale.js"></script>
+<script src="js/batch-performance.js"></script>
+<script src="js/reservations.js"></script>
+<script src="js/cull.js"></script>
+<script src="js/logo-custom.js"></script>
+<script src="js/reservation-summary-edit.js"></script>
+<script src="js/qrcode-generator.js"></script>
+<script src="js/html2canvas.min.js"></script>
+<script src="js/reservation-certificate.js"></script>
+<script src="js/semen-sales.js"></script> <!-- [REBUILD FIX 42] -->
+<script src="js/vet-library.js"></script>
+<script src="js/medicine-inventory.js"></script>
+<script src="js/ai-vet-search.js"></script> <!-- [REBUILD FIX 67] AI live online lookup -->
+<script src="js/boar-registry.js"></script>
+<script src="js/fattener-center.js"></script>
+<script src="js/feeding-guide.js"></script>
+<script src="js/feed-orders.js"></script>
+<script src="js/piglet-care.js"></script>
+<!-- [REBUILD FIX 36] Vaccination Program center (sows/boars/piglets, reminders + printable report) -->
+<script src="js/vaccination-center.js"></script>
+<script src="js/zxing.min.js"></script>
+<script src="js/rfid-scanner.js"></script>
+<script src="js/barn-movements.js"></script>
+<!-- [REBUILD FIX 50] interactive dashboard health chips (16th/21st-day monitoring, vaccines, feed) -->
+<script src="js/sow-monitoring.js"></script>
+<!-- [REBUILD FIX 25] Platform-admin farm administration: complete farm deletion (User Access page) -->
+<script src="js/farm-admin.js"></script>
+<script src="js/invite-share.js"></script>
+<script src="js/financial-statements.js"></script>
+<!-- [REBUILD FEATURE] Structured production events, standardized KPIs, feed costing, audit and integrations -->
+<script src="js/production-control.js"></script>
+<script src="js/collapsible-content.js"></script>
+<script src="js/batch-delete.js"></script>
+<script src="js/cloud-sync.js"></script>
+<script src="js/register-sw.js"></script>
+</body>
+</html>
