@@ -1622,20 +1622,27 @@
   function wrapFinance() {
     if (!window.ARSFinance || window.ARSFinance.__arsFeedCostWrapped) return;
     const base = window.ARSFinance.summary;
-    const wrapped = function (f) {
-      const summary = base(f);
-      // Financial statements are lifetime/selected-period views, so use the
-      // full recorded date range instead of the KPI dashboard's last 30 days.
-      const costing = computeFeedCosting(f || {}, { from: '1970-01-01', to: '2999-12-31' });
+    const wrapped = function (f, monthKey) {
+      const summary = base(f, monthKey);
+      /* [REBUILD FIX 78] scope the costing to the same period the statement
+         reports (the current month when provided). Switch to allocated COGS
+         ONLY when the farm actually allocated most (≥50%) of the period's
+         delivered feed — a stray test allocation must never replace the real
+         purchase expenses the manager recorded. */
+      const scope = monthKey
+        ? { from: monthKey + '-01', to: monthKey + '-31' }
+        : { from: '1970-01-01', to: '2999-12-31' };
+      const costing = computeFeedCosting(f || {}, scope);
       summary.feedPurchaseCost = summary.feed;
       summary.feedCosting = costing;
-      if (costing.allocatedKg > 0) {
+      const adopted = costing.allocatedKg > 0 && costing.deliveredKg > 0 && costing.allocatedKg >= costing.deliveredKg * 0.5;
+      if (adopted) {
         summary.feed = costing.allocatedCost;
         summary.operatingExpenses = Math.max(0, summary.operatingExpenses - summary.feedPurchaseCost + summary.feed);
         summary.netProfit = summary.grossSales - summary.operatingExpenses;
         summary.feedAccountingMode = 'allocated_cogs';
       } else {
-        summary.feedAccountingMode = 'purchase_expense_pending_allocation';
+        summary.feedAccountingMode = costing.allocatedKg > 0 ? 'purchase_expense_partial_allocation' : 'purchase_expense_pending_allocation';
       }
       return summary;
     };
