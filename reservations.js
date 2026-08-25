@@ -399,10 +399,12 @@
     }).map(s => {
       const d = new Date(String(s.insemination).slice(0, 10) + 'T00:00:00');
       d.setDate(d.getDate() + 114);
-      return { id: 'UPC-' + (s.id || s.name), upc: true, dam_name: s.name, sow: s.name, sire_name: s.sire || s.sire_name || '', breed: s.breed || s.customBreed || '', due: d.toISOString().slice(0, 10) };
+      return { id: 'UPC-' + (s.name || s.id), legacyId: 'UPC-' + (s.id || s.name), upc: true, dam_name: s.name, sow: s.name, sire_name: s.sire || s.sire_name || '', breed: s.breed || s.customBreed || '', due: d.toISOString().slice(0, 10) };
     }).sort((a, b) => a.due.localeCompare(b.due));
   }
-  const upcomingById = id => upcomingBatches().find(u => u.id === id) || null;
+  /* [FIX 75] id is now UPC-<Sow Name>; legacyId keeps old UPC-<sow id> records
+     (already-saved reservations) fully editable/allocatable. */
+  const upcomingById = id => upcomingBatches().find(u => u.id === id || u.legacyId === id) || null;
   const batchOrUpcoming = id => batch(id) || upcomingById(id);
 
   function upcomingSuggestionHTML(u) {
@@ -1380,6 +1382,11 @@
   function editReservation(i) {
     let r = F().reservations[i];
     if (!r) return;
+    /* [FIX 75] per-gender quantity editing: remember which reservation is open */
+    window.__arsEditResIndex = i;
+    const editLines0 = Array.isArray(r.lines) && r.lines.length ? r.lines : [{ gender: r.gender || 'female', quantity: r.quantity }];
+    const g0 = r.gender === 'mixed' ? (editLines0[0]?.gender || 'female') : (r.gender || 'female');
+    const q0 = editLines0.filter(L => L.gender === g0).reduce((a, L) => a + (+L.quantity || 0), 0) || r.quantity;
     document.querySelectorAll('#editReservationModal').forEach(el => el.remove());
     document.body.insertAdjacentHTML('beforeend', `
       <div class="due-modal-bg open" id="editReservationModal" onclick="if(event.target===this)this.remove()" style="z-index:999999!important">
@@ -1429,18 +1436,25 @@
             </div>
           </div>
 
-          <!-- [REBUILD FIX 74] quantity adjustment -->
-          <div class="form-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">
+          <!-- [REBUILD FIX 74/75] quantity adjustment PER GENDER -->
+          <div class="form-grid" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:14px">
             <div class="field" style="margin:0">
-              <label>Reserved Quantity (heads)</label>
-              <input name="quantity" type="number" min="1" value="${r.quantity}" ${['released', 'cancelled'].includes(r.status) ? 'disabled' : ''}>
+              <label>Quantity (heads)</label>
+              <input name="quantity" id="editQtyInput" type="number" min="0" value="${q0}" ${['released', 'cancelled'].includes(r.status) ? 'disabled' : ''}>
+            </div>
+            <div class="field" style="margin:0">
+              <label>Gender</label>
+              <select name="qty_gender" id="editQtyGender" onchange="window.editQtyGenderChange()" ${['released', 'cancelled'].includes(r.status) ? 'disabled' : ''} style="padding:10px;border-radius:8px;border:1px solid rgba(145,207,202,0.35);background:rgba(10,25,30,0.6);color:inherit">
+                <option value="female" ${g0 === 'female' ? 'selected' : ''}>Female</option>
+                <option value="male" ${g0 === 'male' ? 'selected' : ''}>Male</option>
+              </select>
             </div>
             <div class="field" style="margin:0">
               <label>Price / head (₱)</label>
               <input type="number" value="${(Array.isArray(r.lines) && r.lines[0] && r.lines[0].price) || (r.quantity ? Math.round(r.total / r.quantity) : 0)}" disabled>
             </div>
           </div>
-          <small class="muted" style="display:block;margin:-8px 0 12px">Increasing re-reserves heads from the batch pool (if available); decreasing returns heads to the pool. Floating waitlist quantities adjust freely.</small>
+          <small class="muted" style="display:block;margin:-8px 0 12px">Quantity applies to the selected gender. Increasing re-reserves heads from the batch pool (if available); decreasing returns heads to the pool; setting 0 removes that gender's line. Floating waitlist quantities adjust freely.</small>
 
           <!-- [REBUILD FIX 73/74] batch re-assignment with TYPE-AHEAD search -->
           <div style="background:rgba(18,48,54,0.38);border:1.2px solid rgba(145,207,202,0.2);border-radius:10px;padding:12px;margin-bottom:14px">
@@ -1503,36 +1517,52 @@
     if (d.weight) r.weight = parseFloat(d.weight || 0) || null;
     r.notes = String(d.notes || '').trim();
 
-    /* [REBUILD FIX 74] quantity add/deduct with ledger pool consistency.
-       The delta is applied to the first line; confirmed reservations re-reserve
-       (increase) or return (decrease) heads; floating waitlists adjust freely. */
-    const newQty = Math.max(1, parseInt(d.quantity, 10) || 0);
-    if (newQty && newQty !== r.quantity && !['released', 'cancelled'].includes(r.status)) {
-      const delta = newQty - r.quantity;
-      const L0 = Array.isArray(r.lines) && r.lines.length ? r.lines[0] : null;
-      if (L0) {
-        const b0 = batch(L0.batch_id);
-        const isUpcLine = String(L0.batch_id || '').startsWith('UPC-');
-        const have = (!r.is_floating && b0 && !isUpcLine) ? allocationAvailable(b0, L0.source || 'breeder', L0.gender) : Infinity;
-        if (delta > 0 && !r.is_floating && delta > have) {
-          toast(`⚠ Only ${have} head(s) available in ${L0.batch_id} — quantity stays at ${r.quantity}.`);
+    /* [REBUILD FIX 74/75] quantity add/deduct PER GENDER with ledger pool
+       consistency. The target applies to the selected gender's line; confirmed
+       reservations re-reserve (increase) or return (decrease) heads; 0 removes
+       that gender's line; floating waitlists adjust freely. */
+    const gSel = String(d.qty_gender || '').trim() || (r.gender !== 'mixed' ? (r.gender || 'female') : 'female');
+    const targetQty = parseInt(d.quantity, 10);
+    if (!isNaN(targetQty) && targetQty >= 0 && !['released', 'cancelled'].includes(r.status)) {
+      let lines = Array.isArray(r.lines) && r.lines.length ? r.lines : null;
+      if (!lines) {
+        lines = [{ batch_id: r.batch_id, breed: '', dam: '', sire: '', source: r.source || 'breeder', gender: r.gender === 'mixed' ? 'female' : (r.gender || 'female'), quantity: r.quantity, price: r.quantity ? r.total / r.quantity : 0 }];
+        r.lines = lines;
+      }
+      const line = lines.find(L => L.gender === gSel);
+      const current = line ? (+line.quantity || 0) : 0;
+      const target = Math.max(0, targetQty);
+      if (target === 0 && lines.length === 1) {
+        toast('⚠ A reservation must keep at least one line — keep quantity ≥ 1 or delete the reservation.');
+      } else if (target !== current) {
+        const delta = target - current;
+        const ref = line || lines[0];
+        const bid = ref.batch_id;
+        const b0 = batch(bid);
+        const isUpcLine = String(bid || '').startsWith('UPC-');
+        const confirmed = !r.is_floating && r.status !== 'floating';
+        const have = (confirmed && b0 && !isUpcLine) ? allocationAvailable(b0, ref.source || 'breeder', gSel) : Infinity;
+        if (delta > 0 && confirmed && delta > have) {
+          toast(`⚠ Only ${have} ${gSel} head(s) available in ${bid} — ${gSel} quantity stays at ${current}.`);
         } else {
           const now = new Date().toISOString();
-          if (!r.is_floating && r.status !== 'floating' && !isUpcLine) {
+          if (confirmed && !isUpcLine) {
             (F().pigletLedger || (F().pigletLedger = [])).push({
-              id: 'qty-adj-' + Date.now(), farm_id: farmId, batch_id: L0.batch_id,
+              id: 'qty-adj-' + Date.now(), farm_id: farmId, batch_id: bid,
               type: delta > 0 ? 'reserved' : 'cancel_reservation',
-              source: L0.source || 'breeder', gender: L0.gender, quantity: Math.abs(delta),
+              source: ref.source || 'breeder', gender: gSel, quantity: Math.abs(delta),
               reservation_id: r.id, reservation_no: r.no, reason: 'Quantity edited', created_at: now
             });
           }
-          L0.quantity = Math.max(1, L0.quantity + delta);
-          r.quantity = r.lines.reduce((a, L) => a + (+L.quantity || 0), 0);
-          r.total = r.lines.reduce((a, L) => a + (+L.quantity || 0) * (+L.price || 0), 0);
+          if (target === 0 && line) lines.splice(lines.indexOf(line), 1);
+          else if (line) line.quantity = target;
+          else lines.push({ batch_id: bid, breed: ref.breed || '', dam: ref.dam || '', sire: ref.sire || '', source: ref.source || 'breeder', gender: gSel, quantity: target, price: ref.price || 0, is_floating: Boolean(r.is_floating) });
+          r.quantity = lines.reduce((a, L) => a + (+L.quantity || 0), 0);
+          const gs = [...new Set(lines.map(L => L.gender))];
+          r.gender = gs.length === 1 ? gs[0] : 'mixed';
+          r.total = lines.reduce((a, L) => a + (+L.quantity || 0) * (+L.price || 0), 0);
           r.balance = Math.max(0, r.total - r.paid);
         }
-      } else {
-        r.quantity = newQty; /* legacy single-line record without lines[] */
       }
     }
 
@@ -1630,6 +1660,18 @@
   }
   window.filterReassignSuggestions = filterReassignSuggestions;
   window.pickReassignBatch = pickReassignBatch;
+
+  /* [FIX 75] switching the gender select shows that gender's current quantity */
+  window.editQtyGenderChange = function () {
+    const i = window.__arsEditResIndex;
+    const r = (i !== null && i !== undefined) ? (F().reservations || [])[i] : null;
+    const inp = document.getElementById('editQtyInput');
+    if (!r || !inp) return;
+    const g = document.getElementById('editQtyGender')?.value || 'female';
+    const lines = Array.isArray(r.lines) ? r.lines : [];
+    const q = lines.filter(L => L.gender === g).reduce((a, L) => a + (+L.quantity || 0), 0);
+    inp.value = q || (String(r.gender) === g ? (+r.quantity || 0) : 0) || '';
+  };
 
   /* [REBUILD FIX 74] restore an accidentally cancelled reservation */
   async function reactivateReservation(i) {
