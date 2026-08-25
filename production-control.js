@@ -1203,7 +1203,7 @@
     const feedRows = Object.values(feed.byType).map(row => `<tr><td><b>${esc(row.feed_type)}</b></td><td>${formatNumber(row.delivered_kg)} kg</td><td>${formatNumber(row.allocated_kg)} kg</td><td>${formatMoney(row.allocated_cost)}</td><td>${formatNumber(row.unallocated_kg)} kg</td><td>${row.warnings.length ? '<span class="tag warn">Review</span>' : '<span class="tag">OK</span>'}</td></tr>`).join('');
     const qualityRows = dataQualityReport(f).map(row => `<tr><td>${esc(row.label)}</td><td>${row.total}</td><td class="${row.bad ? 'pc-bad' : 'pc-good'}">${row.bad}</td><td>${row.total ? formatRate(1 - row.bad / row.total) : '—'}</td></tr>`).join('');
     return `<section id="productionControlCenter" class="production-control-center">
-      <div class="pc-header panel"><div><div class="eyebrow">PRODUCTION CONTROL CENTER · ${APP_VERSION}</div><h2>Standard events, KPIs, feed costing &amp; audit</h2><p class="muted">This layer preserves legacy records and makes new events measurable, traceable and exportable.</p></div><div class="pc-header-actions"><select class="select" onchange="window.setProductionKpiPeriod(this.value)"><option value="30" ${daysBack === 30 ? 'selected' : ''}>Last 30 days</option><option value="90" ${daysBack === 90 ? 'selected' : ''}>Last 90 days</option><option value="365" ${daysBack === 365 ? 'selected' : ''}>Last 12 months</option></select><button type="button" class="btn ghost" onclick="window.openKpiDefinitions()">ⓘ KPI definitions</button><button type="button" class="btn ghost" onclick="window.openProductionEventLedger()">▤ Event ledger</button><button type="button" class="btn ghost" onclick="window.openAuditLog()">🛡 Audit log</button><button type="button" class="btn" onclick="window.openIntegrationHub()">↔ Integrations</button></div></div>
+      <div class="pc-header panel"><div><div class="eyebrow">PRODUCTION CONTROL CENTER · ${APP_VERSION}</div><h2>Standard events, KPIs, feed costing &amp; audit</h2><p class="muted">This layer preserves legacy records and makes new events measurable, traceable and exportable.</p></div><div class="pc-header-actions"><select class="select" onchange="window.setProductionKpiPeriod(this.value)"><option value="30" ${daysBack === 30 ? 'selected' : ''}>Last 30 days</option><option value="90" ${daysBack === 90 ? 'selected' : ''}>Last 90 days</option><option value="365" ${daysBack === 365 ? 'selected' : ''}>Last 12 months</option></select><button type="button" class="btn ghost" onclick="window.openKpiDefinitions()">ⓘ KPI definitions</button><button type="button" class="btn ghost" onclick="window.openProductionEventLedger()">▤ Event ledger</button><button type="button" class="btn ghost" onclick="window.openAuditLog()">🛡 Audit log</button><button type="button" class="btn" onclick="window.openIntegrationHub()">↔ Integrations</button><button type="button" class="btn" onclick="go('kpis')">📊 KPI Center</button></div></div>
       <div class="pc-notice ${qualityTone}"><b>Data quality: ${esc(qualityText)}</b><span>${q.legacy_derived ? `${q.legacy_derived} KPI events currently come from legacy records; new entries are recorded canonically.` : 'Canonical events are active for new records.'}</span><button type="button" class="btn ghost small" onclick="window.openDataQualityReport()">Review quality</button></div>
       <div class="pc-kpi-grid">
         ${kpiCard('Farrowing rate', formatRate(k.farrowing_rate), `${k.farrowings} farrowings / ${k.services} services`, k.farrowing_rate === null ? 'warn' : '')}
@@ -1233,7 +1233,99 @@
   function setProductionKpiPeriod(daysBack) {
     window.__arsKpiDays = Number(daysBack) || 30;
     appendControlCenter();
+    renderKpiCenter(); /* keep the dedicated KPI Center page in sync */
   }
+
+  /* ═══ [REBUILD FEATURE] Dedicated KPI Center page (data-page="kpis") ═══
+     Standalone home for the Production Control Center's intelligence:
+     hero KPI grid, growth efficiency & reconciliation, 13/52-week trends,
+     production index, sow lifetime league and parity benchmarking — all
+     computed live from recorded production events. */
+  function trendSpan(change, lowerBetter) {
+    if (change === null || change === undefined || !Number.isFinite(Number(change))) return '<span class="muted">—</span>';
+    const up = Number(change) >= 0;
+    const flat = Math.abs(Number(change)) < 0.0005;
+    const good = lowerBetter ? !up : up;
+    const cls = flat ? 'muted' : (good ? 'pc-good' : 'pc-bad');
+    return `<span class="${cls}">${up ? '▲' : '▼'} ${(Math.abs(Number(change)) * 100).toFixed(1)}%</span>`;
+  }
+
+  function fmtByUnit(value, unit) {
+    if (value === null || value === undefined || value === '' || !Number.isFinite(Number(value))) return '—';
+    if (unit === 'rate') return formatRate(value);
+    if (unit === 'money') return formatMoney(value);
+    if (unit === 'kg') return `${Number(value).toFixed(3)} kg/d`;
+    if (unit === 'number') return formatNumber(value, 2);
+    return formatNumber(value, 2);
+  }
+
+  const LOWER_BETTER = new Set(['preweaning_mortality_rate', 'mortality_rate', 'fcr', 'feed_cost_efficiency']);
+
+  function kpiCenterHTML(f) {
+    const daysBack = Number(window.__arsKpiDays || 30);
+    const report = computeKpis(f, { days: daysBack });
+    const k = report.kpis;
+    const growth = computeGrowthAggregate(f, { from: report.from, to: report.to });
+    const reconciliation = computePopulationReconciliation(f);
+    const index = computeProductionIndex(f);
+    const comparison = computePeriodComparison(f);
+    const league = computeSowLifetimeLeague(f);
+    const parity = computeParityReport(f);
+    const varianceText = reconciliation.variance === null ? 'snapshot pending' : String(reconciliation.variance);
+    const periodSelect = `<select class="select" onchange="window.setProductionKpiPeriod(this.value)"><option value="30" ${daysBack === 30 ? 'selected' : ''}>Last 30 days</option><option value="90" ${daysBack === 90 ? 'selected' : ''}>Last 90 days</option><option value="365" ${daysBack === 365 ? 'selected' : ''}>Last 12 months</option></select>`;
+
+    const cmpRows = comparison.rows.map(row => {
+      const lb = LOWER_BETTER.has(row.key);
+      return `<tr><td><b>${esc(row.label)}</b></td><td>${fmtByUnit(row.current13, row.unit)}</td><td class="muted">${fmtByUnit(row.previous13, row.unit)}</td><td>${trendSpan(row.change13 ? row.change13.change : null, lb)}</td><td>${fmtByUnit(row.current52, row.unit)}</td><td>${trendSpan(row.change52 ? row.change52.change : null, lb)}</td></tr>`;
+    }).join('');
+
+    const indexRows = index.scored.map(row => {
+      const unit = row.kpi === 'feed_cost_efficiency' ? 'money' : row.kpi === 'adg_kg_per_day' ? 'kg' : row.kpi === 'fcr' ? 'number' : (row.kpi === 'pigs_weaned_per_sow_per_year' || row.kpi === 'average_born_per_farrowing') ? 'number' : 'rate';
+      return `<tr><td><b>${esc(KPI_DEFINITIONS[row.kpi]?.label || row.kpi)}</b></td><td>${fmtByUnit(row.value, unit)}</td><td>${row.profile ? `${row.profile.p10 ?? '—'} / ${row.profile.p50 ?? '—'} / ${row.profile.p90 ?? '—'}` : '<span class="tag warn">No profile</span>'}</td><td>${row.percentile == null ? '—' : `${row.percentile.toFixed(0)}`}</td><td>${(row.weight * 100).toFixed(0)}%</td></tr>`;
+    }).join('');
+
+    const leagueRows = league.map(row => {
+      const tone = row.internal_score == null ? '' : (row.rank <= 3 ? 'pc-good' : (league.length > 4 && row.rank > league.length - 3 ? 'pc-bad' : ''));
+      return `<tr class="${tone}"><td><b>#${row.rank}</b></td><td><b>${esc(row.name)}</b><br><small class="muted">${esc(row.sow_id || '')}</small></td><td>${row.parity}</td><td>${esc(row.status || '—')}</td><td>${row.farrowings}</td><td>${formatNumber(row.born, 0)}</td><td>${formatNumber(row.weaned, 0)}</td><td>${formatNumber(row.born_per_litter)}</td><td>${formatNumber(row.weaned_per_litter)}</td><td>${formatRate(row.mortality_rate)}</td><td><b>${row.internal_score == null ? '—' : row.internal_score.toFixed(1)}</b></td></tr>`;
+    }).join('');
+
+    const parityRows = parity.map(row => `<tr><td><b>Parity ${row.parity}</b></td><td>${row.sows}</td><td>${row.services}</td><td>${row.farrowings}</td><td>${formatRate(row.farrowing_rate)}</td><td>${formatNumber(row.born_per_farrowing)}</td><td>${formatRate(row.weaning_rate)}</td><td>${formatRate(row.mortality_rate)}</td></tr>`).join('');
+
+    return `<section id="kpiCenter" class="production-control-center">
+      <div class="pc-header panel"><div><div class="eyebrow">KPI CENTER · ${APP_VERSION}</div><h2>Farm performance command deck</h2><p class="muted">Farrowing, mortality, growth efficiency, benchmark scoring and the sow league — computed live from your recorded production events.</p></div><div class="pc-header-actions">${periodSelect}<button type="button" class="btn ghost" onclick="window.openKpiDefinitions()">ⓘ Definitions</button><button type="button" class="btn ghost" onclick="window.openDataQualityReport()">⚠ Data quality</button><button type="button" class="btn ghost" onclick="go('production')">◷ Production Forecast</button></div></div>
+
+      <div class="pc-kpi-grid">
+        ${kpiCard('Farrowing rate', formatRate(k.farrowing_rate), `${k.farrowings} farrowings / ${k.services} services`, k.farrowing_rate === null ? 'warn' : '')}
+        ${kpiCard('Pre-weaning mortality', formatRate(k.preweaning_mortality_rate), `${formatNumber(k.preweaning_mortality, 0)} pre-weaning deaths / ${formatNumber(k.born, 0)} born`, k.preweaning_mortality_rate !== null && k.preweaning_mortality_rate > .1 ? 'warn' : '')}
+        ${kpiCard('Average born / farrowing', formatNumber(k.average_born_per_farrowing), `${formatNumber(k.born, 0)} born across ${k.farrowings} farrowings`)}
+        ${kpiCard('Pigs weaned / sow / year', formatNumber(k.pigs_weaned_per_sow_per_year), `${formatNumber(k.weaned, 0)} weaned · ${k.active_sows} active sows`)}
+        ${kpiCard('Feed delivered', `${formatNumber(k.feed_delivered_kg)} kg`, `${formatMoney(k.feed_purchase_cost)} purchase cost`)}
+        ${kpiCard('Feed allocated / COGS', `${formatNumber(k.feed_allocated_kg)} kg`, `${formatMoney(k.feed_cogs)} actual allocated cost`, k.feed_allocated_kg ? '' : 'warn')}
+        ${kpiCard('Feed cost / kg', k.feed_cost_per_allocated_kg == null ? '—' : formatMoney(k.feed_cost_per_allocated_kg), k.feed_cost_per_allocated_kg == null ? 'Allocate actual consumption to measure' : 'weighted average cost basis')}
+        ${kpiCard('Mortality rate', formatRate(k.mortality_rate), `${formatNumber(k.mortality, 0)} mortality events/heads`, k.mortality_rate > .1 ? 'warn' : '')}
+      </div>
+
+      <div class="panel pc-section pc-intelligence"><div class="pc-section-head"><div><h3>Growth efficiency &amp; population reconciliation</h3><p class="muted">13-week scope · measured weight gain, feed conversion and headcount math.</p></div><button type="button" class="btn ghost" onclick="window.openPopulationReconciliation()">＋ Headcount snapshot</button></div><div class="pc-intel-kpis">${kpiCard('Ending piglet headcount', formatNumber(reconciliation.observedEnding, 0), reconciliation.startingSource.replace(/_/g, ' '))}${kpiCard('Weight gain', growth.total_gain_kg == null ? '—' : `${Number(growth.total_gain_kg).toFixed(1)} kg`, growth.total_gain_kg == null ? 'Requires measured start/current weight' : 'measured gain across tracked batches')}${kpiCard('FCR', growth.fcr == null ? '—' : Number(growth.fcr).toFixed(2), growth.fcr == null ? 'Requires feed and measured weight gain' : 'kg feed ÷ kg weight gain')}${kpiCard('ADG', growth.adg_kg_per_day == null ? '—' : `${Number(growth.adg_kg_per_day).toFixed(3)} kg/day`, growth.adg_kg_per_day == null ? 'Requires dated weights' : 'weight gain ÷ days')}${kpiCard('Feed cost efficiency', growth.feed_cost_efficiency == null ? '—' : formatMoney(growth.feed_cost_efficiency), growth.feed_cost_efficiency == null ? 'Requires feed cost and weight gain' : 'PHP per kg gain')}${kpiCard('Production index', index.score === null ? 'Not benchmarked' : `${index.score.toFixed(1)} / 100`, index.score === null ? 'Import a benchmark profile' : `${Math.round(index.coverage * 100)}% weighted coverage`, index.score === null ? 'warn' : '')}</div><div class="pc-recon-line"><span><b>Starting</b> ${formatNumber(reconciliation.starting, 0)}</span><span>＋ <b>Entries</b> ${formatNumber(reconciliation.entries, 0)}</span><span>− <b>Mortality</b> ${formatNumber(reconciliation.mortality, 0)}</span><span>− <b>Transfers</b> ${formatNumber(reconciliation.transfers, 0)}</span><span>− <b>Sales</b> ${formatNumber(reconciliation.sales, 0)}</span><span>＝ <b>Expected ending</b> ${formatNumber(reconciliation.expectedEnding, 0)}</span><span class="${reconciliation.variance === null ? 'pc-recon-pending' : (reconciliation.variance === 0 ? 'pc-good' : 'pc-bad')}">Variance: ${varianceText}</span></div></div>
+
+      <div class="pc-two-col">
+        <div class="panel pc-section"><div class="pc-section-head"><div><h3>↔ Period trends</h3><p class="muted">Current vs previous 13-week windows, plus the trailing 52 weeks. ▲▼ is good/bad per metric direction.</p></div><button type="button" class="btn ghost" onclick="window.openPeriodComparison()">Open full comparison</button></div><div class="table-wrap"><table class="table pc-table"><thead><tr><th>Metric</th><th>13w</th><th>Prev 13w</th><th>Δ</th><th>52w</th><th>Δ</th></tr></thead><tbody>${cmpRows}</tbody></table></div></div>
+        <div class="panel pc-section"><div class="pc-section-head"><div><h3>★ Production index vs industry</h3><p class="muted">Weighted percentile score — requires an imported verified benchmark profile.</p></div><button type="button" class="btn" onclick="window.openBenchmarkImport()">⇧ Import benchmarks</button></div><div class="pc-index-score ${index.score === null ? 'pending' : ''}" style="margin:8px 0"><small>${index.period} production index</small><b>${index.score === null ? 'Not benchmarked' : `${index.score.toFixed(1)} / 100`}</b><span>${index.score === null ? 'Import p10–p90 percentiles to score this farm.' : `${Math.round(index.coverage * 100)}% weighted KPI coverage`}</span></div><div class="table-wrap"><table class="table pc-table"><thead><tr><th>Metric</th><th>Farm</th><th>p10/p50/p90</th><th>Pctl</th><th>Wt</th></tr></thead><tbody>${indexRows}</tbody></table></div>${index.score === null ? '<div class="pc-warning">Industry percentiles are intentionally not invented. Import a verified benchmark profile before publishing an industry score.</div>' : ''}</div>
+      </div>
+
+      <div class="panel pc-section"><div class="pc-section-head"><div><h3>🏆 Sow lifetime league</h3><p class="muted">Every sow ranked by born/litter, weaned/litter, weaned/sow/year and inverse mortality. <b class="pc-bad">Bottom-ranked sows eat feed without returning piglets — review them for culling.</b></p></div><button type="button" class="btn ghost" onclick="window.openSowLifetimeLeague()">Open league modal</button></div><div class="table-wrap"><table class="table pc-table"><thead><tr><th>Rank</th><th>Sow</th><th>Parity</th><th>Status</th><th>Farrowings</th><th>Born</th><th>Weaned</th><th>Born/litter</th><th>Weaned/litter</th><th>Mortality</th><th>Score</th></tr></thead><tbody>${leagueRows || '<tr><td colspan="11" class="empty">No sow lifetime records available.</td></tr>'}</tbody></table></div></div>
+
+      <div class="panel pc-section"><div class="pc-section-head"><div><h3>♙ Parity benchmarking</h3><p class="muted">Reproductive performance grouped by parity — spot the parity where your sows stop earning.</p></div><button type="button" class="btn ghost" onclick="window.openParityBenchmark()">Open parity modal</button></div><div class="table-wrap"><table class="table pc-table"><thead><tr><th>Parity</th><th>Sows</th><th>Services</th><th>Farrowings</th><th>Farrowing rate</th><th>Born/farrowing</th><th>Weaning rate</th><th>Mortality</th></tr></thead><tbody>${parityRows || '<tr><td colspan="8" class="empty">No active sows recorded.</td></tr>'}</tbody></table></div></div>
+
+      <div class="pc-report-actions"><button type="button" class="btn ghost" onclick="window.openCohortReport()">▦ Cohort report</button><button type="button" class="btn ghost" onclick="window.openProductionEventLedger()">▤ Event ledger</button><button type="button" class="btn ghost" onclick="window.openAuditLog()">🛡 Audit log</button><button type="button" class="btn ghost" onclick="window.openIntegrationHub()">↔ Integrations</button></div>
+    </section>`;
+  }
+
+  function renderKpiCenter() {
+    const host = document.getElementById('kpis');
+    if (!host) return;
+    host.innerHTML = kpiCenterHTML(farm() || {});
+  }
+  window.renderKpiCenter = renderKpiCenter;
 
   function modalShell(idValue, title, body) {
     document.getElementById(idValue)?.remove();
@@ -1592,6 +1684,13 @@
   };
 
   window.setProductionKpiPeriod = setProductionKpiPeriod;
+
+  /* [REBUILD FEATURE] keep the dedicated KPI Center page fresh on every render */
+  const __arsKpiOldRenderAll = window.renderAll;
+  window.renderAll = function () {
+    if (typeof __arsKpiOldRenderAll === 'function') __arsKpiOldRenderAll.apply(this, arguments);
+    try { renderKpiCenter(); } catch (e) { console.warn('[ARSProduction] KPI Center render skipped:', e); }
+  };
   window.openKpiDefinitions = openKpiDefinitions;
   window.openPopulationReconciliation = openPopulationReconciliation;
   window.savePopulationSnapshotForm = savePopulationSnapshotForm;

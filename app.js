@@ -2069,6 +2069,8 @@ let titles = {
   medicine: 'Medicine & Treatments',
   predictor: 'Feed Predictor',
   production: 'Production Forecast',
+  /* [REBUILD FEATURE] dedicated KPI Center page fed by the Production Control layer */
+  kpis: 'KPI Center',
   semen: 'Boar Semen Inventory',
   financials: 'Financial Management',
   pos: 'POS Sales',
@@ -2844,10 +2846,13 @@ function go(page) {
   if (page === 'rfid') {
     setTimeout(() => window.renderRFID?.(), 0);
   }
+  if (page === 'kpis') {
+    setTimeout(() => window.renderKpiCenter?.(), 0);
+  }
   if (page === 'useradmin') {
     setTimeout(() => adminPage(), 0);
   }
-  const premium = ['predictor', 'production', 'semen', 'financials', 'pos'];
+  const premium = ['predictor', 'production', 'kpis', 'semen', 'financials', 'pos'];
   if (premium.includes(page) && !isSuperAdmin() && planForCurrentFarm() !== 'full' && planForCurrentFarm() !== 'platform') {
     page = 'subscription';
     toast('Full Access subscription required for that feature')
