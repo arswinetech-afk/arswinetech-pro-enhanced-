@@ -142,6 +142,7 @@
             <button type="button" class="btn ghost small" style="color:#f59e0b" onclick="reservationAction(${origIndex},'cancelled')" title="Cancel reservation and return heads to available pool">Cancel</button>
           ` : `
             <button type="button" class="btn ghost small" onclick="editReservation(${origIndex})" title="Edit customer, release record or payment">${r.balance > 0 ? '💰 Pay / Edit' : 'Edit'}</button>
+            ${r.status === 'cancelled' ? `<button type="button" class="btn ghost small" style="color:var(--ok);font-weight:700" onclick="reactivateReservation(${origIndex})" title="Restore this accidentally cancelled reservation">↩ Reactivate</button>` : ''}
           `)}
           <button type="button" class="btn ghost small delete-action" onclick="deleteReservation(${origIndex})" title="Permanently remove reservation record">Delete</button>
         </td>
@@ -1428,15 +1429,28 @@
             </div>
           </div>
 
-          <!-- [REBUILD FIX 73] batch re-assignment -->
+          <!-- [REBUILD FIX 74] quantity adjustment -->
+          <div class="form-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">
+            <div class="field" style="margin:0">
+              <label>Reserved Quantity (heads)</label>
+              <input name="quantity" type="number" min="1" value="${r.quantity}" ${['released', 'cancelled'].includes(r.status) ? 'disabled' : ''}>
+            </div>
+            <div class="field" style="margin:0">
+              <label>Price / head (₱)</label>
+              <input type="number" value="${(Array.isArray(r.lines) && r.lines[0] && r.lines[0].price) || (r.quantity ? Math.round(r.total / r.quantity) : 0)}" disabled>
+            </div>
+          </div>
+          <small class="muted" style="display:block;margin:-8px 0 12px">Increasing re-reserves heads from the batch pool (if available); decreasing returns heads to the pool. Floating waitlist quantities adjust freely.</small>
+
+          <!-- [REBUILD FIX 73/74] batch re-assignment with TYPE-AHEAD search -->
           <div style="background:rgba(18,48,54,0.38);border:1.2px solid rgba(145,207,202,0.2);border-radius:10px;padding:12px;margin-bottom:14px">
-            <label style="font-size:11px;font-weight:800;color:var(--teal);margin:0 0 8px;display:block">🔁 RE-ASSIGN PIGLET BATCH (optional)</label>
-            <select name="reassign_batch" style="width:100%;padding:10px;border-radius:8px;background:var(--panel2,#0d2329);border:1px solid var(--line,#244047);color:inherit">
-              <option value="">— keep current: ${esc(r.batch_id)} —</option>
-              ${(F().piglets || []).filter(b => !b.archived).map(b => `<option value="${esc(b.id)}">${esc(b.id)} · Sow ${esc(b.dam_name || b.sow || '—')}</option>`).join('')}
-              ${upcomingBatches().map(u => `<option value="${esc(u.id)}">⏳ Upcoming litter · ${esc(u.dam_name)} · due ~${fmtDate(u.due)}</option>`).join('')}
-            </select>
-            <small class="muted" style="display:block;margin-top:6px">Moves every line of this reservation to the chosen batch. Reserved heads are returned to the old batch pool and re-reserved from the new one; if the new batch lacks heads (or an upcoming litter is picked) the reservation becomes Floating Waitlist.</small>
+            <label style="font-size:11px;font-weight:800;color:var(--teal);margin:0 0 8px;display:block">🔁 RE-ASSIGN PIGLET BATCH (optional — type to search)</label>
+            <input type="hidden" name="reassign_batch" id="reassignBatchId" value="">
+            <div class="reservation-combobox">
+              <input id="reassignSearchInput" autocomplete="off" placeholder="Type batch ID or sow name… (leave blank to keep ${esc(r.batch_id)})" oninput="window.filterReassignSuggestions(this.value)" style="width:100%;padding:10px;border-radius:8px;border:1px solid rgba(145,207,202,0.35);background:rgba(10,25,30,0.6);color:inherit">
+              <div id="reassignSuggestions" class="semen-suggestions"></div>
+            </div>
+            <small class="muted" style="display:block;margin-top:6px">Moves every line of this reservation to the picked batch. Reserved heads are returned to the old batch pool and re-reserved from the new one; if the new batch lacks heads (or an upcoming litter is picked) the reservation becomes Floating Waitlist.</small>
           </div>
 
           <div class="form-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
@@ -1488,6 +1502,39 @@
     if (d.tag_no !== undefined) r.tag_no = String(d.tag_no || '').trim() || null;
     if (d.weight) r.weight = parseFloat(d.weight || 0) || null;
     r.notes = String(d.notes || '').trim();
+
+    /* [REBUILD FIX 74] quantity add/deduct with ledger pool consistency.
+       The delta is applied to the first line; confirmed reservations re-reserve
+       (increase) or return (decrease) heads; floating waitlists adjust freely. */
+    const newQty = Math.max(1, parseInt(d.quantity, 10) || 0);
+    if (newQty && newQty !== r.quantity && !['released', 'cancelled'].includes(r.status)) {
+      const delta = newQty - r.quantity;
+      const L0 = Array.isArray(r.lines) && r.lines.length ? r.lines[0] : null;
+      if (L0) {
+        const b0 = batch(L0.batch_id);
+        const isUpcLine = String(L0.batch_id || '').startsWith('UPC-');
+        const have = (!r.is_floating && b0 && !isUpcLine) ? allocationAvailable(b0, L0.source || 'breeder', L0.gender) : Infinity;
+        if (delta > 0 && !r.is_floating && delta > have) {
+          toast(`⚠ Only ${have} head(s) available in ${L0.batch_id} — quantity stays at ${r.quantity}.`);
+        } else {
+          const now = new Date().toISOString();
+          if (!r.is_floating && r.status !== 'floating' && !isUpcLine) {
+            (F().pigletLedger || (F().pigletLedger = [])).push({
+              id: 'qty-adj-' + Date.now(), farm_id: farmId, batch_id: L0.batch_id,
+              type: delta > 0 ? 'reserved' : 'cancel_reservation',
+              source: L0.source || 'breeder', gender: L0.gender, quantity: Math.abs(delta),
+              reservation_id: r.id, reservation_no: r.no, reason: 'Quantity edited', created_at: now
+            });
+          }
+          L0.quantity = Math.max(1, L0.quantity + delta);
+          r.quantity = r.lines.reduce((a, L) => a + (+L.quantity || 0), 0);
+          r.total = r.lines.reduce((a, L) => a + (+L.quantity || 0) * (+L.price || 0), 0);
+          r.balance = Math.max(0, r.total - r.paid);
+        }
+      } else {
+        r.quantity = newQty; /* legacy single-line record without lines[] */
+      }
+    }
 
     /* [REBUILD FIX 73] batch re-assignment (e.g. floating waitlist → real batch
        after farrowing, or correcting a wrong batch). Ledger pools stay
@@ -1550,6 +1597,86 @@
       window.updateSyncIndicator?.('pending', 'Reservation pending', sync.reason || 'The edit remains safely local until verified.');
     }
   }
+
+  /* [REBUILD FIX 74] type-ahead batch picker inside the Edit modal */
+  function reassignLabel(id) {
+    const b = batch(id);
+    if (b) return `${b.id} · Sow ${b.dam_name || b.sow || '—'}`;
+    const u = upcomingById(id);
+    if (u) return `⏳ ${u.dam_name} · due ~${fmtDate(u.due)} (upcoming litter)`;
+    return id;
+  }
+
+  function filterReassignSuggestions(q) {
+    const box = document.getElementById('reassignSuggestions');
+    if (!box) return;
+    const term = String(q || '').trim().toLowerCase();
+    const cands = (F().piglets || []).filter(b => !b.archived)
+      .map(b => ({ id: b.id, label: `${b.id} · Sow ${b.dam_name || b.sow || '—'}`, hay: `${b.id} ${b.batch_name || ''} ${b.dam_name || b.sow || ''} ${b.breed || ''}` }))
+      .concat(upcomingBatches().map(u => ({ id: u.id, label: `⏳ ${u.dam_name} · due ~${fmtDate(u.due)} (upcoming litter)`, hay: `${u.id} ${u.dam_name} upcoming litter due ${u.breed || ''}` })))
+      .filter(c => !term || c.hay.toLowerCase().includes(term))
+      .slice(0, 12);
+    box.innerHTML = cands.map(c => `<button type="button" onclick="window.pickReassignBatch('${String(c.id).replace(/'/g, "\\'")}')"><span><b>${esc(c.label)}</b></span></button>`).join('') || '<div class="suggestion-empty">No matching batch.</div>';
+    box.classList.add('open');
+  }
+
+  function pickReassignBatch(id) {
+    const hid = document.getElementById('reassignBatchId');
+    const inp = document.getElementById('reassignSearchInput');
+    if (hid) hid.value = id;
+    if (inp) inp.value = reassignLabel(id);
+    const box = document.getElementById('reassignSuggestions');
+    if (box) box.classList.remove('open');
+  }
+  window.filterReassignSuggestions = filterReassignSuggestions;
+  window.pickReassignBatch = pickReassignBatch;
+
+  /* [REBUILD FIX 74] restore an accidentally cancelled reservation */
+  async function reactivateReservation(i) {
+    const r = F().reservations[i];
+    if (!r || r.status !== 'cancelled') return;
+    if (!confirm(`↩ Reactivate reservation ${r.no || r.id} for ${r.customer}?`)) return;
+    const lines = Array.isArray(r.lines) && r.lines.length
+      ? r.lines
+      : [{ batch_id: r.batch_id, source: r.source || 'breeder', gender: r.gender, quantity: r.quantity }];
+    const now = new Date().toISOString();
+    delete r.cancelled_at;
+    const isUpc = lines.every(L => String(L.batch_id || '').startsWith('UPC-'));
+    if (r.is_floating || isUpc) {
+      r.is_floating = true;
+      r.status = 'floating';
+    } else {
+      const short = lines.some(L => {
+        const b = batch(L.batch_id);
+        return !b || L.quantity > allocationAvailable(b, L.source || 'breeder', L.gender);
+      });
+      if (short) {
+        if (!confirm('⚠ Not enough heads available in the original batch(es) right now.\nReactivate as Floating Priority Waitlist instead?')) return;
+        r.is_floating = true;
+        r.status = 'floating';
+      } else {
+        lines.forEach((L, k) => (F().pigletLedger || (F().pigletLedger = [])).push({
+          id: 'reactivate-' + Date.now() + '-' + k, farm_id: farmId, batch_id: L.batch_id,
+          type: 'reserved', source: L.source || 'breeder', gender: L.gender, quantity: L.quantity,
+          reservation_id: r.id, reservation_no: r.no, reason: 'Reservation reactivated', created_at: now
+        }));
+        r.is_floating = false;
+        r.status = r.paid >= r.total ? 'fully_paid' : (r.paid > 0 ? 'partially_paid' : 'pending');
+      }
+    }
+    save();
+    page();
+    renderAll();
+    const sync = window.ARSCloud?.verifyFarmSave
+      ? await ARSCloud.verifyFarmSave(window.__arsActiveFarmId || farmId, `reservation ${r.no || r.id} reactivation`)
+      : { success: false, reason: 'Cloud verification is unavailable.' };
+    if (sync.success) toast(`↩ Reservation ${r.no} reactivated and cloud-verified!`);
+    else {
+      toast(`↩ Reservation ${r.no} reactivated locally; cloud verification pending.`);
+      window.updateSyncIndicator?.('pending', 'Reactivation pending', sync.reason || '');
+    }
+  }
+  window.reactivateReservation = reactivateReservation;
 
   function deleteReservation(i) {
     let r = F().reservations[i];
