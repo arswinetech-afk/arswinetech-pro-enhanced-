@@ -329,9 +329,13 @@
                 <div class="res-line-inputs">
                   <div class="field"><label>Reserve From *</label><select name="source" onchange="updateReservationAvailability()"><option value="breeder">Breeder</option><option value="fattener">Fattener</option><option value="farm_use">Farm Use</option></select></div>
                   <div class="field"><label>Gender</label><select name="gender" onchange="updateReservationAvailability()"><option value="male">Male</option><option value="female">Female</option></select></div>
-                  <div class="field"><label>Quantity</label><input name="quantity" type="number" min="1" value="1"></div>
-                  <div class="field"><label>Price per Piglet (₱)</label><input name="price" type="number" min="0" placeholder="e.g. 4500"></div>
+                  <div class="field"><label>Quantity</label><input name="quantity" type="number" min="1" value="1" oninput="window.updateResPriceFeedback && window.updateResPriceFeedback()"></div>
+                  <div class="field"><label>Price per Piglet (₱)</label><input name="price" id="resPriceInput" type="number" min="0" placeholder="e.g. 4500" oninput="window.updateResPriceFeedback && window.updateResPriceFeedback()"></div>
                 </div>
+
+                <!-- [REBUILD FIX 76] live batch cost analysis + profit protection -->
+                <div id="batchCostPanel"></div>
+                <div id="priceFeedbackBox"></div>
 
                 <!-- Floating Checkbox Toggle -->
                 <label class="res-check" style="margin-top:8px;display:flex;align-items:center;gap:8px;font-size:12.5px;color:#f59e0b;cursor:pointer">
@@ -452,6 +456,9 @@
     list.style.display = 'none';
     updateReservationAvailability();
     renderResNotchPicker();
+    /* [FIX 76] show the batch cost analysis + refresh price feedback */
+    if (window.ARSBatchCost) window.ARSBatchCost.renderInto('batchCostPanel', id);
+    window.updateResPriceFeedback && window.updateResPriceFeedback();
   }
 
   const resLines = () => window._resLines || (window._resLines = []);
@@ -600,6 +607,8 @@
     if (!b || !out) return;
     if (b.upc) { /* [FIX 73] upcoming litter — no headcount yet, always floating */
       out.innerHTML = `<div class="notice" style="border:1.5px solid #f59e0b;background:rgba(245,158,11,0.10);padding:10px 12px;border-radius:10px">⏳ <b>Upcoming litter of ${esc(b.dam_name)}</b> · due ~${fmtDate(b.due)}.<br>This customer will be queued as <b>Floating Priority Waitlist</b>; re-assign to the real batch after farrowing via Edit.</div>`;
+      if (window.ARSBatchCost) window.ARSBatchCost.renderInto('batchCostPanel', id);
+      window.updateResPriceFeedback && window.updateResPriceFeedback();
       return;
     }
     let m = Math.max(0, allocationAvailable(b, source, 'male') - stagedFor(id, source, 'male')),
@@ -628,7 +637,20 @@
       const fPrompt = document.getElementById('floatingPromptBox');
       if (fPrompt && !document.getElementById('floatingResChk')?.checked) fPrompt.style.display = 'none';
     }
+    /* [FIX 76] batch cost analysis follows the selected batch */
+    if (window.ARSBatchCost) window.ARSBatchCost.renderInto('batchCostPanel', id);
+    window.updateResPriceFeedback && window.updateResPriceFeedback();
   }
+
+  /* [FIX 76] live margin feedback under the price field */
+  window.updateResPriceFeedback = function () {
+    const box = document.getElementById('priceFeedbackBox');
+    if (!box || !window.ARSBatchCost) return;
+    const id = document.getElementById('reservationBatchId')?.value;
+    const price = document.querySelector('#reservationModal [name="price"]')?.value;
+    const qty = document.querySelector('#reservationModal [name="quantity"]')?.value;
+    box.innerHTML = id ? window.ARSBatchCost.priceFeedback(id, price, qty) : '';
+  };
 
   async function saveReservation(e) {
     if (e) e.preventDefault();
@@ -665,6 +687,19 @@
       }
       if (!lines.length) throw new Error('Select a valid piglet batch.');
       if (!d.customer?.trim()) throw new Error('Customer Name is required.');
+
+      /* [REBUILD FIX 76] PROFIT PROTECTION — warn (never block) when any line
+         is priced below the batch's real production cost per head. */
+      if (window.ARSBatchCost) {
+        const below = lines
+          .filter(L => !String(L.batch_id || '').startsWith('UPC-'))
+          .map(L => ({ L, a: window.ARSBatchCost.analyze(L.batch_id) }))
+          .filter(x => x.a && x.a.costPerHead > 0 && x.L.price < x.a.costPerHead);
+        if (below.length) {
+          const msg = below.map(x => `• ${x.L.batch_id}: production cost ${peso(x.a.costPerHead)}/head vs your price ${peso(x.L.price)}/head → loss ${peso(x.a.costPerHead - x.L.price)}/head (suggested ${peso(x.a.suggested)})`).join('\n');
+          if (!confirm(`⚠ BELOW PRODUCTION COST\n\n${msg}\n\nThe reservation quantity does NOT affect this number — it is the batch's cost ÷ saleable heads.\n\nSell at this price anyway?`)) return;
+        }
+      }
 
       // If NOT floating, enforce available headcount check
       if (!isFloating) {
@@ -1456,6 +1491,9 @@
           </div>
           <small class="muted" style="display:block;margin:-8px 0 12px">Quantity applies to the selected gender. Increasing re-reserves heads from the batch pool (if available); decreasing returns heads to the pool; setting 0 removes that gender's line. Floating waitlist quantities adjust freely.</small>
 
+          <!-- [FIX 76] batch cost analysis for this reservation's batch -->
+          <div id="editBatchCostPanel" style="margin-bottom:14px"></div>
+
           <!-- [REBUILD FIX 73/74] batch re-assignment with TYPE-AHEAD search -->
           <div style="background:rgba(18,48,54,0.38);border:1.2px solid rgba(145,207,202,0.2);border-radius:10px;padding:12px;margin-bottom:14px">
             <label style="font-size:11px;font-weight:800;color:var(--teal);margin:0 0 8px;display:block">🔁 RE-ASSIGN PIGLET BATCH (optional — type to search)</label>
@@ -1490,6 +1528,8 @@
         </form>
       </div>
     `);
+    /* [FIX 76] fill the cost analysis panel for this reservation's batch */
+    if (window.ARSBatchCost) window.ARSBatchCost.renderInto('editBatchCostPanel', r.batch_id);
   }
 
   window.calcEditResBalance = function() {
