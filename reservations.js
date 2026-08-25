@@ -1365,7 +1365,11 @@
       category: 'Piglet Sales',
       description: `Reservation ${r.no} · Released ${qty} heads · Tag(s): ${r.tag_no || '—'}${r.weight ? ` · Avg ${r.weight}kg` : ''}${soldBatchCount > 1 ? ` · ${soldBatchCount} batches` : ''}${deposited ? ` · pre-paid ${peso(deposited)} applied` : ''}`,
       amount: r.total,
-      paid: Math.max(0, (+r.paid || 0) - deposited)
+      /* [REBUILD FIX 79] the applied deposit transactions are EXCLUDED from the
+         statements (isAppliedDeposit), so this release row must carry the FULL
+         collected amount (deposits + release payment) — otherwise that cash and
+         the remaining balance vanish from cash flow and receivables. */
+      paid: (+r.paid || 0)
     });
 
     save();
