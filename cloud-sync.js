@@ -246,11 +246,17 @@
       if (window.applyCustomLogo) window.applyCustomLogo();
       const currentlyTyping = document.activeElement && ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName);
       const canRefreshView = !currentlyTyping || activeSearch || force;
-      if (window.renderAll && canRefreshView && (!activeModal || force)) window.renderAll();
+      /* [REBUILD FIX 71] Only touch the DOM when the cloud actually delivered
+         new data (or a forced refresh). The 18-second heartbeat used to call
+         renderAll() after every successful poll even with zero changes, which
+         rebuilt open pages — e.g. wiping Signs/Symptoms search results while
+         the user was reading them. */
+      const dataChanged = force || res.changed !== false;
+      if (window.renderAll && canRefreshView && (!activeModal || force) && dataChanged) window.renderAll();
 
       // Rebuild the currently open drill-down/modal from the freshly pulled
       // farm bucket, then restore the user's search text.
-      if (canRefreshView && (!activeModal || force)) {
+      if (dataChanged && canRefreshView && (!activeModal || force)) {
         if (openDrill && window.refreshOpenDrilldown) {
           window.refreshOpenDrilldown();
           const search = document.querySelector('#drillModal .drill-controls input.search');

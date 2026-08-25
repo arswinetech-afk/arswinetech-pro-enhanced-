@@ -826,6 +826,13 @@ window.ARSCloud = (() => {
     try {
       const f = ensureFarmObject(farmId);
       const localBefore = clone(f);
+      /* [REBUILD FIX 71] change detection: signature of everything a pull can
+         replace. performBackgroundPull uses this to skip renderAll() when the
+         cloud data is identical to what is already on screen — previously the
+         18-second heartbeat re-rendered the whole app (and wiped open medicine
+         search results) on every poll even when nothing changed. */
+      const sigOf = o => JSON.stringify([o.name || '', o.logo || o.logo_url || null, o.settings || null, o.reminderSettings || null, o.feedPlan || null].concat(Object.keys(entityMap).map(k => o[k] || [])));
+      const sigBefore = sigOf(f);
       let serverMeta = null;
       let pulledFeedPlanIsCanonical = false;
       try {
@@ -934,7 +941,8 @@ window.ARSCloud = (() => {
       window.__arsLastSavedFarmById = window.__arsLastSavedFarmById || {};
       window.__arsLastSavedFarmById[farmId] = clone(f);
       if (window.applyCustomLogo) window.applyCustomLogo();
-      return { success: true, count: rows.length, cloudTotal: result.expectedTotal, farm: f };
+      const changed = sigOf(f) !== sigBefore; /* [REBUILD FIX 71] */
+      return { success: true, count: rows.length, cloudTotal: result.expectedTotal, farm: f, changed };
     } catch (error) {
       console.warn('[ARSCloud] pullFarm blocked:', error);
       return { success: false, reason: error.message || String(error) };

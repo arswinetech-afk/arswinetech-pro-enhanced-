@@ -732,23 +732,46 @@
     return (entry.doses && (entry.doses[key] || entry.doses.piglet || entry.doses.all)) || entry.dosage || 'See product label / consult licensed veterinarian.';
   }
 
+  /* [REBUILD FIX 71] plural/prefix-tolerant token matching + category boost.
+     The old matcher used strict \bword\b tokens, so "vaccines" returned 0 hits
+     and "antibiotics"/"vitamins" nearly none — users saw "very limited"
+     results for the most natural queries. */
+  const CATEGORY_BOOSTS = [
+    [/antibiotic|antibakterya|penicillin|macrolide/, 'antibiotic'],
+    [/vaccin|bakuna|biologic|immuniz/, 'vaccine'],
+    [/vitamin|mineral|tonic|supplement|electrolyte/, 'vitamin'],
+    [/deworm|antiparasitic|purga|wormer|mange|galis/, 'antiparasitic'],
+    [/hormone|prostaglandin|gonadotroph|oxytocin|estrus/, 'hormone'],
+    [/nsaid|anti-inflammator|analgesic|antipyretic|fever reducer/, 'anti-inflammatory'],
+    [/antiseptic|disinfect|topical|spray|iodine/, 'antiseptic']
+  ];
+
   /* High-accuracy smart search by name, brand, active ingredient or alias */
   function byName(q) {
     const t = norm(q).trim();
     if (t.length < 2) return [];
+    const stems = t.split(/[^\w]+/).filter(w => w.length > 2)
+      .map(w => (w.length > 3 && w.endsWith('s') && !w.endsWith('ss')) ? w.slice(0, -1) : w);
     return LIB.map(x => {
       let s = 0;
-      const hay = x.searchText, name = norm(x.name), act = norm(x.active);
+      const hay = x.searchText, name = norm(x.name), act = norm(x.active), type = norm(x.type);
       if (name === t || act === t) s += 150;
       if ((x.aliases || []).some(a => a === t)) s += 140;
       if (name.includes(t)) s += 90;
       if (act.includes(t)) s += 80;
       if ((x.aliases || []).some(a => a.includes(t))) s += 70;
       if (x.generic && x.generic.length > 2 && new RegExp('\\b' + x.generic + '\\b').test(t)) s += 60;
-      
-      // Word token matching
-      t.split(/[^\w]+/).filter(w => w.length > 2).forEach(w => {
-        if (new RegExp('\\b' + w + '\\b').test(hay)) s += 15;
+
+      // Word token matching — prefix-tolerant so "vaccines" hits "vaccine",
+      // "antibiotics" hits "antibiotic", "vitamins" hits "vitamin".
+      stems.forEach(w => {
+        if (new RegExp('\\b' + w).test(hay)) s += 15;
+      });
+
+      // Category boost — a query like "antibiotics" or "bakuna" should list
+      // the whole class, not just accidental word hits.
+      CATEGORY_BOOSTS.forEach(([re, word]) => {
+        if (re.test(t) && type.includes(word)) s += 40;
       });
       return { x, s };
     }).filter(r => r.s > 0).sort((a, b) => b.s - a.s).map(r => r.x);

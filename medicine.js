@@ -80,6 +80,11 @@
   const old = window.renderAll;
   window.renderAll = function() {
     (typeof old === 'function' && old());
-    page()
+    /* [REBUILD FIX 71] Once the enhanced medicine-inventory module has loaded,
+       it owns the #medicine section. Re-running this legacy page() on every
+       renderAll rebuilt the section from scratch and destroyed any open
+       search results the user was reading (the background sync heartbeat
+       triggered it every ~18 seconds). */
+    if (!window.__arsMedInventoryLoaded) page()
   };
 })();

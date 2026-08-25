@@ -952,6 +952,11 @@
 
   /* render last (after the original medicine.js stub page) so the enhanced
      module owns the #medicine section. */
+  /* [REBUILD FIX 71] Tell the legacy medicine.js renderAll hook to stand down;
+     medPage() below is the only owner of #medicine. Its invContainer guard then
+     refreshes just the inventory lists on re-render and never wipes open
+     search results. */
+  window.__arsMedInventoryLoaded = true;
   const old = window.renderAll;
   window.renderAll = function () {
     (typeof old === 'function' && old());
