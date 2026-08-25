@@ -249,8 +249,8 @@
     const sharedRows = Object.entries(a.shared.cats).map(([c, v]) => `<tr><td>${esc(c)} (allocated)</td><td><b>${money(v)}</b></td></tr>`).join('');
     const medRows = a.meds.medRows.slice(0, 6).map(r => `<tr><td>${esc(r.label)}</td><td><b>${money(r.cost)}</b></td></tr>`).join('');
     const directRows = a.meds.directRows.slice(0, 6).map(r => `<tr><td>${esc(r.label)}</td><td><b>${money(r.cost)}</b></td></tr>`).join('');
-    return `<div class="notice" style="border:1.5px solid rgba(13,184,174,.5);background:rgba(13,141,145,.08);padding:12px;border-radius:10px;margin-top:10px">
-      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">
+    return `<div class="bc-panel">
+      <div class="bc-head">
         <b style="color:var(--teal2)">📊 BATCH COST ANALYSIS — ${esc(a.batchId)}</b>
         <button type="button" class="btn ghost small" onclick="window.ARSBatchCost.openBatchExpense('${esc(a.batchId)}')">＋ Record batch expense</button>
       </div>
@@ -264,7 +264,7 @@
         ${sharedRows ? `${sharedRows}<tr><td>🏠 Shared farm costs allocated (${a.shared.months} mo)</td><td><b>${money(a.shared.total)}</b></td></tr>` : '<tr><td>🏠 Shared farm costs allocated</td><td><b>' + money(0) + '</b></td></tr>'}
         <tr style="background:rgba(13,184,174,.12)"><td><b>TOTAL BATCH COST</b></td><td><b style="color:var(--teal2)">${money(a.totalCost)}</b></td></tr>
       </tbody></table></div>
-      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:6px">
+      <div class="bc-tags">
         <span class="tag" style="background:rgba(239,68,68,.15);color:#ff8b95;font-weight:800">Production cost: ${money(a.costPerHead)}/head</span>
         <span class="tag" style="background:rgba(245,158,11,.15);color:#f0b64b;font-weight:800">Minimum profitable: ${money(Math.ceil(a.minPrice))}/head</span>
         <span class="tag ok" style="font-weight:800">Suggested (15% margin): ${money(a.suggested)}/head</span>
