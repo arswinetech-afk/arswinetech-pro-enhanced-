@@ -124,11 +124,22 @@
   }
 
   /* live-inventory helpers shared by both searches */
+  /* [REBUILD FIX 81] word-boundary matching. The old substring test made the
+     oxytocin alias "oxy" match "OXYTETRACYCLINE" (Sustalin LA), so the library
+     card showed Sustalin's 200 ml as oxytocin's stock and the filter surfaced
+     it for "oxytocin". Keys must now match as whole phrases, or the stocked
+     item's name must appear as a whole word inside the key. */
+  const escRe = s => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   function stockedMatchesFor(entry) {
-    const keys = [entry.name, entry.active, ...(entry.aliases || [])].map(s => String(s).toLowerCase());
+    const keys = [entry.name, entry.active, ...(entry.aliases || [])].map(s => String(s).toLowerCase()).filter(k => k.length > 2);
     return meds().filter(m => {
       const hay = `${m.item_name || ''} ${m.brand_name || ''} ${m.active_ingredient || ''}`.toLowerCase();
-      return keys.some(k => k && k.length > 2 && (hay.includes(k) || k.includes(String(m.item_name || '').toLowerCase())));
+      const item = String(m.item_name || '').toLowerCase().trim();
+      return keys.some(k => {
+        if (new RegExp('\\b' + escRe(k) + '\\b').test(hay)) return true;
+        if (item.length > 2 && (k === item || new RegExp('\\b' + escRe(item) + '\\b').test(k))) return true;
+        return false;
+      });
     });
   }
 
@@ -687,10 +698,24 @@
     }
   }
 
-  function deleteMedItem(id) {
+  async function deleteMedItem(id) {
     const m = findMed(id); if (!m) return;
     if (!confirm(`Delete “${m.item_name}” from the medicine inventory?\n\nHistory is kept for your records, but the item and its ${round2(m.stock_quantity)} ${m.unit} stock will be removed.`)) return;
-    const idx = meds().indexOf(m); meds().splice(idx, 1);
+    /* [REBUILD FIX 81] CLOUD-FIRST deletion. The 18-second background pull is
+       cloud-authoritative: a local-only splice was resurrected by the next
+       poll ("deleted medicine keeps coming back"). Remove the cloud row first,
+       exactly like the other record types do. */
+    const idx = meds().indexOf(m);
+    const localId = String(m._ars_cloud_local_id || m.id || m.item_name || 'medicine-' + idx).trim();
+    const activeFarmId = window.__arsActiveFarmId || window.farmId || (typeof farmId !== 'undefined' ? farmId : null);
+    try {
+      if (!activeFarmId || !window.ARSCloud || typeof ARSCloud.deleteAppRecord !== 'function') throw new Error('Verified cloud deletion is unavailable.');
+      await ARSCloud.deleteAppRecord(activeFarmId, 'medicine', localId);
+    } catch (error) {
+      toast(`⚠ ${m.item_name} was NOT removed: cloud deletion failed — ${error.message || error}`);
+      return;
+    }
+    meds().splice(idx, 1);
     moves().unshift({ id: newId('mv-'), med_id: id, item_name: m.item_name, kind: 'deletion', delta: -round2(m.stock_quantity), qty_after: 0, unit: m.unit, date: today(), at: new Date().toISOString(), note: 'Removed from inventory' });
     save(); if (typeof renderAll === 'function') renderAll(); else medPage();
     toast(`Deleted ${m.item_name}`);
