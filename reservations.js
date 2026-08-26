@@ -870,6 +870,20 @@
 
     const allocateQty = Math.min(needed, Math.max(1, availableHeads));
 
+    /* [REBUILD FIX 82] once a slot is allocated the certificate must not keep
+       stale waitlist markers. Strip them, then re-note the final state. */
+    const stripWaitlistMarkers = s => String(s || '')
+      .replace(/\[FLOATING WAITLIST\]/gi, '')
+      .replace(/\[SLOT PARTIALLY ALLOCATED\]/gi, '')
+      .replace(/\[SLOT ALLOCATED[^\]]*\]/gi, '')
+      .replace(/Only \d+ of \d+ head\(s\) were available; the unallocated \d+ head\(s\) remain in the pool for re-reservation\./gi, '')
+      .replace(/\s*·\s*·/g, ' · ')
+      .replace(/^[ ·]+|[ ·]+$/g, '')
+      .trim();
+    const cleanNotes = stripWaitlistMarkers(r.notes);
+    const hadWaitlistMarkers = /\[FLOATING WAITLIST\]|\[SLOT (PARTIALLY )?ALLOCATED\]|Only \d+ of \d+ head/i.test(r.notes || '');
+    const wasFloating = Boolean(r.is_floating);
+
     /* [FIX H4] Partial allocation: the ledger now books only the heads that were
        actually available. Before this fix r.quantity stayed at the original
        (larger) request, so the subsequent release booked MORE heads as sold than
@@ -890,8 +904,11 @@
       const newTotal = r.lines.reduce((a, L) => a + (L.quantity || 0) * (L.price || 0), 0);
       if (newTotal > 0) r.total = newTotal;
       r.balance = Math.max(0, (+r.total || 0) - (+r.paid || 0));
-      r.notes = `[SLOT PARTIALLY ALLOCATED] ${r.notes ? r.notes + ' · ' : ''}Only ${allocateQty} of ${needed} head(s) were available; the unallocated ${needed - allocateQty} head(s) remain in the pool for re-reservation.`;
+      r.notes = `[SLOT PARTIALLY ALLOCATED] ${cleanNotes ? cleanNotes + ' · ' : ''}Only ${allocateQty} of ${needed} head(s) were available; the unallocated ${needed - allocateQty} head(s) remain in the pool for re-reservation.`;
       toast(`⚠️ Only ${allocateQty} of ${needed} head(s) were available — reservation reduced to ${allocateQty}.`);
+    } else if (wasFloating || hadWaitlistMarkers) {
+      /* full allocation: replace waitlist markers with a clean allocated note */
+      r.notes = `${cleanNotes ? cleanNotes + ' · ' : ''}[SLOT ALLOCATED ${new Date().toISOString().slice(0, 10)}]`;
     }
 
     // Convert floating to active confirmed reservation

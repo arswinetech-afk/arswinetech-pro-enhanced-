@@ -222,7 +222,7 @@
         ? `<div class="batch-groups">${resLineBatches.map(bb => { let m = batchMeta(bb); return `<div class="batch-group"><div class="batch-group-head"><b>${escH(bb.id)}</b>${bb.breed ? `<span> · ${escH(bb.breed)}</span>` : ''}</div><div class="batch-group-line">Dam / Sire: <b>${escH(m.damLineage)} / ${escH(m.sireLineage)}</b> · Born: <b>${fmtDate(bb.birth)}</b> · Age: <b>${m.ag}</b></div>${pedCols(m.damLineage, m.dm, m.sireLineage, m.bo)}</div>` }).join('')}</div>`
         : (b ? pedCols(damLineage, dam, sireLineage, boar) : '')}</section>`,
       /* payment: strong summary with the balance in focus + status badge */
-      payCard = `<section class="cert-pay"><div class="csec-head">Payment Summary</div><div class="pay-grid"><div class="pay-cell"><small>Total Amount</small><b>${peso(r.total)}</b></div><div class="pay-cell"><small>Amount Paid</small><b>${peso(r.paid)}</b></div><div class="pay-cell bal"><small>Balance</small><b>${peso(r.balance)}</b></div></div><span class="pay-badge ${payState}">${payBadge}</span>${(r.summary_overrides?.notes ?? r.notes) ? `<div class="pay-notes">Notes: ${escH(r.summary_overrides?.notes ?? r.notes)}</div>` : ''}</section>`,
+      payCard = `<section class="cert-pay"><div class="csec-head">Payment Summary</div><div class="pay-grid"><div class="pay-cell"><small>Total Amount</small><b>${peso(r.total)}</b></div><div class="pay-cell"><small>Amount Paid</small><b>${peso(r.paid)}</b></div><div class="pay-cell bal"><small>Balance</small><b>${peso(r.balance)}</b></div></div><span class="pay-badge ${payState}">${payBadge}</span>${(() => { /* [FIX 82] legacy records: hide stale waitlist tag once allocated */ const raw = String(r.summary_overrides?.notes ?? r.notes ?? ''); const dn = (!r.is_floating && String(r.status || '') !== 'floating') ? raw.replace(/\[FLOATING WAITLIST\]\s*/gi, '') : raw; return dn.trim() ? `<div class="pay-notes">Notes: ${escH(dn)}</div>` : ''; })()}</section>`,
       /* reservation status stepper: done / pending at a glance */
       stepDone = [true, r.paid > 0, true, !!r.vaccination_name, r.status === 'released' || !!r.released_at, !!r.released_at],
       _firstTodo = stepDone.indexOf(false), /* [REBUILD FIX 60] pending stage gets an amber highlight */
@@ -265,17 +265,20 @@
             return `<div class="health-line vax-auto">${resMulti ? '<b>' + escH(String(e.target_id)) + '</b> · ' : ''}💉 ${escH(e.vaccine)}</div>`;
           }).join(''),
           tr = (r.include_treatments && b) ? (F().treatments || []).filter(t =>
-              /* [REBUILD FIX 57] multi-batch: match treatments against every line's batch */
+              /* [REBUILD FIX 82] BATCH-scoped treatments only. The old matcher
+                 also accepted t.sow_id / t.sow_name / animal-label matches, so
+                 when a batch carries its dam's name (batch "Siete", sow
+                 "Siete"), the certificate printed the SOW's treatment history
+                 instead of the piglets'. */
               resVaxIds.some(id =>
-                t.batch_id === id || t.animal_ref === id ||
-                String(t.animal_label || '').toLowerCase().includes(String(id).toLowerCase()) ||
-                t.sow_id === id || t.sow_name === id)
+                t.batch_id === id || t.animal_ref === id || t.animal_ref === 'batch:' + id ||
+                (t.category === 'batch' && String(t.animal_label || '').toLowerCase().includes(String(id).toLowerCase())))
             ).sort((a, z) => String(z.date || '').localeCompare(String(a.date || ''))).slice(0, 8) : [],
           trHtml = tr.length
             /* [REBUILD FIX 58] .no-print → treatment records never reach the PDF output */
             ? `<div class="cert-treat-block no-print"><div class="health-line tr-head"><b>💊 Treatment history (Recent Treatments)</b></div>` + tr.map(t => `<div class="health-line tr-line">💊 ${escH(t.medicine || t.item_name || t.medicine_name || t.type || 'Treatment')} · <b>${txt(t.date ? fmtDate(String(t.date).slice(0, 10)) : t.date)}</b>${t.heads ? ` · ${t.heads} heads` : ''}${(t.dosage_ml ?? t.total_ml) !== undefined && (t.dosage_ml ?? t.total_ml) !== null ? ` · ${t.dosage_ml ?? t.total_ml} ml` : ''}${t.reason || t.notes ? ` · <small>${escH(t.reason || t.notes)}</small>` : ''}</div>`).join('') + `</div>`
             : (r.include_treatments ? `<div class="cert-treat-block no-print"><div class="health-line tr-line">💊 No treatments recorded for this batch in Recent Treatments.</div></div>` : '');
-        return `<section class="cert-card cert-health"><h3>Health &amp; Vaccination</h3><div class="health-line">${escH(baseLine)}</div>${vaxHtml}${b && b.health_status ? `<div class="health-line">Batch health status: <b>${escH(b.health_status)}</b></div>` : ''}${trHtml}<div class="health-line note-line">${(r.release_notes || r.notes || (b && b.perf_notes) || 'No medical or special instructions recorded.')}</div></section>`;
+        return `<section class="cert-card cert-health"><h3>Health &amp; Vaccination</h3><div class="health-line">${escH(baseLine)}</div>${vaxHtml}${b && b.health_status ? `<div class="health-line">Batch health status: <b>${escH(b.health_status)}</b></div>` : ''}${trHtml}<div class="health-line note-line">${(r.release_notes || (b && b.perf_notes) || 'No medical or special instructions recorded.')}</div></section>`;
       })();
     const qrPayload = (() => {
       let lines = [];
@@ -345,7 +348,8 @@
         lines.push(`Health: Verified on farm`);
       }
 
-      const resNotes = (r.summary_overrides?.notes ?? r.notes ?? r.release_notes ?? '').trim();
+      const resNotesRaw = String(r.summary_overrides?.notes ?? r.notes ?? r.release_notes ?? '');
+      const resNotes = ((!r.is_floating && String(r.status || '') !== 'floating') ? resNotesRaw.replace(/\[FLOATING WAITLIST\]\s*/gi, '') : resNotesRaw).trim();
       if (resNotes) {
         lines.push(`----------------------------------------`);
         lines.push(`📝 RESERVATION NOTES / REMARKS:`);
