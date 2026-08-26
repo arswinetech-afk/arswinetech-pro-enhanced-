@@ -506,8 +506,22 @@
   }
 
   function filterMedRows(v) {
-    const q = String(v || '').toLowerCase();
-    document.querySelectorAll('#medicine [data-med-row]').forEach(r => { r.style.display = r.dataset.name.includes(q) ? '' : 'none'; });
+    const q = String(v || '').toLowerCase().trim();
+    const tokens = q.split(/\s+/).filter(Boolean);
+    /* [REBUILD FIX 80] match the way the library search does: forward contains,
+       reverse prefix (row token "oxy" matches query "oxytocin"), and library
+       aliases (query "baytril" finds the stocked "Enrofloxacin" item). */
+    const libHits = (window.VetLib && tokens.length) ? VetLib.byName(q) : [];
+    document.querySelectorAll('#medicine [data-med-row]').forEach(r => {
+      const name = String(r.dataset.name || '');
+      const nameTokens = name.split(/\s+/).filter(Boolean);
+      let show = !tokens.length || tokens.every(w => name.includes(w));
+      if (!show) show = tokens.some(w => w.length > 2 && nameTokens.some(tw => tw.length > 2 && (w.startsWith(tw) || tw.startsWith(w))));
+      if (!show && libHits.length) {
+        show = libHits.some(e => (typeof stockedMatchesFor === 'function' ? stockedMatchesFor(e) : []).some(m => m.item_name && name.includes(String(m.item_name).toLowerCase())));
+      }
+      r.style.display = show ? '' : 'none';
+    });
   }
 
   /* ── animal pick-lists for treatments ───────────────────────────────── */
