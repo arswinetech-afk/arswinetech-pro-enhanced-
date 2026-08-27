@@ -165,11 +165,14 @@
         f: 0,
         message: 'Boar profile is not yet linked; add the boar pedigree for deep compatibility screening.'
       };
-    /* [FIX 83] even a linked-but-unrelated profile must not hide a direct
-       name/ID match with the sow's own sire/ancestor */
+    /* [FIX 83/84] even a linked-but-unrelated profile must not hide a direct
+       name/ID match with the sow's own sire/ancestor, nor a shared ancestor
+       found by tracing both lineage trees */
     if ((!result || !result.f) && sow) {
       const direct = directLineageResult(lot.boar_name, lot.boar_id || lot.boar_name, sow, lot.sireRef, lot.damRef);
+      const tree = treeCompatibilityResult([[lot.boar_name, 0], [lot.boar_id, 0], [boar?.sireRef || lot.sireRef, 1], [boar?.damRef || lot.damRef, 1]], sow);
       if (direct) result = direct;
+      else if (tree) result = tree;
     }
     sourcePreview(lot, boar, sow, result)
   }
@@ -188,10 +191,13 @@
         damRef: d.manual_dam_ref
       };
     let result;
-    /* [FIX 83] direct name/ID screening first — catches a new outside source
-       that is literally the sow's sire/ancestor even with no boar profile */
+    /* [FIX 83/84] direct name/ID screening first, then full pedigree trace —
+       catches a new outside source that is literally the sow's sire/ancestor
+       or that shares any common ancestor through the recorded trees. */
     const direct = directLineageResult(name, d.manual_boar_id, sow, d.manual_sire_ref, d.manual_dam_ref);
+    const tree = treeCompatibilityResult([[name, 0], [d.manual_boar_id, 0], [d.manual_sire_ref, 1], [d.manual_dam_ref, 1]], sow);
     if (direct) result = direct;
+    else if (tree) result = tree;
     else if (existing && window.calculateCompatibility) result = window.calculateCompatibility(existing.id, sow.id);
     else if (boar.id === sow.sireRef || boar.id === sow.damRef) result = {
       r: 'CRITICAL RISK',
@@ -232,35 +238,69 @@
       : [sow.dam, sow.damRef, sow.dam_name, sow.dam_id, sow.geneticDamRef, sow.biologicalDamRef];
     return vals.map(nrm).filter(Boolean);
   }
-  function sowAncestorSet(sow, depth = 3) {
-    const set = new Set();
-    const all = [...(F().boars || []), ...(F().sows || [])];
-    const walk = (ref, d) => {
-      if (!ref || d > depth) return;
+  /* [REBUILD FIX 84] PEDIGREE-TRACE INBREEDING ESTIMATE.
+     Both the sow's and the semen source's recorded lineage trees are walked
+     (up to 4 generations) and every COMMON ANCESTOR contributes Wright's path
+     term (1/2)^(gs+gd+1) to the offspring's estimated inbreeding coefficient.
+     This catches relationships that exact-name hits miss — e.g. the source's
+     declared dam is the sow's granddam, two sources sharing a grandsire, etc. */
+  function ancestorMap(starts, maxDepth = 4) {
+    const map = new Map(); /* key -> min generation */
+    const all = () => [...(F().boars || []), ...(F().sows || [])];
+    const walk = (ref, gen) => {
       const key = nrm(ref);
-      if (!key || set.has(key)) return;
-      set.add(key);
-      const rec = all.find(x => x.id === ref || nrm(x.name) === key || nrm(x.id) === key);
-      if (rec) sowParentIds(rec, 'sire').concat(sowParentIds(rec, 'dam')).forEach(v => walk(v, d + 1));
+      if (!key || gen > maxDepth) return;
+      if (!map.has(key) || map.get(key) > gen) map.set(key, gen);
+      const rec = all().find(x => nrm(x.id) === key || nrm(x.name) === key);
+      if (rec) {
+        [nrm(rec.id), nrm(rec.name)].forEach(k => { if (k && (!map.has(k) || map.get(k) > gen)) map.set(k, gen); });
+        sowParentIds(rec, 'sire').concat(sowParentIds(rec, 'dam')).forEach(p => walk(p, gen + 1));
+      }
     };
-    sowParentIds(sow, 'sire').concat(sowParentIds(sow, 'dam')).forEach(v => walk(v, 1));
-    return set;
+    (starts || []).forEach(([ref, gen]) => walk(ref, gen));
+    return map;
   }
+
+  function treeCompatibilityResult(sourceStarts, sow) {
+    if (!sow) return null;
+    const srcMap = ancestorMap(sourceStarts, 4);
+    const sowMap = ancestorMap([[sow.name, 0], [sow.id, 0]], 4);
+    const all = [...(F().boars || []), ...(F().sows || [])];
+    const entries = new Map(); /* canonical animal -> {gs,gd,label} */
+    srcMap.forEach((gs, key) => {
+      if (!sowMap.has(key)) return;
+      const gd = sowMap.get(key);
+      const rec = all.find(x => nrm(x.id) === key || nrm(x.name) === key);
+      const canon = rec ? 'R:' + nrm(rec.id) + '|' + nrm(rec.name) : 'S:' + key;
+      const cur = entries.get(canon);
+      if (!cur || (cur.gs + cur.gd) > (gs + gd)) entries.set(canon, { gs, gd, label: rec ? (rec.name || rec.id) : key });
+    });
+    let f = 0; const common = [];
+    entries.forEach(e => { f += Math.pow(0.5, e.gs + e.gd + 1); common.push(e.label); });
+    if (f <= 0.0001) return null;
+    const pct = f * 100;
+    return {
+      r: pct >= 25 ? 'CRITICAL RISK' : pct >= 12.5 ? 'HIGH RISK' : 'CAUTION',
+      relationship: 'Common ancestor(s) in pedigree: ' + [...new Set(common)].slice(0, 3).join(', '),
+      f: pct,
+      blocked: pct >= 25,
+      message: `The sow's lineage tree and this source's tree trace to the same animal(s) — estimated offspring inbreeding F ≈ ${pct.toFixed(2)}%.`
+    };
+  }
+
   function directLineageResult(srcName, srcId, sow, manSireRef, manDamRef) {
     const ids = [nrm(srcName), nrm(srcId)].filter(Boolean);
     if (!ids.length || !sow) return null;
     const sireIds = sowParentIds(sow, 'sire'), damIds = sowParentIds(sow, 'dam');
     const selfIds = [nrm(sow.name), nrm(sow.id)].filter(Boolean);
     if (ids.some(v => selfIds.includes(v))) return { r: 'CRITICAL RISK', relationship: 'Same animal', f: 50, blocked: true, message: 'This genetic source matches the sow herself — impossible mating.' };
-    if (ids.some(v => sireIds.includes(v))) return { r: 'CRITICAL RISK', relationship: 'Parent → Offspring', f: 25, blocked: true, message: 'This source IS the sow’s recorded SIRE — a parent-offspring mating (F 25%).' };
+    if (ids.some(v => sireIds.includes(v))) return { r: 'CRITICAL RISK', relationship: 'Parent → Offspring', f: 25, blocked: true, message: 'This source IS the sow’s recorded SIRE — a parent-offspring mating.' };
     if (ids.some(v => damIds.includes(v))) return { r: 'CRITICAL RISK', relationship: 'Parent → Offspring', f: 25, blocked: true, message: 'This source matches the sow’s recorded DAM — check your records.' };
     const mS = nrm(resolveAnimalRef(manSireRef)), mD = nrm(resolveAnimalRef(manDamRef));
     const sireMatch = mS && (sireIds.includes(mS) || ids.includes(mS));
     const damMatch = mD && (damIds.includes(mD) || ids.includes(mD));
     if (sireMatch && damMatch) return { r: 'CRITICAL RISK', relationship: 'Full Siblings', f: 25, blocked: true, message: 'Source shares both parents with this sow — full-sibling mating.' };
     if (sireMatch || damMatch) return { r: 'HIGH RISK', relationship: 'Half Siblings', f: 12.5, blocked: false, message: 'Source shares a parent with this sow — half-sibling mating.' };
-    const anc = sowAncestorSet(sow);
-    if (ids.some(v => anc.has(v))) return { r: 'HIGH RISK', relationship: 'Ancestor in pedigree', f: 12.5, blocked: false, message: 'This source appears among the sow’s recorded ancestors (grandparent or closer).' };
     return null;
   }
 
