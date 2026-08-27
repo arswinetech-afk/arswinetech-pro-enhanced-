@@ -67,7 +67,7 @@
     criticalTonePlayed = false;
     let sow = F().sows[index],
       lots = semenLots();
-    document.body.insertAdjacentHTML('beforeend', `<div class="due-modal-bg" id="breedModal"><form class="reminder-modal" data-sow-index="${index}" onsubmit="recordLinkedInsemination(event,${index})"><div class="modal-top"><div><div class="eyebrow">GENETICALLY LINKED INSEMINATION</div><h2>${sow.name}</h2><p>${sow.id} · genetic source is locked after offspring are generated.</p></div><button type="button" class="close-reminder" onclick="document.getElementById('breedModal').remove()">×</button></div><div class="reminder-fields"><div class="field"><label>Insemination date</label><small class="field-hint">Breeding day counts as Day 0 — Day 1 of gestation starts the next day · due date = insemination + 114 days. [REBUILD FIX 61]</small><input name="insemination_date" type="date" value="${(window.localToday ? window.localToday() : new Date().toISOString().slice(0,10))}" required></div><div class="field"><label>Technician</label><input name="technician" placeholder="Name of technician"></div><div class="field full semen-combobox"><label>Select semen batch</label><input id="semenBatchSearch" type="text" autocomplete="off" placeholder="Search or select semen batch..." onfocus="filterSemenSuggestions(this.value)" oninput="filterSemenSuggestions(this.value)"><input type="hidden" name="semen_id" id="semenBatchId"><div class="semen-suggestions" id="semenSuggestions">${lots.map(x=>`<button type="button" data-search="${(x.boar_name+' '+x.semen_batch_no).toLowerCase()}" onclick="selectSemenBatch('${x.id}')"><b>${x.boar_name}</b><span>${x.semen_batch_no}${x.available_bottles>0?` · ${x.available_bottles} bottles`:''}${lotRoleTag(x)}</span></button>`).join('')}</div><button type="button" class="manual-source-toggle" onclick="toggleManualSemenSource(${index})">+ Register New Semen Source</button></div></div><div class="manual-semen-source" id="manualSemenSource" style="display:none"><div class="eyebrow">NEW GENETIC SOURCE</div><div class="reminder-fields"><div class="field full"><label>Source type *</label><select name="manual_source_role"><option value="reference" selected>Lineage reference only — outside semen / AI (not counted as a boar)</option><option value="active">Active boar + lineage reference — live boar on this farm</option></select><small class="field-hint">Outside-bought semen stays on record for genetic lineage and inbreeding checks without inflating the boar count.</small></div><div class="field"><label>Boar name *</label><input name="manual_boar_name" oninput="previewManualSemen(${index})"></div><div class="field"><label>Boar ID</label><input name="manual_boar_id" oninput="previewManualSemen(${index})"></div><div class="field"><label>Breed</label><input name="manual_breed" oninput="previewManualSemen(${index})"></div><div class="field"><label>Source farm</label><input name="manual_source_farm" oninput="previewManualSemen(${index})"></div><div class="field"><label>Collection date</label><input name="manual_collection_date" type="date" value="${(window.localToday ? window.localToday() : new Date().toISOString().slice(0,10))}" oninput="previewManualSemen(${index})"></div><div class="field"><label>Batch number</label><input name="manual_batch_no" placeholder="Auto-generated if blank" oninput="previewManualSemen(${index})"></div><div class="field"><label>Boar sire record / ID</label><input name="manual_sire_ref" list="manualSireSuggestions" oninput="previewManualSemen(${index})"></div><div class="field"><label>Boar dam record / ID</label><input name="manual_dam_ref" list="manualDamSuggestions" oninput="previewManualSemen(${index})"></div><div class="field full"><label>Notes</label><textarea name="manual_notes" placeholder="Source, collection notes, genetic remarks"></textarea></div></div><datalist id="manualSireSuggestions">${(F().boars||[]).map(x=>`<option value="${x.id}">${x.name} · ${x.breed||''}</option>`).join('')}</datalist><datalist id="manualDamSuggestions">${(F().sows||[]).map(x=>`<option value="${x.id}">${x.name} · ${x.breed||''}</option>`).join('')}</datalist></div><div class="lineage-preview" id="semenLineagePreview">Select a semen batch or register a new source to run the pedigree compatibility check.</div><div class="form-error" id="manualSemenError"></div><div class="actions"><button type="button" class="btn ghost" onclick="document.getElementById('breedModal').remove()">Cancel</button><button class="btn" id="recordInseminationBtn">Record insemination</button></div></form></div>`)
+    document.body.insertAdjacentHTML('beforeend', `<div class="due-modal-bg" id="breedModal"><form class="reminder-modal" data-sow-index="${index}" onsubmit="recordLinkedInsemination(event,${index})"><div class="modal-top"><div><div class="eyebrow">GENETICALLY LINKED INSEMINATION</div><h2>${sow.name}</h2><p>${sow.id} · genetic source is locked after offspring are generated.</p></div><button type="button" class="close-reminder" onclick="document.getElementById('breedModal').remove()">×</button></div><div class="reminder-fields"><div class="field"><label>Insemination date</label><input name="insemination_date" type="date" value="${(window.localToday ? window.localToday() : new Date().toISOString().slice(0,10))}" required></div><div class="field"><label>Technician</label><input name="technician" placeholder="Name of technician"></div><div class="field full semen-combobox"><label>Select semen batch</label><input id="semenBatchSearch" type="text" autocomplete="off" placeholder="Search or select semen batch..." onfocus="filterSemenSuggestions(this.value)" oninput="filterSemenSuggestions(this.value)"><input type="hidden" name="semen_id" id="semenBatchId"><div class="semen-suggestions" id="semenSuggestions">${lots.map(x=>`<button type="button" data-search="${(x.boar_name+' '+x.semen_batch_no).toLowerCase()}" onclick="selectSemenBatch('${x.id}')"><b>${x.boar_name}</b><span>${x.semen_batch_no}${x.available_bottles>0?` · ${x.available_bottles} bottles`:''}${lotRoleTag(x)}</span></button>`).join('')}</div><button type="button" class="manual-source-toggle" onclick="toggleManualSemenSource(${index})">+ Register New Semen Source</button></div></div><div class="manual-semen-source" id="manualSemenSource" style="display:none"><div class="eyebrow">NEW GENETIC SOURCE</div><div class="reminder-fields"><div class="field full"><label>Source type *</label><select name="manual_source_role"><option value="reference" selected>Lineage reference only — outside semen / AI (not counted as a boar)</option><option value="active">Active boar + lineage reference — live boar on this farm</option></select><small class="field-hint">Outside-bought semen stays on record for genetic lineage and inbreeding checks without inflating the boar count.</small></div><div class="field"><label>Boar name *</label><input name="manual_boar_name" oninput="previewManualSemen(${index})"></div><div class="field"><label>Boar ID</label><input name="manual_boar_id" oninput="previewManualSemen(${index})"></div><div class="field"><label>Breed</label><input name="manual_breed" oninput="previewManualSemen(${index})"></div><div class="field"><label>Source farm</label><input name="manual_source_farm" oninput="previewManualSemen(${index})"></div><div class="field"><label>Collection date</label><input name="manual_collection_date" type="date" value="${(window.localToday ? window.localToday() : new Date().toISOString().slice(0,10))}" oninput="previewManualSemen(${index})"></div><div class="field"><label>Batch number</label><input name="manual_batch_no" placeholder="Auto-generated if blank" oninput="previewManualSemen(${index})"></div><div class="field"><label>Boar sire record / ID</label><input name="manual_sire_ref" list="manualSireSuggestions" oninput="previewManualSemen(${index})"></div><div class="field"><label>Boar dam record / ID</label><input name="manual_dam_ref" list="manualDamSuggestions" oninput="previewManualSemen(${index})"></div><div class="field full"><label>Notes</label><textarea name="manual_notes" placeholder="Source, collection notes, genetic remarks"></textarea></div></div><datalist id="manualSireSuggestions">${(F().boars||[]).map(x=>`<option value="${x.id}">${x.name} · ${x.breed||''}</option>`).join('')}</datalist><datalist id="manualDamSuggestions">${(F().sows||[]).map(x=>`<option value="${x.id}">${x.name} · ${x.breed||''}</option>`).join('')}</datalist></div><div class="lineage-preview" id="semenLineagePreview">Select a semen batch or register a new source to run the pedigree compatibility check.</div><div class="form-error" id="manualSemenError"></div><div class="actions"><button type="button" class="btn ghost" onclick="document.getElementById('breedModal').remove()">Cancel</button><button class="btn" id="recordInseminationBtn">Record insemination</button></div></form></div>`)
   }
 
   /* [REBUILD FIX 28] marker shown on semen suggestions whose genetic source
@@ -165,6 +165,12 @@
         f: 0,
         message: 'Boar profile is not yet linked; add the boar pedigree for deep compatibility screening.'
       };
+    /* [FIX 83] even a linked-but-unrelated profile must not hide a direct
+       name/ID match with the sow's own sire/ancestor */
+    if ((!result || !result.f) && sow) {
+      const direct = directLineageResult(lot.boar_name, lot.boar_id || lot.boar_name, sow, lot.sireRef, lot.damRef);
+      if (direct) result = direct;
+    }
     sourcePreview(lot, boar, sow, result)
   }
 
@@ -182,7 +188,11 @@
         damRef: d.manual_dam_ref
       };
     let result;
-    if (existing && window.calculateCompatibility) result = window.calculateCompatibility(existing.id, sow.id);
+    /* [FIX 83] direct name/ID screening first — catches a new outside source
+       that is literally the sow's sire/ancestor even with no boar profile */
+    const direct = directLineageResult(name, d.manual_boar_id, sow, d.manual_sire_ref, d.manual_dam_ref);
+    if (direct) result = direct;
+    else if (existing && window.calculateCompatibility) result = window.calculateCompatibility(existing.id, sow.id);
     else if (boar.id === sow.sireRef || boar.id === sow.damRef) result = {
       r: 'CRITICAL RISK',
       relationship: 'Parent → Offspring',
@@ -207,6 +217,51 @@
     if (!value) return '';
     let a = [...(F().boars || []), ...(F().sows || [])].find(x => x.id === value || String(x.name || '').toLowerCase() === String(value).toLowerCase());
     return a?.id || value
+  }
+
+  /* [REBUILD FIX 83] DIRECT-RELATIONSHIP SCREENING BY NAME AND ID.
+     The deep pedigree engine only sees recorded trees, so a brand-new outside
+     semen source whose NAME or ID equals the sow's own sire (e.g. the farm
+     re-using her father's semen) used to display "SAFE · F 0.00%". Parent,
+     self, sibling and ancestor matches are now caught even without a linked
+     boar profile. */
+  const nrm = s => String(s || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  function sowParentIds(sow, side) {
+    const vals = side === 'sire'
+      ? [sow.sire, sow.sireRef, sow.sire_name, sow.sire_id, sow.geneticSireRef, sow.biologicalSireRef]
+      : [sow.dam, sow.damRef, sow.dam_name, sow.dam_id, sow.geneticDamRef, sow.biologicalDamRef];
+    return vals.map(nrm).filter(Boolean);
+  }
+  function sowAncestorSet(sow, depth = 3) {
+    const set = new Set();
+    const all = [...(F().boars || []), ...(F().sows || [])];
+    const walk = (ref, d) => {
+      if (!ref || d > depth) return;
+      const key = nrm(ref);
+      if (!key || set.has(key)) return;
+      set.add(key);
+      const rec = all.find(x => x.id === ref || nrm(x.name) === key || nrm(x.id) === key);
+      if (rec) sowParentIds(rec, 'sire').concat(sowParentIds(rec, 'dam')).forEach(v => walk(v, d + 1));
+    };
+    sowParentIds(sow, 'sire').concat(sowParentIds(sow, 'dam')).forEach(v => walk(v, 1));
+    return set;
+  }
+  function directLineageResult(srcName, srcId, sow, manSireRef, manDamRef) {
+    const ids = [nrm(srcName), nrm(srcId)].filter(Boolean);
+    if (!ids.length || !sow) return null;
+    const sireIds = sowParentIds(sow, 'sire'), damIds = sowParentIds(sow, 'dam');
+    const selfIds = [nrm(sow.name), nrm(sow.id)].filter(Boolean);
+    if (ids.some(v => selfIds.includes(v))) return { r: 'CRITICAL RISK', relationship: 'Same animal', f: 50, blocked: true, message: 'This genetic source matches the sow herself — impossible mating.' };
+    if (ids.some(v => sireIds.includes(v))) return { r: 'CRITICAL RISK', relationship: 'Parent → Offspring', f: 25, blocked: true, message: 'This source IS the sow’s recorded SIRE — a parent-offspring mating (F 25%).' };
+    if (ids.some(v => damIds.includes(v))) return { r: 'CRITICAL RISK', relationship: 'Parent → Offspring', f: 25, blocked: true, message: 'This source matches the sow’s recorded DAM — check your records.' };
+    const mS = nrm(resolveAnimalRef(manSireRef)), mD = nrm(resolveAnimalRef(manDamRef));
+    const sireMatch = mS && (sireIds.includes(mS) || ids.includes(mS));
+    const damMatch = mD && (damIds.includes(mD) || ids.includes(mD));
+    if (sireMatch && damMatch) return { r: 'CRITICAL RISK', relationship: 'Full Siblings', f: 25, blocked: true, message: 'Source shares both parents with this sow — full-sibling mating.' };
+    if (sireMatch || damMatch) return { r: 'HIGH RISK', relationship: 'Half Siblings', f: 12.5, blocked: false, message: 'Source shares a parent with this sow — half-sibling mating.' };
+    const anc = sowAncestorSet(sow);
+    if (ids.some(v => anc.has(v))) return { r: 'HIGH RISK', relationship: 'Ancestor in pedigree', f: 12.5, blocked: false, message: 'This source appears among the sow’s recorded ancestors (grandparent or closer).' };
+    return null;
   }
 
   function recordLinkedInsemination(e, index) {
