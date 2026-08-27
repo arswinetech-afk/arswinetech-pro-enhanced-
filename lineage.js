@@ -141,7 +141,8 @@
     let box = document.getElementById('semenLineagePreview');
     if (!lot || !box) return;
     let f = +result.f || 0,
-      level = f === 0 ? 'safe' : f < 6.25 ? 'caution' : f < 12.5 ? 'high' : 'critical',
+      /* [FIX 85] 0% with missing pedigree is NOT "safe" — show caution tone */
+      level = f === 0 ? (result.incomplete ? 'caution' : 'safe') : f < 6.25 ? 'caution' : f < 12.5 ? 'high' : 'critical',
       blocked = prohibited(result, boar, sow),
       btn = document.getElementById('recordInseminationBtn');
     if (btn) {
@@ -149,31 +150,28 @@
       btn.classList.toggle('blocked-breed', blocked)
     }
     if (level === 'critical') criticalTone();
-    let banner = f > 0 ? `<div class="inbreed-banner ${level}"><div class="inbreed-title">${level==='critical'?'⚠ CRITICAL RISK - INBREEDING DETECTED':level==='high'?'⚠ HIGH RISK - INBREEDING DETECTED':'⚠ CAUTION - INBREEDING DETECTED'} · F ${f.toFixed(2)}%</div><div><b>Relationship Detected:</b> ${result.relationship||'Common ancestor relationship'}</div><div><b>Mating Type:</b> ${result.message}</div>${level==='critical'?'<div class="inbreed-impact">This mating may significantly increase genetic defects and reduced performance.</div>':''}${blocked?'<div class="inbreed-block">BREEDING BLOCKED — prohibited genetic relationship.</div>':''}</div>` : `<div class="inbreed-banner safe"><div class="inbreed-title">✓ SAFE · F 0.00%</div><div>${result.message}</div></div>`;
+    let banner = f > 0 ? `<div class="inbreed-banner ${level}"><div class="inbreed-title">${level==='critical'?'⚠ CRITICAL RISK - INBREEDING DETECTED':level==='high'?'⚠ HIGH RISK - INBREEDING DETECTED':'⚠ CAUTION - INBREEDING DETECTED'} · F ${f.toFixed(2)}%</div><div><b>Relationship Detected:</b> ${escX(result.relationship||'Common ancestor relationship')}</div><div><b>Mating Type:</b> ${escX(result.message)}</div>${level==='critical'?'<div class="inbreed-impact">This mating may significantly increase genetic defects and reduced performance.</div>':''}${blocked?'<div class="inbreed-block">BREEDING BLOCKED — prohibited genetic relationship.</div>':''}</div>`
+      : result.incomplete
+        ? `<div class="inbreed-banner caution"><div class="inbreed-title">✓ 0% DETECTED IN AVAILABLE PEDIGREE — NOT A GUARANTEE</div><div>${escX(result.message)}</div></div>`
+        : `<div class="inbreed-banner safe"><div class="inbreed-title">✓ SAFE · F 0.00%</div><div>${escX(result.message)}</div></div>`;
+    const gapsHtml = result.incomplete && result.gaps && result.gaps.length
+      ? `<div class="inbreed-gaps" style="margin-top:6px">${result.gaps.slice(0, 5).map(g => `<small style="display:block;opacity:.85">⚠ ${escX(g)}</small>`).join('')}</div>` : '';
+    const pathsHtml = result.paths && result.paths.length
+      ? `<div class="inbreed-paths" style="margin-top:8px"><b style="font-size:11px;letter-spacing:.06em;text-transform:uppercase">Wright path breakdown</b><table style="width:100%;font-size:11.5px;border-collapse:collapse;margin-top:4px"><thead><tr style="opacity:.75"><th style="text-align:left;padding:2px 4px">Common ancestor</th><th style="text-align:left;padding:2px 4px">Sire side</th><th style="text-align:left;padding:2px 4px">Dam side</th><th style="text-align:left;padding:2px 4px">F(A)</th><th style="text-align:right;padding:2px 4px">Contribution</th></tr></thead><tbody>${result.paths.map(p => `<tr><td style="padding:2px 4px">${escX(p.label)}</td><td style="padding:2px 4px">n=${p.nS}</td><td style="padding:2px 4px">n=${p.nD}</td><td style="padding:2px 4px">${(p.fA * 100).toFixed(2)}%</td><td style="padding:2px 4px;text-align:right"><b>${(p.contrib * 100).toFixed(2)}%</b></td></tr>`).join('')}</tbody></table><div style="margin-top:4px;font-size:11.5px"><b>Total Wright coefficient: ${f.toFixed(2)}%</b> · ${result.incomplete ? 'limited by missing pedigree data' : 'complete within recorded 3 generations'}</div></div>` : '';
     box.className = 'lineage-preview ' + level;
-    box.innerHTML = `<div class="semen-source"><b>${lot.boar_name}</b><br><small>Genetic source: ${lot.semen_batch_no||'New batch'} · collected ${lot.collection_date||'—'}${lot.source_farm?' · '+lot.source_farm:''}</small></div>${banner}`
+    box.innerHTML = `<div class="semen-source"><b>${lot.boar_name}</b><br><small>Genetic source: ${lot.semen_batch_no||'New batch'} · collected ${lot.collection_date||'—'}${lot.source_farm?' · '+lot.source_farm:''}</small></div>${banner}${gapsHtml}${pathsHtml}`
   }
 
   function previewSemenLineage(id) {
     let lot = semenLots().find(x => x.id === id);
     if (!lot) return;
     let sow = F().sows.find(x => document.querySelector('#breedModal h2')?.textContent === x.name),
-      boar = (F().boars || []).find(x => x.id === lot.boar_id || x.name === lot.boar_name),
-      result = window.calculateCompatibility && boar && sow ? window.calculateCompatibility(boar.id, sow.id) : {
-        r: 'SAFE',
-        relationship: 'No linked boar profile',
-        f: 0,
-        message: 'Boar profile is not yet linked; add the boar pedigree for deep compatibility screening.'
-      };
-    /* [FIX 83/84] even a linked-but-unrelated profile must not hide a direct
-       name/ID match with the sow's own sire/ancestor, nor a shared ancestor
-       found by tracing both lineage trees */
-    if ((!result || !result.f) && sow) {
-      const direct = directLineageResult(lot.boar_name, lot.boar_id || lot.boar_name, sow, lot.sireRef, lot.damRef);
-      const tree = treeCompatibilityResult([[lot.boar_name, 0], [lot.boar_id, 0], [boar?.sireRef || lot.sireRef, 1], [boar?.damRef || lot.damRef, 1]], sow);
-      if (direct) result = direct;
-      else if (tree) result = tree;
-    }
+      boar = (F().boars || []).find(x => x.id === lot.boar_id || x.name === lot.boar_name);
+    /* [FIX 85] Wright engine over stored trees: sire side = the semen source
+       (its own record/declared parents), dam side = the sow. */
+    const wright = wrightResultFor([[lot.boar_name, 0], [lot.boar_id, 0], [boar?.sireRef || boar?.sire || lot.sireRef, 1], [boar?.damRef || boar?.dam || lot.damRef, 1]], sow);
+    const direct = directLineageResult(lot.boar_name, lot.boar_id || lot.boar_name, sow, lot.sireRef, lot.damRef);
+    const result = direct ? Object.assign({}, direct, { paths: wright?.paths, gaps: wright?.gaps, incomplete: wright?.incomplete }) : wright;
     sourcePreview(lot, boar, sow, result)
   }
 
@@ -190,27 +188,11 @@
         sireRef: d.manual_sire_ref,
         damRef: d.manual_dam_ref
       };
-    let result;
-    /* [FIX 83/84] direct name/ID screening first, then full pedigree trace —
-       catches a new outside source that is literally the sow's sire/ancestor
-       or that shares any common ancestor through the recorded trees. */
+    /* [FIX 85] Wright engine: sire side = the new source + its declared
+       parents; dam side = the sow. Direct name/ID hits keep explicit labels. */
+    const wright = wrightResultFor([[name, 0], [d.manual_boar_id, 0], [d.manual_sire_ref, 1], [d.manual_dam_ref, 1]], sow);
     const direct = directLineageResult(name, d.manual_boar_id, sow, d.manual_sire_ref, d.manual_dam_ref);
-    const tree = treeCompatibilityResult([[name, 0], [d.manual_boar_id, 0], [d.manual_sire_ref, 1], [d.manual_dam_ref, 1]], sow);
-    if (direct) result = direct;
-    else if (tree) result = tree;
-    else if (existing && window.calculateCompatibility) result = window.calculateCompatibility(existing.id, sow.id);
-    else if (boar.id === sow.sireRef || boar.id === sow.damRef) result = {
-      r: 'CRITICAL RISK',
-      relationship: 'Parent → Offspring',
-      f: 25,
-      message: 'Manual Boar ID matches the sow’s recorded parent.'
-    };
-    else result = {
-      r: 'SAFE',
-      relationship: 'No known relationship',
-      f: 0,
-      message: 'New source has no complete recorded lineage yet. Add sire and dam IDs for deeper compatibility screening.'
-    };
+    let result = direct ? Object.assign({}, direct, { paths: wright?.paths, gaps: wright?.gaps, incomplete: wright?.incomplete }) : wright;
     sourcePreview({
       boar_name: name,
       semen_batch_no: d.manual_batch_no || generatedBatch(name, d.manual_collection_date),
@@ -232,59 +214,115 @@
      self, sibling and ancestor matches are now caught even without a linked
      boar profile. */
   const nrm = s => String(s || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  const escX = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   function sowParentIds(sow, side) {
     const vals = side === 'sire'
       ? [sow.sire, sow.sireRef, sow.sire_name, sow.sire_id, sow.geneticSireRef, sow.biologicalSireRef]
       : [sow.dam, sow.damRef, sow.dam_name, sow.dam_id, sow.geneticDamRef, sow.biologicalDamRef];
     return vals.map(nrm).filter(Boolean);
   }
-  /* [REBUILD FIX 84] PEDIGREE-TRACE INBREEDING ESTIMATE.
-     Both the sow's and the semen source's recorded lineage trees are walked
-     (up to 4 generations) and every COMMON ANCESTOR contributes Wright's path
-     term (1/2)^(gs+gd+1) to the offspring's estimated inbreeding coefficient.
-     This catches relationships that exact-name hits miss — e.g. the source's
-     declared dam is the sow's granddam, two sources sharing a grandsire, etc. */
-  function ancestorMap(starts, maxDepth = 4) {
-    const map = new Map(); /* key -> min generation */
-    const all = () => [...(F().boars || []), ...(F().sows || [])];
+  /* [REBUILD FIX 85] FULL WRIGHT COEFFICIENT ENGINE (spec 2026-08-27).
+     F(X) = Σ (1/2)^(nS+nD+1) × (1+F(A)) over every common ancestor A of the
+     planned sire and dam, traced through the STORED lineage records up to 3
+     generations (parents → grandparents → great-grandparents).
+     • Canonical identity = recorded animal (by id), so the same animal reached
+       via name and via id is one node — no duplicate path counting.
+     • F(A) is computed recursively (memoized, cycle-guarded) when the common
+       ancestor's own parents are recorded.
+     • Missing ancestors are collected as pedigree GAPS and reported; a gap is
+       never treated as proof that no relationship exists ("0% detected in
+       available pedigree", not "SAFE"). */
+  const wrightMemo = new Map();
+  function animalByKey(key) {
+    const all = [...(F().boars || []), ...(F().sows || [])];
+    return all.find(x => nrm(x.id) === key || nrm(x.name) === key) || null;
+  }
+  function buildSide(starts, maxDepth, alias, gaps, sideLabel) {
+    const m = new Map(); /* canon -> {gen,label} */
     const walk = (ref, gen) => {
       const key = nrm(ref);
       if (!key || gen > maxDepth) return;
-      if (!map.has(key) || map.get(key) > gen) map.set(key, gen);
-      const rec = all().find(x => nrm(x.id) === key || nrm(x.name) === key);
+      const rec = animalByKey(key);
+      let canon = alias.get(key);
+      if (!canon) {
+        canon = rec ? 'R:' + nrm(rec.id) : 'S:' + key;
+        alias.set(key, canon);
+        if (rec) { alias.set(nrm(rec.id), canon); alias.set(nrm(rec.name), canon); }
+      }
+      const label = (rec && (rec.name || rec.id)) || ref;
+      const cur = m.get(canon);
+      if (!cur || cur.gen > gen) m.set(canon, { gen, label });
       if (rec) {
-        [nrm(rec.id), nrm(rec.name)].forEach(k => { if (k && (!map.has(k) || map.get(k) > gen)) map.set(k, gen); });
-        sowParentIds(rec, 'sire').concat(sowParentIds(rec, 'dam')).forEach(p => walk(p, gen + 1));
+        const ps = sowParentIds(rec, 'sire'), pd = sowParentIds(rec, 'dam');
+        if (gen < maxDepth) {
+          if (!ps.length) gaps.push(`${rec.name || rec.id} (${sideLabel} side) has no recorded sire`);
+          if (!pd.length) gaps.push(`${rec.name || rec.id} (${sideLabel} side) has no recorded dam`);
+        }
+        ps.forEach(p => walk(p, gen + 1));
+        pd.forEach(p => walk(p, gen + 1));
+      } else if (gen < maxDepth) {
+        gaps.push(`“${ref}” (${sideLabel} side) is not a recorded animal — deeper pedigree unknown`);
       }
     };
-    (starts || []).forEach(([ref, gen]) => walk(ref, gen));
-    return map;
+    (starts || []).forEach(([ref, gen]) => { if (ref) walk(ref, gen); });
+    return m;
   }
-
-  function treeCompatibilityResult(sourceStarts, sow) {
-    if (!sow) return null;
-    const srcMap = ancestorMap(sourceStarts, 4);
-    const sowMap = ancestorMap([[sow.name, 0], [sow.id, 0]], 4);
-    const all = [...(F().boars || []), ...(F().sows || [])];
-    const entries = new Map(); /* canonical animal -> {gs,gd,label} */
-    srcMap.forEach((gs, key) => {
-      if (!sowMap.has(key)) return;
-      const gd = sowMap.get(key);
-      const rec = all.find(x => nrm(x.id) === key || nrm(x.name) === key);
-      const canon = rec ? 'R:' + nrm(rec.id) + '|' + nrm(rec.name) : 'S:' + key;
-      const cur = entries.get(canon);
-      if (!cur || (cur.gs + cur.gd) > (gs + gd)) entries.set(canon, { gs, gd, label: rec ? (rec.name || rec.id) : key });
+  function fOfAncestor(rec, depth) {
+    if (!rec || depth <= 0) return 0;
+    const ps = sowParentIds(rec, 'sire'), pd = sowParentIds(rec, 'dam');
+    if (!ps.length || !pd.length) return 0;
+    const key = 'F:' + nrm(rec.id || rec.name) + ':' + depth;
+    if (wrightMemo.has(key)) return wrightMemo.get(key);
+    wrightMemo.set(key, 0); /* cycle guard */
+    const w = wrightInbreeding(ps.map(p => [p, 0]), pd.map(p => [p, 0]), 2, depth - 1);
+    const val = w.pct / 100;
+    wrightMemo.set(key, val);
+    return val;
+  }
+  function wrightInbreeding(sireStarts, damStarts, maxDepth = 3, recDepth = 2) {
+    const alias = new Map(), gaps = [];
+    const S = buildSide(sireStarts, maxDepth, alias, gaps, 'sire');
+    const D = buildSide(damStarts, maxDepth, alias, gaps, 'dam');
+    const paths = [];
+    S.forEach((sNode, canon) => {
+      const dNode = D.get(canon);
+      if (!dNode) return;
+      const rec = canon.startsWith('R:') ? animalByKey(canon.slice(2)) : animalByKey(sNode.label);
+      const fA = rec ? fOfAncestor(rec, recDepth) : 0;
+      paths.push({ label: sNode.label, nS: sNode.gen, nD: dNode.gen, fA, contrib: Math.pow(0.5, sNode.gen + dNode.gen + 1) * (1 + fA) });
     });
-    let f = 0; const common = [];
-    entries.forEach(e => { f += Math.pow(0.5, e.gs + e.gd + 1); common.push(e.label); });
-    if (f <= 0.0001) return null;
-    const pct = f * 100;
+    paths.sort((a, b) => b.contrib - a.contrib);
+    const uniqGaps = [...new Set(gaps)];
+    return { pct: paths.reduce((a, p) => a + p.contrib, 0) * 100, paths, gaps: uniqGaps, incomplete: uniqGaps.length > 0 };
+  }
+  function relationshipLabel(paths) {
+    const has = (ns, nd) => paths.some(p => (p.nS === ns && p.nD === nd) || (p.nS === nd && p.nD === ns));
+    if (has(0, 0)) return 'Same animal';
+    if (has(0, 1)) return 'Parent → Offspring';
+    if (paths.filter(p => p.nS === 1 && p.nD === 1).length >= 2) return 'Full Siblings';
+    if (paths.filter(p => p.nS === 1 && p.nD === 1).length === 1) return 'Half Siblings';
+    if (has(0, 2)) return 'Grandparent → Grandchild';
+    if (has(1, 2)) return 'Uncle/Aunt × Niece/Nephew';
+    if (has(2, 2)) return 'First Cousins';
+    return 'Common ancestor relationship';
+  }
+  function wrightResultFor(sireStarts, sow) {
+    if (!sow) return null;
+    const w = wrightInbreeding(sireStarts, [[sow.name, 0], [sow.id, 0]], 3);
+    const pct = w.pct;
     return {
-      r: pct >= 25 ? 'CRITICAL RISK' : pct >= 12.5 ? 'HIGH RISK' : 'CAUTION',
-      relationship: 'Common ancestor(s) in pedigree: ' + [...new Set(common)].slice(0, 3).join(', '),
+      r: pct >= 25 ? 'CRITICAL RISK' : pct >= 12.5 ? 'HIGH RISK' : pct > 0 ? 'CAUTION' : 'SAFE',
+      relationship: pct > 0 ? relationshipLabel(w.paths) : 'No shared ancestors in available pedigree',
       f: pct,
       blocked: pct >= 25,
-      message: `The sow's lineage tree and this source's tree trace to the same animal(s) — estimated offspring inbreeding F ≈ ${pct.toFixed(2)}%.`
+      paths: w.paths,
+      gaps: w.gaps,
+      incomplete: w.incomplete,
+      message: pct > 0
+        ? `Wright path calculation over the recorded 3-generation pedigree — total coefficient F ≈ ${pct.toFixed(2)}%.`
+        : (w.incomplete
+          ? '0% detected in available pedigree. Pedigree incomplete — actual inbreeding may be higher than calculated.'
+          : '0% — no common ancestors within the complete recorded 3-generation pedigree.')
     };
   }
 

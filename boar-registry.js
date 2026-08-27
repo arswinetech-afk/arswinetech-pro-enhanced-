@@ -101,6 +101,9 @@
         `<div class="field"><label>Boar name *</label><input name="name" required value="${esc(v('name'))}" placeholder="e.g. Thor"></div>` +
         `<div class="field"><label>Breed</label><input name="breed" value="${esc(v('breed'))}" placeholder="e.g. Duroc"></div>` +
         `<div class="field"><label>Date of birth</label><input name="dob" type="date" value="${esc(v('dob'))}"></div>` +
+        `<div class="field"><label>Sire (father) name / ID</label><input name="sire" value="${esc(v('sire') || v('sireRef') || v('sire_name'))}" placeholder="e.g. Luffy"></div>` +
+        `<div class="field"><label>Dam (mother) name / ID</label><input name="dam" value="${esc(v('dam') || v('damRef') || v('dam_name'))}" placeholder="e.g. Nami"></div>` +
+        `<small class="field-hint" style="grid-column:1/-1">Sire &amp; dam power the Wright inbreeding calculator — boars without recorded parents can only be screened as “0% detected, pedigree incomplete”.</small>` +
         `<div class="field"><label>Date acquired / entered herd</label><input name="acquired" type="date" value="${esc(v('acquired'))}"></div>` +
         `<div class="field"><label>Status</label><select name="status">${STATUSES.map(s => `<option value="${s}"${(b ? (b.status || 'Active') : 'Active') === s ? ' selected' : ''}>${s}</option>`).join('')}</select><small class="field-hint">Only “Active” boars are counted on the dashboard. Culled / Sold boars stay in the registry for history; “Reference” marks an outside-semen lineage source that is never counted. [FIX 28]</small></div>` +
         `<div class="field"><label>Notes</label><input name="notes" value="${esc(v('notes'))}" placeholder="e.g. Main breeder for Landrace sows"></div>` +
@@ -118,10 +121,10 @@
     if (dup) { err.textContent = `A boar named “${name}” is already registered (${dup.id}).`; err.classList.add('show'); return; }
     if (d.id) {
       const b = findBoar(d.id); if (!b) return;
-      Object.assign(b, { name, breed: d.breed.trim(), dob: d.dob || '', acquired: d.acquired || '', status: d.status, notes: d.notes.trim(), updated_at: new Date().toISOString() });
+      Object.assign(b, { name, breed: d.breed.trim(), dob: d.dob || '', acquired: d.acquired || '', status: d.status, sire: String(d.sire || '').trim(), dam: String(d.dam || '').trim(), notes: d.notes.trim(), updated_at: new Date().toISOString() });
       toast(`Updated ${name}`);
     } else {
-      boars().push({ id: newId(), name, breed: d.breed.trim(), dob: d.dob || '', acquired: d.acquired || '', status: d.status || 'Active', notes: d.notes.trim(), created_at: new Date().toISOString() });
+      boars().push({ id: newId(), name, breed: d.breed.trim(), dob: d.dob || '', acquired: d.acquired || '', status: d.status || 'Active', sire: String(d.sire || '').trim(), dam: String(d.dam || '').trim(), notes: d.notes.trim(), created_at: new Date().toISOString() });
       toast(`Registered boar ${name}`);
     }
     save();
