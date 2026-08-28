@@ -5984,3 +5984,14 @@ html, body, .shell, .main {
 .reminder-fields>.field,.reminder-fields>.field.full,.res-lines-box{min-width:0;max-width:100%}
 .reminder-modal,.due-modal{max-width:96vw}
 @media(max-width:700px){.bc-panel{padding:10px}.bc-panel table.table{min-width:340px}}
+
+/* [REBUILD FIX 89] Financial Review modal report styles */
+.finrev-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:6px}
+.finrev-card{background:rgba(10,25,30,.5);border:1px solid rgba(145,207,202,.25);border-radius:12px;padding:12px}
+.finrev-card small{color:#9bc4c1;font-size:10px;text-transform:uppercase;letter-spacing:.06em;display:block}
+.finrev-card b{display:block;font-size:19px;margin:5px 0 3px;color:#64e5c0}
+.finrev-card.warn b{color:#f0b64b}
+.finrev-sec{margin:16px 0 6px;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#45cfc3;font-weight:800}
+.finrev-row{display:flex;justify-content:space-between;gap:10px;padding:7px 2px;border-bottom:1px dashed rgba(145,207,202,.15);font-size:12.5px;color:#b8d4d2}
+.finrev-row b{color:#efffff}
+@media(max-width:520px){.finrev-grid{gap:8px}.finrev-card b{font-size:16px}}

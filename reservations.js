@@ -232,14 +232,17 @@
     const older = indexed.slice(5);
 
     document.getElementById('reservations').innerHTML = `
-      <div class="section-head">
-        <div>
-          <div class="eyebrow">PIGLET RESERVATIONS &amp; PRIORITY WAITLIST</div>
-          <h2>Reservations</h2>
-          <p>${rs.length} reservation records on file · sorted by release urgency &amp; priority waitlist</p>
+        <div class="section-head" style="flex-wrap:wrap;gap:10px">
+          <div>
+            <div class="eyebrow">PIGLET RESERVATIONS &amp; PRIORITY WAITLIST</div>
+            <h2>Reservations</h2>
+            <p>${rs.length} reservation records on file · sorted by release urgency &amp; priority waitlist</p>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn ghost" style="font-weight:800" onclick="openFinancialReview()">📊 Financial Review</button>
+            <button class="btn" onclick="openReservationForm()">+ New Reservation</button>
+          </div>
         </div>
-        <button class="btn" onclick="openReservationForm()">+ New Reservation</button>
-      </div>
       <div class="toolbar" style="margin-bottom:14px">
         <div class="toolbar-left" style="flex:1">
           <input type="search" id="reservationSearchInput" class="search" style="width:100%;max-width:420px" placeholder="🔍 Search customer name, contact #, or batch details..." value="${esc(currentReservationSearch)}" oninput="window.filterReservationTable(this.value)">
@@ -1865,6 +1868,117 @@
   window.editReservation = editReservation;
   window.saveReservationEdit = saveReservationEdit;
   window.deleteReservation = deleteReservation;
+  /* ═══ [REBUILD FIX 89] FINANCIAL REVIEW — additive, read-only report ═══
+     Computed live from the ACTIVE FARM's existing reservation records only
+     (F() is farm-isolated — other farms' data can never enter this report).
+     Never writes or reshapes reservation data. SALES value (r.total) is kept
+     strictly separate from COLLECTIONS (r.paid); receivables = unpaid balance
+     of non-cancelled reservations; released figures use r.released_at; pending
+     figures use the batch's target release date (or birth + 90 d, the app's
+     maturity convention) — never the reservation creation date. */
+  const finMonthKey = d => String(d || '').slice(0, 7);
+  const finIsoM = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  const finMonthLabel = key => {
+    const [y, m] = String(key).split('-').map(Number);
+    return new Date(y || 2026, (m || 1) - 1, 1).toLocaleDateString('en-PH', { month: 'long', year: 'numeric' });
+  };
+  const finMoney = v => (typeof peso === 'function' ? peso(v) : '₱' + Math.round(num(v)).toLocaleString('en-PH'));
+  const finActiveRes = () => (F().reservations || []).filter(r => r && String(r.status || '').toLowerCase() !== 'cancelled');
+  function finExpectedMonth(r) {
+    const bid = r.batch_id || (Array.isArray(r.lines) && r.lines[0] && r.lines[0].batch_id) || '';
+    const b = batch(bid);
+    if (b) {
+      if (r.status !== 'released' && b.release_date) return finMonthKey(b.release_date);
+      if (b.birth) {
+        const d = new Date(String(b.birth).slice(0, 10) + 'T00:00:00');
+        if (!isNaN(d)) { d.setDate(d.getDate() + 90); return d.toISOString().slice(0, 7); }
+      }
+    }
+    return finMonthKey(r.date);
+  }
+  function finMetrics(monthKey) {
+    const rs = finActiveRes();
+    const created = rs.filter(r => finMonthKey(r.date) === monthKey);
+    const salesValue = created.reduce((a, r) => a + num(r.total), 0);
+    const collections = created.reduce((a, r) => a + Math.min(num(r.paid), num(r.total)), 0);
+    const receivables = created.reduce((a, r) => a + Math.max(0, num(r.total) - num(r.paid)), 0);
+    const released = rs.filter(r => r.status === 'released' && finMonthKey(r.released_at) === monthKey);
+    const pending = rs.filter(r => r.status !== 'released' && finExpectedMonth(r) === monthKey);
+    return {
+      count: created.length,
+      salesValue, collections, receivables,
+      releasedHeads: released.reduce((a, r) => a + num(r.quantity), 0),
+      releasedSales: released.reduce((a, r) => a + num(r.total), 0),
+      pendingHeads: pending.reduce((a, r) => a + num(r.quantity), 0),
+      pendingValue: pending.reduce((a, r) => a + num(r.total), 0),
+      avg: created.length ? salesValue / created.length : 0,
+      rate: salesValue > 0 ? (collections / salesValue) * 100 : 0
+    };
+  }
+  function finMonthOptions() {
+    const set = new Set();
+    const now = new Date();
+    for (let i = 0; i < 6; i++) set.add(finIsoM(new Date(now.getFullYear(), now.getMonth() - i, 1)));
+    finActiveRes().forEach(r => {
+      const c = finMonthKey(r.date); if (c) set.add(c);
+      const rel = finMonthKey(r.released_at); if (rel) set.add(rel);
+      const exp = finExpectedMonth(r); if (exp) set.add(exp);
+    });
+    return [...set].sort().reverse();
+  }
+  function openFinancialReview() {
+    document.getElementById('finReviewModal')?.remove();
+    document.body.insertAdjacentHTML('beforeend', `<div class="due-modal-bg open" id="finReviewModal" onclick="if(event.target===this)this.remove()">
+      <div class="reminder-modal" style="max-width:660px;width:96%;text-align:left">
+        <div class="modal-top"><div><div class="eyebrow" style="color:var(--teal2);letter-spacing:.12em;font-weight:800">FINANCIAL REVIEW</div><h2 style="font-size:20px">Reservation Sales &amp; Collection Overview</h2><small class="muted">Read-only · computed live from this farm's reservation records · cancelled excluded</small></div><button type="button" class="close-reminder" onclick="document.getElementById('finReviewModal')?.remove()">×</button></div>
+        <div id="finReviewBody" data-month=""></div>
+        <div class="due-actions" style="justify-content:flex-end;margin-top:14px"><button type="button" class="btn ghost" onclick="document.getElementById('finReviewModal')?.remove()">Close</button></div>
+      </div></div>`);
+    renderFinancialReview();
+  }
+  function renderFinancialReview() {
+    const body = document.getElementById('finReviewBody');
+    if (!body) return;
+    const options = finMonthOptions();
+    const cur = finIsoM(new Date());
+    const sel = (body.dataset.month && options.includes(body.dataset.month)) ? body.dataset.month : (options.includes(cur) ? cur : options[0]);
+    const M = finMetrics(sel);
+    const rs = finActiveRes();
+    const collectionsAll = rs.reduce((a, r) => a + Math.min(num(r.paid), num(r.total)), 0);
+    const outstandingAll = rs.reduce((a, r) => a + Math.max(0, num(r.total) - num(r.paid)), 0);
+    const trend = options.slice(0, 6).reverse().map(k => { const t = finMetrics(k); return `<tr><td><b>${finMonthLabel(k)}</b></td><td>${t.count}</td><td>${finMoney(t.salesValue)}</td><td>${finMoney(t.collections)}</td><td>${finMoney(t.receivables)}</td></tr>`; }).join('');
+    body.dataset.month = sel;
+    body.innerHTML = `
+      <div class="finrev-sec">Financial position</div>
+      <div class="finrev-grid">
+        <div class="finrev-card"><small>TOTAL COLLECTIONS</small><b>${finMoney(collectionsAll)}</b><small>payments actually received (all time)</small></div>
+        <div class="finrev-card warn"><small>OUTSTANDING RECEIVABLES</small><b>${finMoney(outstandingAll)}</b><small>unpaid balances, fully-paid excluded</small></div>
+        <div class="finrev-card"><small>RELEASED SALES · ${finMonthLabel(sel)}</small><b>${finMoney(M.releasedSales)}</b><small>${M.releasedHeads} head(s) released by actual release date</small></div>
+        <div class="finrev-card warn"><small>PENDING RELEASES · ${finMonthLabel(sel)}</small><b>${finMoney(M.pendingValue)}</b><small>${M.pendingHeads} head(s) expected, not yet released</small></div>
+      </div>
+      <div class="finrev-sec" style="display:flex;justify-content:space-between;align-items:center;gap:8px">Monthly reservation sales review
+        <select class="select" style="background:rgba(10,25,30,.6);color:inherit;border-color:rgba(145,207,202,.35)" onchange="document.getElementById('finReviewBody').dataset.month=this.value;window.renderFinancialReview()">
+          ${options.map(o => `<option value="${o}" ${o === sel ? 'selected' : ''}>${finMonthLabel(o)}</option>`).join('')}
+        </select>
+      </div>
+      <div class="finrev-sec" style="color:#64e5c0">Sales</div>
+      <div class="finrev-row"><span>Total Reservations</span><b>${M.count}</b></div>
+      <div class="finrev-row"><span>Total Sales Value</span><b>${finMoney(M.salesValue)}</b></div>
+      <div class="finrev-row"><span>Average Reservation Value</span><b>${finMoney(M.avg)}</b></div>
+      <div class="finrev-sec" style="color:#f0b64b">Cash collections</div>
+      <div class="finrev-row"><span>Collections Received</span><b>${finMoney(M.collections)}</b></div>
+      <div class="finrev-row"><span>Outstanding Receivables</span><b>${finMoney(M.receivables)}</b></div>
+      <div class="finrev-row"><span>Collection Rate</span><b>${M.rate.toFixed(0)}%</b></div>
+      <div class="finrev-sec" style="color:#8ee6df">Release activity</div>
+      <div class="finrev-row"><span>Piglets Released</span><b>${M.releasedHeads}</b></div>
+      <div class="finrev-row"><span>Pending Releases</span><b>${M.pendingHeads} · ${finMoney(M.pendingValue)}</b></div>
+      <div class="finrev-sec">Last 6 months trend</div>
+      <div class="table-wrap"><table class="table" style="min-width:420px;font-size:12px"><thead><tr><th>Month</th><th>Reservations</th><th>Sales Value</th><th>Collections</th><th>Receivables</th></tr></thead><tbody>${trend}</tbody></table></div>
+      <small class="muted" style="display:block;margin-top:8px">Sales ≠ collections: a ₱17,000 reservation with ₱5,000 paid counts ₱17,000 sales, ₱5,000 collections, ₱12,000 receivable. Created-date drives sales counts; actual release date drives released figures; target release (birth + 90 d or batch target) drives pending.</small>`;
+  }
+  window.openFinancialReview = openFinancialReview;
+  window.renderFinancialReview = renderFinancialReview;
+
   window.filterReservationBatches = filterReservationBatches;
   window.selectReservationBatch = selectReservationBatch;
   window.updateReservationAvailability = updateReservationAvailability;
