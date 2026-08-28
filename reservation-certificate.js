@@ -393,10 +393,19 @@
       }
       let r = new FileReader();
       r.onload = () => {
-        reservation.photo = r.result;
-        save();
-        document.getElementById('reservationDetail').remove();
-        openReservationDetails(i)
+        /* [REBUILD FIX 86] downscale before storing — raw phone photos (up to
+           4 MB of base64) were exhausting the 5 MB localStorage quota. */
+        const apply = data => {
+          reservation.photo = data;
+          save();
+          document.getElementById('reservationDetail')?.remove();
+          openReservationDetails(i)
+        };
+        if (window.arsDownscaleImage) {
+          window.arsDownscaleImage(r.result, 1000, 0.8)
+            .then(apply)
+            .catch(() => apply(r.result));
+        } else apply(r.result);
       };
       r.readAsDataURL(f)
     };

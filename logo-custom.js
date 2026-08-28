@@ -86,16 +86,22 @@
 
         // Keep the official application logo untouched. This data belongs only
         // to the verified farm ID selected above.
-        farm.logo = dataUrl;
-        farm.logo_url = dataUrl;
-        if (window.STORE) STORE.setItem('ars-farm-logo-' + id, dataUrl);
+        /* [FIX 86] downscale to ≤512px so the logo can't eat the localStorage
+           quota (a raw 2 MB upload ≈ 2.7 MB of base64 in the offline DB). */
+        let logoUrl = dataUrl;
+        if (window.arsDownscaleImage) {
+          try { logoUrl = await window.arsDownscaleImage(dataUrl, 512, 0.85, true); } catch (_) {}
+        }
+        farm.logo = logoUrl;
+        farm.logo_url = logoUrl;
+        if (window.STORE) { try { STORE.setItem('ars-farm-logo-' + id, logoUrl); } catch (_) {} }
         if (window.save) window.save();
         apply();
 
         // Perform an immediate, farm-scoped cloud write so a background pull
         // cannot replace the new logo before the generic save timer runs.
         if (window.ARSCloud?.saveFarmLogo) {
-          const result = await ARSCloud.saveFarmLogo(id, dataUrl);
+          const result = await ARSCloud.saveFarmLogo(id, logoUrl);
           if (!result || result.success === false) {
             toast(`⚠️ Logo kept locally; cloud upload blocked: ${result?.reason || 'try again while online'}`);
             return;

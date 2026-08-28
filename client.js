@@ -930,7 +930,9 @@ window.ARSCloud = (() => {
         delete f.reminderSettings;
       }
       if (window.STORE) {
-        window.STORE.setItem('arswine-db-v1', JSON.stringify(window.DB));
+        /* [FIX 86] quota-safe: a full device must never break the pull */
+        try { window.STORE.setItem('arswine-db-v1', JSON.stringify(window.DB)); }
+        catch (quotaErr) { console.warn('[ARSCloud] localStorage quota exceeded after pull:', quotaErr); window.arsQuotaRecovery && window.arsQuotaRecovery(); }
         if (pulledLogo) window.STORE.setItem('ars-farm-logo-' + farmId, pulledLogo);
         else window.STORE.removeItem('ars-farm-logo-' + farmId);
         window.STORE.setItem('ars-last-cloud-sync', new Date().toISOString());

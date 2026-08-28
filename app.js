@@ -28,6 +28,63 @@ const STORE = (() => {
   }
 })();
 window.STORE = STORE;
+
+/* [REBUILD FIX 86] STORAGE-QUOTA PROTECTION.
+   Piglet photos used to be stored as raw base64 (a 3 MB camera file ≈ 4 MB of
+   text) inside the offline DB, which blew the ~5 MB localStorage quota
+   ("Failed to execute 'setItem' … exceeded the quota"). Now: images are
+   downscaled on upload, oversized stored images are migrated on boot, and
+   every DB write is quota-safe with staged recovery. */
+window.arsDownscaleImage = function (dataUrl, maxDim = 1000, quality = 0.8, keepPng = false) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const scale = Math.min(1, (maxDim || 1000) / Math.max(img.width || 1, img.height || 1));
+        if (scale === 1 && keepPng) { resolve(dataUrl); return; }
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round((img.width || 1) * scale));
+        canvas.height = Math.max(1, Math.round((img.height || 1) * scale));
+        const ctx = canvas.getContext('2d');
+        if (!keepPng) { ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, canvas.width, canvas.height); }
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        resolve(keepPng ? canvas.toDataURL('image/png') : canvas.toDataURL('image/jpeg', quality));
+      } catch (e) { reject(e); }
+    };
+    img.onerror = () => reject(new Error('image load failed'));
+    img.src = dataUrl;
+  });
+};
+window.arsMigrateOversizedPhotos = function (done) {
+  const jobs = [];
+  Object.values(window.DB || {}).forEach(f => {
+    (f.reservations || []).forEach(r => {
+      if (r.photo && r.photo.length > 400000) jobs.push(() => window.arsDownscaleImage(r.photo, 1000, 0.8).then(s => { if (s && s.length < r.photo.length) r.photo = s; }).catch(() => {}));
+    });
+    if (f.logo && f.logo.length > 500000) jobs.push(() => window.arsDownscaleImage(f.logo, 512, 0.85, true).then(s => { if (s && s.length < f.logo.length) { f.logo = s; f.logo_url = s; } }).catch(() => {}));
+  });
+  if (!jobs.length) { done && done(false); return; }
+  Promise.all(jobs.map(j => j())).then(() => done && done(true)).catch(() => done && done(false));
+};
+window.arsQuotaRecovery = function () {
+  /* 1) drop local recovery snapshots (cloud remains authoritative) and retry */
+  try {
+    const kill = [];
+    for (let i = 0; i < STORE.length; i++) { const k = STORE.key(i); if (k && k.startsWith('arswine-recovery-')) kill.push(k); }
+    kill.forEach(k => STORE.removeItem(k));
+  } catch (_) {}
+  try { STORE.setItem('arswine-db-v1', JSON.stringify(window.DB)); return; } catch (_) {}
+  /* 2) asynchronously compress oversized stored photos, then retry */
+  window.arsMigrateOversizedPhotos(changed => {
+    if (changed) {
+      try { STORE.setItem('arswine-db-v1', JSON.stringify(window.DB)); if (typeof toast === 'function') toast('✓ Stored photos optimized — device space freed.'); } catch (_) {}
+    }
+  });
+  if (typeof toast === 'function') toast('⚠ Device storage is full — records stay in memory & cloud sync. Oversized photos are being compressed; remove unused piglet photos if this repeats.');
+};
+setTimeout(() => {
+  window.arsMigrateOversizedPhotos(changed => { if (changed && typeof save === 'function') save(); });
+}, 2500);
 var farmId = STORE.getItem('arswine-active-farm') || '';
 window.farmId = farmId;
 
@@ -637,7 +694,12 @@ function save() {
     window.__arsLastSavedFarmById = window.__arsLastSavedFarmById || {};
     window.__arsLastSavedFarmById[activeId] = JSON.parse(JSON.stringify(currentFarm));
   }
-  STORE.setItem('arswine-db-v1', JSON.stringify(DB));
+  try {
+    STORE.setItem('arswine-db-v1', JSON.stringify(DB));
+  } catch (quotaErr) {
+    console.warn('[ARS] localStorage quota exceeded on save:', quotaErr);
+    window.arsQuotaRecovery && window.arsQuotaRecovery();
+  }
   deviceWrite(DB);
   // cloud-sync.js schedules a dirty-record push after save(). It is blocked
   // until a verified farm context and cloud baseline are ready.
