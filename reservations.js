@@ -1958,7 +1958,10 @@
         <div class="finrev-card"><small>TOTAL COLLECTIONS</small><b>${finMoney(collectionsAll)}</b><small>payments actually received (all time)</small></div>
         <div class="finrev-card warn"><small>OUTSTANDING RECEIVABLES</small><b>${finMoney(outstandingAll)}</b><small>unpaid balances, fully-paid excluded</small></div>
         <div class="finrev-card"><small>RELEASED SALES · ${finMonthLabel(sel)}</small><b>${finMoney(M.releasedSales)}</b><small>${M.releasedHeads} head(s) released by actual release date</small></div>
-        <div class="finrev-card warn"><small>PENDING RELEASES · ${finMonthLabel(sel)}</small><b>${finMoney(M.pendingValue)}</b><small>${M.pendingHeads} head(s) expected, not yet released</small></div>
+        <div class="finrev-card warn" style="cursor:pointer" onclick="window.openPendingReleases()" title="Tap to see which customers need release updates">
+          <small>PENDING RELEASES · ${finMonthLabel(sel)}</small><b>${finMoney(M.pendingValue)}</b>
+          <small>${M.pendingHeads} head(s) expected, not yet released · <u>tap to view customers</u></small>
+        </div>
       </div>
       <div class="finrev-sec" style="display:flex;justify-content:space-between;align-items:center;gap:8px">Monthly reservation sales review
         <select class="select" style="background:rgba(10,25,30,.6);color:inherit;border-color:rgba(145,207,202,.35)" onchange="document.getElementById('finReviewBody').dataset.month=this.value;window.renderFinancialReview()">
@@ -1975,7 +1978,7 @@
       <div class="finrev-row"><span>Collection Rate</span><b>${M.rate.toFixed(0)}%</b></div>
       <div class="finrev-sec" style="color:#8ee6df">Release activity</div>
       <div class="finrev-row"><span>Piglets Released</span><b>${M.releasedHeads}</b></div>
-      <div class="finrev-row"><span>Pending Releases</span><b>${M.pendingHeads} · ${finMoney(M.pendingValue)}</b></div>
+      <div class="finrev-row" style="cursor:pointer" onclick="window.openPendingReleases()"><span>Pending Releases <small class="muted">(tap for details)</small></span><b>${M.pendingHeads} · ${finMoney(M.pendingValue)}</b></div>
       <div class="finrev-sec">Last 6 months trend</div>
       <div class="table-wrap"><table class="table" style="min-width:420px;font-size:12px"><thead><tr><th>Month</th><th>Reservations</th><th>Sales Value</th><th>Collections</th><th>Receivables</th></tr></thead><tbody>${trend}</tbody></table></div>
       <small class="muted" style="display:block;margin-top:8px">Sales ≠ collections: a ₱17,000 reservation with ₱5,000 paid counts ₱17,000 sales, ₱5,000 collections, ₱12,000 receivable. Created-date drives sales counts; actual release date drives released figures; target release (birth + 90 d or batch target) drives pending.</small>`;
@@ -1985,6 +1988,58 @@
       body.innerHTML = `<div class="form-error show">Financial Review could not render: ${String(err && err.message || err)}</div>`;
     }
   }
+  /* [REBUILD FIX 90] PENDING RELEASES drill-down — which customers need
+     release updates this month: customer/contact, paid & balance, assigned
+     batch(es), quantity & gender, breeder/fattener source, expected date. */
+  function finExpectedDate(r) {
+    const bid = r.batch_id || (Array.isArray(r.lines) && r.lines[0] && r.lines[0].batch_id) || '';
+    const b = batch(bid);
+    if (b) {
+      if (r.status !== 'released' && b.release_date) return String(b.release_date).slice(0, 10);
+      if (b.birth) {
+        const d = new Date(String(b.birth).slice(0, 10) + 'T00:00:00');
+        if (!isNaN(d)) { d.setDate(d.getDate() + 90); return d.toISOString().slice(0, 10); }
+      }
+    }
+    return String(r.date || '').slice(0, 10);
+  }
+  function finPendingList(monthKey) {
+    return finActiveRes()
+      .filter(r => r.status !== 'released' && finExpectedMonth(r) === monthKey)
+      .map(r => ({ r, expected: finExpectedDate(r) }))
+      .sort((a, b) => String(a.expected).localeCompare(String(b.expected)));
+  }
+  function openPendingReleases() {
+    const monthKey = document.getElementById('finReviewBody')?.dataset.month || finIsoM(new Date());
+    const list = finPendingList(monthKey);
+    document.getElementById('finPendingModal')?.remove();
+    const srcLabel = s => s === 'fattener' ? 'Fattener' : s === 'farm_use' ? 'Farm Use' : 'Breeder';
+    const rows = list.length ? list.map(({ r, expected }) => {
+      const bids = [...new Set((Array.isArray(r.lines) && r.lines.length ? r.lines.map(l => l.batch_id) : [r.batch_id]).filter(Boolean))];
+      const srcs = [...new Set((Array.isArray(r.lines) && r.lines.length ? r.lines.map(l => l.source) : [r.source]).filter(Boolean))].map(srcLabel);
+      const bal = Math.max(0, num(r.total) - num(r.paid));
+      return `<div class="finrev-card" style="margin:8px 0;text-align:left">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap"><b style="font-size:14px">${esc(r.customer)}</b><span class="tag ${bal > 0 ? 'warn' : 'ok'}" style="font-size:10px">${bal > 0 ? 'BALANCE ' + finMoney(bal) : 'FULLY PAID'}</span></div>
+        <small class="muted" style="display:block;margin:2px 0 8px">${esc(r.contact || 'no contact')} · ${esc(r.no)} · expected <b>${fmtDate(expected)}</b></small>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 12px;font-size:12px;color:#b8d4d2">
+          <span>Batch: <b style="color:#efffff">${esc(bids.join(', ') || '—')}</b></span>
+          <span>Qty: <b style="color:#efffff">${num(r.quantity)} ${esc(r.gender || '')}</b></span>
+          <span>Source: <b style="color:#efffff">${esc(srcs.join(' / ') || 'Breeder')}</b></span>
+          <span>Paid: <b style="color:#64e5c0">${finMoney(num(r.paid))}</b></span>
+          <span>Total: <b style="color:#efffff">${finMoney(num(r.total))}</b></span>
+          <span>Balance: <b style="color:${bal > 0 ? '#f0b64b' : '#64e5c0'}">${finMoney(bal)}</b></span>
+        </div>
+      </div>`;
+    }).join('') : `<div class="empty" style="padding:24px">No pending releases for ${finMonthLabel(monthKey)}.</div>`;
+    document.body.insertAdjacentHTML('beforeend', `<div class="due-modal-bg open" id="finPendingModal" style="z-index:1000002!important" onclick="if(event.target===this)this.remove()">
+      <div class="reminder-modal" style="max-width:640px;width:96%;text-align:left">
+        <div class="modal-top"><div><div class="eyebrow" style="color:#f0b64b;letter-spacing:.12em;font-weight:800">PENDING RELEASES</div><h2 style="font-size:19px">${finMonthLabel(monthKey)} — ${list.length} reservation${list.length === 1 ? '' : 's'} · ${list.reduce((a, x) => a + num(x.r.quantity), 0)} heads</h2><small class="muted">Customers needing release updates · sorted by expected release date</small></div><button type="button" class="close-reminder" onclick="document.getElementById('finPendingModal')?.remove()">×</button></div>
+        <div style="margin-top:10px">${rows}</div>
+        <div class="due-actions" style="justify-content:flex-end;margin-top:12px"><button type="button" class="btn ghost" onclick="document.getElementById('finPendingModal')?.remove()">Close</button></div>
+      </div></div>`);
+  }
+  window.openPendingReleases = openPendingReleases;
+
   window.openFinancialReview = openFinancialReview;
   window.renderFinancialReview = renderFinancialReview;
 
