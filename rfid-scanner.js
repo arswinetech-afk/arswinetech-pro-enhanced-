@@ -1195,14 +1195,14 @@
               </div>
             </div>
 
-            <!-- Current Location Badge -->
-            <div class="rfid-location-pill">
+            <!-- Current Location Badge — [FIX 92] whole pill is tappable -->
+            <div class="rfid-location-pill" style="cursor:pointer" onclick="window.quickActionMove()" title="Tap to assign or move this animal's housing">
               <div class="loc-icon">🏢</div>
               <div class="loc-details">
                 <small>Current Housing &amp; Pen Location</small>
                 <b>${esc(barnName)} — ${esc(penName)}</b>
+                <small style="display:block;margin-top:3px;color:var(--teal2);font-weight:800;font-size:10px">🔁 Tap to assign / move pen</small>
               </div>
-              <button type="button" class="btn small" onclick="window.quickActionMove()">Move Pen →</button>
             </div>
 
             <!-- Vital Stats Row -->
