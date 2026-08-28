@@ -1420,9 +1420,22 @@ window.setForecastMonth = function(m) {
   production();
 };
 
+let __arsForecastSearchTimer = null;
 window.setForecastSearch = function(q) {
   window.forecastFilterState.searchQuery = q || '';
-  production();
+  /* [REBUILD FIX 88] re-rendering on EVERY keystroke rebuilt the search input
+     itself, dropping focus — users could only type one letter at a time.
+     Debounce the re-render and restore focus + caret afterwards. */
+  clearTimeout(__arsForecastSearchTimer);
+  __arsForecastSearchTimer = setTimeout(() => {
+    production();
+    const el = document.querySelector('#production input[type="search"]');
+    if (el) {
+      el.focus({ preventScroll: true });
+      const n = el.value.length;
+      try { el.setSelectionRange(n, n); } catch (_) {}
+    }
+  }, 180);
 };
 
 function production(periodOverride) {

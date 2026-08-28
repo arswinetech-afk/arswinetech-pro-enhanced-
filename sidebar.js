@@ -52,8 +52,10 @@
   labels();
   // Group growing navigation into collapsible, memorable categories without changing page routes.
   const groups = [
-    ['Operations', ['reservations', 'dashboard', 'sows', 'piglets', 'vaccination', 'medicine', 'barns', 'rfid']],
-    ['Breeding & Genetics', ['pedigree', 'semen', 'production']],
+    /* [REBUILD FIX 88] Production Forecast (and the KPI Center) are daily
+       operations tools — moved out of Breeding & Genetics per owner request. */
+    ['Operations', ['reservations', 'dashboard', 'sows', 'piglets', 'vaccination', 'medicine', 'barns', 'rfid', 'production', 'kpis']],
+    ['Breeding & Genetics', ['pedigree', 'semen']],
     ['Feed & Inventory', ['feed', 'predictor']],
     ['Finance & Sales', ['financials', 'pos']],
     ['Administration', ['reminders', 'subscription', 'useradmin']]
