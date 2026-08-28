@@ -1877,6 +1877,9 @@
      figures use the batch's target release date (or birth + 90 d, the app's
      maturity convention) — never the reservation creation date. */
   const finMonthKey = d => String(d || '').slice(0, 7);
+  /* [FIX 89b] self-contained numeric parser — reservations.js has no global
+     `num`, which blanked the modal in browsers (ReferenceError). */
+  const num = v => { const n = parseFloat(v); return Number.isFinite(n) ? n : 0; };
   const finIsoM = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
   const finMonthLabel = key => {
     const [y, m] = String(key).split('-').map(Number);
@@ -1939,6 +1942,7 @@
   function renderFinancialReview() {
     const body = document.getElementById('finReviewBody');
     if (!body) return;
+    try {
     const options = finMonthOptions();
     const cur = finIsoM(new Date());
     const sel = (body.dataset.month && options.includes(body.dataset.month)) ? body.dataset.month : (options.includes(cur) ? cur : options[0]);
@@ -1975,6 +1979,11 @@
       <div class="finrev-sec">Last 6 months trend</div>
       <div class="table-wrap"><table class="table" style="min-width:420px;font-size:12px"><thead><tr><th>Month</th><th>Reservations</th><th>Sales Value</th><th>Collections</th><th>Receivables</th></tr></thead><tbody>${trend}</tbody></table></div>
       <small class="muted" style="display:block;margin-top:8px">Sales ≠ collections: a ₱17,000 reservation with ₱5,000 paid counts ₱17,000 sales, ₱5,000 collections, ₱12,000 receivable. Created-date drives sales counts; actual release date drives released figures; target release (birth + 90 d or batch target) drives pending.</small>`;
+    } catch (err) {
+      /* [FIX 89b] never ship a blank modal again — surface the failure */
+      console.error('[FinancialReview]', err);
+      body.innerHTML = `<div class="form-error show">Financial Review could not render: ${String(err && err.message || err)}</div>`;
+    }
   }
   window.openFinancialReview = openFinancialReview;
   window.renderFinancialReview = renderFinancialReview;
