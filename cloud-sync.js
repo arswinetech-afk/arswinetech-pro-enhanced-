@@ -268,6 +268,8 @@
         if (openBatch && openBatchId && window.refreshOpenBatchHub) window.refreshOpenBatchHub();
       }
       updateSyncIndicator('synced', 'Synced', `✓ Cloud refresh verified: ${res.count} records.`);
+      /* [FIX 87] weekly real-file backup to Downloads — survives browser cleaning */
+      if (window.arsMaybeAutoDeviceBackup) window.arsMaybeAutoDeviceBackup();
     } catch (e) {
       updateSyncIndicator('error', 'Sync blocked', e.message || String(e));
     } finally {
@@ -607,6 +609,7 @@
       ...farm,
       logo: logoData,
       logo_url: logoData,
+      _farm_id: fId, /* [FIX 87] so a restore-on-login knows where to put it */
       _exported_at: new Date().toISOString(),
       _device_id: DEVICE_ID,
       _app: 'ARSwineTech Pro'
@@ -624,8 +627,52 @@
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
     }, 200);
+    try { STORE.setItem('ars-last-device-backup', new Date().toISOString()); } catch (_) {}
     toast(`✓ Exported backup: ${fileName}`);
   }
+
+  /* [REBUILD FIX 87] DEVICE-FILE BACKUP & RESTORE.
+     Browsers sandbox web apps: localStorage/IndexedDB are "site data" and die
+     when a user clears browsing data. The cloud (Supabase) stays authoritative,
+     but a backup .json in the Downloads folder is a REAL file that survives
+     any browser cleaning — and can now be restored right from the login
+     screen, even before signing in. */
+  function arsRestoreFromBackupFile(file) {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const data = JSON.parse(String(reader.result || 'null'));
+        if (!data || typeof data !== 'object') throw new Error('not a JSON object');
+        const farm = data.farm && typeof data.farm === 'object' ? data.farm : data; /* recovery snapshot or export */
+        const id = String(data._farm_id || data.farm_id || farm.id || farm.farm_id || '').trim();
+        if (!farm || !id) throw new Error('backup has no farm id — export again from a signed-in device');
+        const dbRaw = STORE.getItem('arswine-db-v1');
+        const db = dbRaw ? JSON.parse(dbRaw) : {};
+        db[id] = Object.assign(db[id] || {}, farm);
+        STORE.setItem('arswine-db-v1', JSON.stringify(db));
+        STORE.setItem('arswine-active-farm', id);
+        toast('✓ Backup restored to this device — now sign in to sync with the cloud.');
+        setTimeout(() => location.reload(), 1200);
+      } catch (e) {
+        toast('⚠ Could not restore backup: ' + (e.message || e));
+      }
+    };
+    reader.onerror = () => toast('⚠ Could not read that file.');
+    reader.readAsText(file);
+  }
+  window.arsRestoreFromBackupFile = arsRestoreFromBackupFile;
+
+  /* Once-a-week silent backup into the Downloads folder (survives browser
+     cleaning). Chrome may ask once for download permission — allow it. */
+  function maybeAutoDeviceBackup() {
+    try {
+      const last = Date.parse(STORE.getItem('ars-last-device-backup') || '') || 0;
+      if (Date.now() - last < 7 * 86400000) return;
+      exportFarmJSON();
+    } catch (_) {}
+  }
+  window.arsMaybeAutoDeviceBackup = maybeAutoDeviceBackup;
 
   function copyFarmJSONToClipboard() {
     const fId = window.farmId || Object.keys(window.DB || {})[0];

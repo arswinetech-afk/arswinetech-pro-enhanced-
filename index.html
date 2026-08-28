@@ -42,6 +42,10 @@
       <button type="button" class="btn" onclick="login(event)">Sign in securely →</button>
       <button type="button" class="btn ghost" style="width:100%;margin-top:10px" onclick="registerAccount()">Create account</button>
       <button type="button" class="link-btn" onclick="showResetRequest()">Forgot password?</button>
+      <!-- [REBUILD FIX 87] restore a device backup file even before signing in
+           (e.g. after clearing browser data) -->
+      <button type="button" class="link-btn" style="margin-top:6px" onclick="document.getElementById('restoreBackupInput').click()">📂 Restore offline backup from a device file</button>
+      <input type="file" id="restoreBackupInput" accept="application/json,.json" style="display:none" onchange="window.arsRestoreFromBackupFile && window.arsRestoreFromBackupFile(this.files[0]); this.value='';">
       <div class="login-error" id="loginError" role="alert" aria-live="polite"></div>
       <div class="auth-status" id="authStatus">Checking secure sign-in service…</div>
       <div class="login-help">Secure email account · cloud sync activates after administrator setup</div>
