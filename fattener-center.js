@@ -621,10 +621,12 @@
           <b>${c.alive} live head</b>
           <span>♂ ${c.aliveM} males · ♀ ${c.aliveF} females</span>
         </div>
-        <div class="boar-stat-card">
+        <div class="boar-stat-card" style="cursor:pointer" onclick="window.openMovementWizard && window.openMovementWizard('${esc(b.id)}','batch')" title="Tap to assign or change this batch's housing">
           <small>🏠 Current Housing</small>
           <b>${esc(housing.barnName)}</b>
           <span>${housing.zoneType}: <b>${esc(housing.penName)}</b></span>
+          <!-- [REBUILD FIX 91] housing card is now actionable -->
+          <span style="display:block;margin-top:5px;font-size:10px;color:var(--teal2);font-weight:800">${housing.hasHousing ? "🔁 Tap to move / re-assign pen" : "➕ Tap to assign housing"}</span>
         </div>
         <div class="boar-stat-card">
           <small>⚖️ Average Weight</small>
