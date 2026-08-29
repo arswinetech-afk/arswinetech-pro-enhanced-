@@ -427,6 +427,11 @@
      prefers the batch's feed trial (actual consumed kg × recorded ₱/kg), else
      an age-based stage intake curve priced with the farm's recorded Feed
      Inventory bag prices. Also returns ADG for the sell-timing estimator. */
+  /* [REBUILD FIX 99/100] feed-cost estimate WITH per-stage bag breakdown.
+     Prefers the farmer's RECORDED consumed bags per stage (Batch Details →
+     "Update consumed bags"), falls back to the age-based intake curve for
+     stages without records; prices come from the recorded Feed Inventory
+     bag prices. Returns {stages:[{label,bags,bkg,prBag,cost,src}], ...}. */
   function marketFeedEstimate() {
     const b = batch(market.batchId);
     const born = b ? ((+b.males || 0) + (+b.females || 0)) : 0;
@@ -435,39 +440,54 @@
     const plan = F().feedPlan || {};
     const bagKgOf = t => { const o = plan.bagKg || {}; const k = Object.keys(o).find(x => x.toLowerCase() === String(t).toLowerCase()); return (k && +o[k]) || (String(t).toLowerCase() === 'pre starter' ? 25 : 50); };
     const feedRows = F().feed || [];
-    const priceKg = t => { const r = feedRows.find(x => String(x.type || '').toLowerCase() === String(t).toLowerCase()); return r && +r.price ? (+r.price) / bagKgOf(t) : null; };
+    const rowFor = t => feedRows.find(x => String(x.type || '').toLowerCase() === String(t).toLowerCase());
+    const priceKg = t => { const r = rowFor(t); return r && +r.price ? (+r.price) / bagKgOf(t) : null; };
     let pk = priceKg('Finisher'); if (pk === null) pk = priceKg('Grower'); if (pk === null) pk = priceKg('Starter');
-    let kg = null, cost = null, adg = null, source = '';
+    let adg = null;
     const trial = (F().feedTrials || []).filter(t => t.batch_id === market.batchId).slice(-1)[0];
     if (trial) {
+      const gms0 = (trial.groups || []).map(g => groupMetrics(trial, g)).filter(x => x && (x.feed || 0) > 0);
+      const gain0 = gms0.reduce((a, x) => a + x.totalGain, 0);
+      if (gain0 > 0) adg = gms0.reduce((a, x) => a + x.gainH, 0) / Math.max(1, gms0.reduce((a, x) => a + x.dspan, 0));
+    }
+    const consRec = (((plan.batches || {})[market.batchId] || {}).consumed) || {};
+    const hasRec = Object.values(consRec).some(v => (+v || 0) > 0);
+    const age = b && b.birth ? Math.max(0, days(b.birth, TODAY)) : null;
+    const SD = { preStarter: 28, starter: 28, grower: 35, finisher: 45 };
+    const RATE = { preStarter: 0.35, starter: 0.9, grower: 1.8, finisher: 2.6 };
+    const stages = [];
+    let kg = 0, cost = 0;
+    [['Pre Starter', 0, 28, 'preStarter'], ['Starter', 28, 56, 'starter'], ['Grower', 56, 91, 'grower'], ['Finisher', 91, 400, 'finisher']].forEach(([label, a, z, key]) => {
+      const recBags = +consRec[key] || 0;
+      let bags = 0, src = '';
+      if (recBags > 0) { bags = recBags; src = 'recorded'; }
+      else if (!hasRec && age !== null && heads > 0) {
+        const dIn = Math.max(0, Math.min(age, z) - a);
+        if (dIn > 0) {
+          const kgPerDay = (plan.stageBags || {})[key] ? (plan.stageBags[key] / SD[key]) * bagKgOf(label) : RATE[key];
+          bags = heads * kgPerDay * dIn / bagKgOf(label);
+          src = 'est';
+        }
+      }
+      if (bags <= 0) return;
+      const bkg = bagKgOf(label);
+      const r = rowFor(label);
+      const prBag = r && +r.price ? +r.price : (pk ? pk * bkg : 0);
+      kg += bags * bkg;
+      cost += bags * prBag;
+      stages.push({ label, bags, bkg, prBag, cost: bags * prBag, src });
+    });
+    let source = hasRec ? 'recorded consumed bags' : 'age-based estimate · your recorded bag prices';
+    if (!stages.length && trial) {
       const gms = (trial.groups || []).map(g => groupMetrics(trial, g)).filter(x => x && (x.feed || 0) > 0);
       const fKg = gms.reduce((a, x) => a + x.feed, 0);
       const fCost = gms.reduce((a, x) => a + x.feed * (x.cost || 0), 0);
-      const gain = gms.reduce((a, x) => a + x.totalGain, 0);
-      if (fKg > 0) { kg = fKg; cost = fCost; source = 'feed trial (actual)'; }
-      if (gain > 0) adg = gms.reduce((a, x) => a + x.gainH, 0) / Math.max(1, gms.reduce((a, x) => a + x.dspan, 0));
+      if (fKg > 0) {
+        kg = fKg; cost = fCost; source = 'feed trial (actual)';
+        stages.push({ label: 'Feed trial actual', bags: null, bkg: null, prBag: null, cost: fCost, src: 'trial', kg: fKg });
+      }
     }
-    if (kg === null && b && b.birth && heads > 0) {
-      const age = Math.max(0, days(b.birth, TODAY));
-      const p = plan.stageBags || {};
-      const stages = [
-        ['Pre Starter', 0, 28, (p.preStarter ? p.preStarter * bagKgOf('Pre Starter') / 28 : 0.35), priceKg('Pre Starter')],
-        ['Starter', 28, 56, (p.starter ? p.starter * bagKgOf('Starter') / 28 : 0.9), priceKg('Starter')],
-        ['Grower', 56, 91, (p.grower ? p.grower * bagKgOf('Grower') / 35 : 1.8), priceKg('Grower')],
-        ['Finisher', 91, 400, (p.finisher ? p.finisher * bagKgOf('Finisher') / 45 : 2.6), priceKg('Finisher')]
-      ];
-      let kSum = 0, cSum = 0;
-      stages.forEach(([name, a, z, rate, pr]) => {
-        const dIn = Math.max(0, Math.min(age, z) - a);
-        if (dIn <= 0) return;
-        const stageKg = heads * rate * dIn;
-        kSum += stageKg;
-        cSum += stageKg * (pr !== null ? pr : (pk || 0));
-      });
-      if (kSum > 0) { kg = kSum; cost = cSum; source = 'age-based estimate · your recorded bag prices'; }
-    }
-    if (kg !== null && cost === null) cost = kg * (pk || 0);
-    return { kg, cost, adg: adg || 0.7, pricePerKg: pk, source, heads };
+    return { stages, kg: kg || null, cost: cost || null, adg: adg || 0.7, pricePerKg: pk, source, heads };
   }
 
   function marketResultsHTML() {
@@ -500,6 +520,7 @@
         return `
       <div class="fc-subhead" style="margin-top:16px"><b>💹 Income computation</b><small class="muted">revenue − feed − expenses</small></div>
       <div class="summary-row"><span>Feed consumed (${est.kg ? Math.round(est.kg) + ' kg · ' : ''}${est.source || 'no data'})</span><b>−${money(feedCost)}</b></div>
+      ${est.stages.length ? `<div class="table-wrap" style="margin:6px 0 10px"><table class="table fc-table"><thead><tr><th>Feed stage</th><th>Bags</th><th>₱/bag</th><th>Cost</th></tr></thead><tbody>${est.stages.map(s => `<tr><td>${esc(s.label)}${s.src === 'recorded' ? ' <span class="tag ok" style="font-size:9px">RECORDED</span>' : (s.src === 'trial' ? '' : ' <span class="tag" style="font-size:9px">EST</span>')}</td><td>${s.bags !== null ? s.bags.toFixed(1) + ' × ' + s.bkg + 'kg' : (s.kg ? Math.round(s.kg) + ' kg' : '—')}</td><td>${s.prBag ? money(s.prBag) : '—'}</td><td><b>${money(s.cost)}</b></td></tr>`).join('')}</tbody></table></div>` : ''}
       <div class="summary-row"><span>Additional expenses</span><b>−${money(expTotal)}</b></div>
       <div class="summary-row"><span>Total production cost</span><b>−${money(totalCost)}</b></div>
       <div class="fc-total" style="${net < 0 ? 'border-color:rgba(239,68,68,.5)' : ''}"><span>NET INCOME</span><b style="color:${net < 0 ? '#ff8b95' : '#64e5c0'}">${money(net)}</b></div>
