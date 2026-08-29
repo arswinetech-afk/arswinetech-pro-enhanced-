@@ -122,12 +122,34 @@
         `<div class="field"><label>Date of birth</label><input name="dob" type="date" value="${esc(v('dob'))}"></div>` +
         `<div class="field"><label>Sire (father) name / ID</label><input name="sire" value="${esc(v('sire') || v('sireRef') || v('sire_name'))}" placeholder="e.g. Luffy"></div>` +
         `<div class="field"><label>Dam (mother) name / ID</label><input name="dam" value="${esc(v('dam') || v('damRef') || v('dam_name'))}" placeholder="e.g. Nami"></div>` +
+        /* [REBUILD FIX 102] concise acquisition record for bought boars */
+        `<div class="field"><label>Source farm / supplier (optional)</label><input name="source_farm" value="${esc(v('source_farm'))}" placeholder="e.g. Creekview Genetics, USA"></div>` +
+        `<div class="field"><label>Purchase price ₱ (optional)</label><input name="purchase_price" type="number" min="0" step="0.01" value="${esc(v('purchase_price'))}" placeholder="e.g. 45000"></div>` +
+        `<div class="field"><label>Purchase date (optional)</label><input name="purchase_date" type="date" value="${esc(v('purchase_date'))}"></div>` +
         `<small class="field-hint" style="grid-column:1/-1">Sire &amp; dam power the Wright inbreeding calculator — boars without recorded parents can only be screened as “0% detected, pedigree incomplete”.</small>` +
         `<div class="field"><label>Date acquired / entered herd</label><input name="acquired" type="date" value="${esc(v('acquired'))}"></div>` +
         `<div class="field"><label>Status</label><select name="status">${STATUSES.map(s => `<option value="${s}"${(b ? (b.status || 'Active') : 'Active') === s ? ' selected' : ''}>${s}</option>`).join('')}</select><small class="field-hint">Only “Active” boars are counted on the dashboard. Culled / Sold boars stay in the registry for history; “Reference” marks an outside-semen lineage source that is never counted. [FIX 28]</small></div>` +
         `<div class="field"><label>Notes</label><input name="notes" value="${esc(v('notes'))}" placeholder="e.g. Main breeder for Landrace sows"></div>` +
       `</div><div class="form-error" id="boarEdErr"></div>` +
       `<div class="due-actions" style="margin-top:16px"><button type="button" class="btn ghost" onclick="document.getElementById('boarEdModal').remove()">Cancel</button><button class="btn">${b ? 'Save changes' : 'Register boar'}</button></div></form></div>`);
+  }
+
+  /* [REBUILD FIX 102] book a boar's acquisition cost ONCE under
+     "Breeding Stock Purchase" (capital → Investing in cash flows). */
+  function bookBoarPurchase(b, d, name) {
+    const price = Math.max(0, parseFloat(d.purchase_price) || 0);
+    if (price <= 0) return;
+    b.purchase_price = price;
+    if (b.purchase_tx_id) return; /* never double-book on edits */
+    const tx = {
+      id: 'tx-' + Date.now().toString(36) + '-boarbuy',
+      date: d.purchase_date || new Date().toISOString().slice(0, 10),
+      type: 'Expense', category: 'Breeding Stock Purchase',
+      description: `Purchased boar ${name} from ${String(d.source_farm || '').trim() || 'outside farm'}`,
+      amount: price, paid: price, created_at: new Date().toISOString()
+    };
+    (F().transactions = F().transactions || []).unshift(tx);
+    b.purchase_tx_id = tx.id;
   }
 
   function saveBoar(e) {
@@ -140,10 +162,13 @@
     if (dup) { err.textContent = `A boar named “${name}” is already registered (${dup.id}).`; err.classList.add('show'); return; }
     if (d.id) {
       const b = findBoar(d.id); if (!b) return;
-      Object.assign(b, { name, breed: d.breed.trim(), dob: d.dob || '', acquired: d.acquired || '', status: d.status, sire: String(d.sire || '').trim(), dam: String(d.dam || '').trim(), notes: d.notes.trim(), updated_at: new Date().toISOString() });
+      Object.assign(b, { name, breed: d.breed.trim(), dob: d.dob || '', acquired: d.acquired || '', status: d.status, sire: String(d.sire || '').trim(), dam: String(d.dam || '').trim(), source_farm: String(d.source_farm || '').trim(), purchase_date: d.purchase_date || '', notes: d.notes.trim(), updated_at: new Date().toISOString() });
+      bookBoarPurchase(b, d, name);
       toast(`Updated ${name}`);
     } else {
-      boars().push({ id: newId(), name, breed: d.breed.trim(), dob: d.dob || '', acquired: d.acquired || '', status: d.status || 'Active', sire: String(d.sire || '').trim(), dam: String(d.dam || '').trim(), notes: d.notes.trim(), created_at: new Date().toISOString() });
+      const nb = { id: newId(), name, breed: d.breed.trim(), dob: d.dob || '', acquired: d.acquired || '', status: d.status || 'Active', sire: String(d.sire || '').trim(), dam: String(d.dam || '').trim(), source_farm: String(d.source_farm || '').trim(), purchase_date: d.purchase_date || '', notes: d.notes.trim(), created_at: new Date().toISOString() };
+      boars().push(nb);
+      bookBoarPurchase(nb, d, name);
       toast(`Registered boar ${name}`);
     }
     save();

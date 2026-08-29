@@ -817,6 +817,10 @@ const configs = {
       ['insemination', 'Insemination Date', 'date'],
       ['vaccine', 'Vaccine', 'text'],
       ['vaccineDate', 'Vaccine Date', 'date'],
+      /* [REBUILD FIX 102] concise acquisition record for bought sows/gilts */
+      ['source_farm', 'Source farm / supplier (optional)', 'text'],
+      ['purchase_price', 'Purchase price ₱ (optional)', 'number'],
+      ['purchase_date', 'Purchase date (optional)', 'date'],
       ['notes', 'Notes', 'textarea']
     ]
   },
@@ -2059,7 +2063,7 @@ function openModal(k, index = null) {
       }
       obj.breed = obj.customBreed.trim()
     }
-    for (let q of ['bags', 'price', 'parity', 'males', 'females', 'bottles', 'amount', 'paid', 'qty', 'total'])
+    for (let q of ['bags', 'price', 'parity', 'males', 'females', 'bottles', 'amount', 'paid', 'qty', 'total', 'purchase_price'])
       if (q in obj) obj[q] = +obj[q];
     if (k === 'piglets' && index === null) {
       obj.iron = false;
@@ -2082,6 +2086,21 @@ function openModal(k, index = null) {
       obj._ars_cloud_local_id = existing?._ars_cloud_local_id || obj.id;
       obj.feed_revision = Date.now();
       obj.updated_at = new Date().toISOString();
+    }
+    /* [REBUILD FIX 102] sow/gilt acquisition cost → booked once under
+       "Breeding Stock Purchase" (capital → Investing activities in the
+       Statement of Cash Flows). Editing later never double-books. */
+    if (k === 'sows' && Number(obj.purchase_price) > 0 && !obj.purchase_tx_id) {
+      const tx = {
+        id: 'tx-' + Date.now().toString(36) + '-sowbuy',
+        date: obj.purchase_date || new Date().toISOString().slice(0, 10),
+        type: 'Expense', category: 'Breeding Stock Purchase',
+        description: `Purchased ${+obj.parity > 0 ? 'sow' : 'gilt'} ${obj.name || obj.id || ''} from ${obj.source_farm || 'outside farm'}`,
+        amount: Number(obj.purchase_price), paid: Number(obj.purchase_price),
+        created_at: new Date().toISOString()
+      };
+      (F().transactions = F().transactions || []).unshift(tx);
+      obj.purchase_tx_id = tx.id;
     }
     if (index === null) F()[c.key].push(obj);
     else F()[c.key][index] = Object.assign(F()[c.key][index], obj);
