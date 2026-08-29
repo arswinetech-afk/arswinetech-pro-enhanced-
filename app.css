@@ -2009,7 +2009,10 @@ button.batch-alert{cursor:pointer;font-family:inherit;padding:5px 11px} /* FIX 3
   bottom: 0;
   background: rgba(6, 20, 25, 0.75);
   backdrop-filter: blur(4px);
-  z-index: 99999;
+  /* [FIX 93] must sit ABOVE the batch-details / due modals (999999/1000000),
+     otherwise the Movement Wizard opened from "Current Housing" renders
+     behind the modal that launched it. */
+  z-index: 1000001 !important;
   display: flex;
   align-items: center;
   justify-content: center;
