@@ -2951,6 +2951,11 @@ function go(page) {
     page = 'subscription';
     toast('Full Access subscription required for that feature')
   }
+  /* [FIX 104] expired trial farms lose premium access */
+  if (window.arsIsTrialFarm && window.arsIsTrialFarm() && window.arsTrialActive && !window.arsTrialActive()) {
+    page = 'subscription';
+    window.arsTrialExpiredScreen && window.arsTrialExpiredScreen();
+  }
   document.querySelectorAll('.page').forEach(x => x.classList.remove('active'));
   document.getElementById(page).classList.add('active');
   document.querySelectorAll('[data-page]').forEach(x => x.classList.toggle('active', x.dataset.page === page));
