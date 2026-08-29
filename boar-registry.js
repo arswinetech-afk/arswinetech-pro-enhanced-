@@ -25,12 +25,27 @@
   const statusClass = b => isActive(b) ? 'stock-sufficient' : (b.status === 'Sold' ? 'stock-low-stock' : 'stock-out-of-stock');
 
   let collectionIntervalDays = 7;
+  /* [REBUILD FIX 94] expand/collapse state for the full advisor list */
+  let advisorExpanded = false;
 
   function setSemenCollectionInterval(value) {
     const parsed = Math.max(1, Math.min(30, parseInt(value, 10) || 7));
     collectionIntervalDays = parsed;
     renderPanel();
   }
+
+  function toggleCollectionAdvisor() {
+    advisorExpanded = !advisorExpanded;
+    const more = document.getElementById('collAdvMore');
+    const btn = document.getElementById('collAdvToggleBtn');
+    if (more && btn) {
+      more.style.display = advisorExpanded ? '' : 'none';
+      btn.textContent = advisorExpanded ? '▲ Show top 6 only' : (btn.dataset.label || '▼ Show all');
+    } else {
+      renderPanel();
+    }
+  }
+  window.toggleCollectionAdvisor = toggleCollectionAdvisor;
 
   function collectionAdvisorHTML() {
     const today = new Date();
@@ -53,13 +68,17 @@
       const soon = !due && daysSince >= Math.max(0, collectionIntervalDays - 2);
       return { b, last, lastDate, daysSince, due, soon, priority: due ? 1 : soon ? 2 : 3 };
     }).filter(Boolean).sort((a, z) => a.priority - z.priority || (z.daysSince || 0) - (a.daysSince || 0) || String(a.b.name).localeCompare(String(z.b.name)));
-    const top = recommendations.slice(0, 6);
-    const rows = top.map(x => {
+    /* [FIX 94] render ALL ranked boars; rows beyond the top 6 sit in a
+       collapsible section the farmer can expand. */
+    const rowHTML = x => {
       const status = x.daysSince === null ? 'No collection history' : x.due ? `Collect now · ${x.daysSince}d since last` : x.soon ? `Due soon · ${x.daysSince}d since last` : `Recently collected · ${x.daysSince}d`;
       const cls = x.due ? 'danger' : x.soon ? 'warn' : '';
       return `<div class="collection-advisor-row"><div><b>${esc(x.b.name)}</b><small>${esc(x.b.breed || 'Breed —')} · ${x.lastDate ? `last collected ${fmtDate(x.lastDate.toISOString().slice(0, 10))}` : 'no collection recorded'}</small></div><span class="tag ${cls}">${status}</span><button type="button" class="btn ghost small" onclick="window.openSemenNewBatch && window.openSemenNewBatch(${jsq(x.b.id)})">＋ Collect</button></div>`;
-    }).join('');
-    return `<div class="collection-advisor"><div class="collection-advisor-head"><div><b>🧪 Next semen collection suggestions</b><small>Live active boars ranked by time since their last collection.</small></div><label>Target interval <select onchange="window.setSemenCollectionInterval(this.value)">${[5,7,10,14].map(n => `<option value="${n}" ${n === collectionIntervalDays ? 'selected' : ''}>${n} days</option>`).join('')}</select></label></div>${rows || '<div class="empty">No active boar has a recorded semen collection history yet.</div>'}${recommendations.length > 6 ? `<small class="muted">Showing the top 6 of ${recommendations.length} active boars.</small>` : ''}</div>`;
+    };
+    const topRows = recommendations.slice(0, 6).map(rowHTML).join('');
+    const moreRows = recommendations.slice(6).map(rowHTML).join('');
+    const collapsedLabel = `▼ Show all ${recommendations.length} boars`;
+    return `<div class="collection-advisor"><div class="collection-advisor-head"><div><b>🧪 Next semen collection suggestions</b><small>Live active boars ranked by time since their last collection.</small></div><label>Target interval <select onchange="window.setSemenCollectionInterval(this.value)">${[5,7,10,14].map(n => `<option value="${n}" ${n === collectionIntervalDays ? 'selected' : ''}>${n} days</option>`).join('')}</select></label></div>${topRows || '<div class="empty">No active boar has a recorded semen collection history yet.</div>'}${moreRows ? `<div id="collAdvMore" style="${advisorExpanded ? '' : 'display:none'}">${moreRows}</div><button type="button" id="collAdvToggleBtn" data-label="${collapsedLabel}" class="btn ghost small" style="margin-top:10px;width:100%;font-weight:700" onclick="window.toggleCollectionAdvisor()">${advisorExpanded ? '▲ Show top 6 only' : collapsedLabel}</button>` : ''}</div>`;
   }
 
   function registryPanelHTML() {
