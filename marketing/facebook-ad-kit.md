@@ -145,3 +145,70 @@ Use this when a prospect asks *"saan ko makikita yan?"* during a Messenger demo:
 | Per-sow action on a bad sow | Sidebar → **Sow Management** → open sow → **Cull** (reason "Poor Reproductive Performance", optional sale price posts to Income) |
 | Vaccination reminders + AI vet | Sidebar → **Vaccination Program** (never-vaccinated register, schedules, critical alarms) & **Medicine & Treatments** → 🔍 AI search |
 | Financials per batch | Sidebar → **Financials** (P&L statements) & **POS Sales**; market calculator in Fatteners → **MARKET** tab |
+
+---
+
+## 7. FACEBOOK POST #2 — FEATURE SHOWCASE (attach the 10 screenshots in the order below)
+
+**Attachment order (FB carousel):**
+1. `Screenshot_20260827_120356.jpg` — Farm Overview dashboard (desktop) → hook image
+2. `Screenshot_20260829_071733.jpg` — CRITICAL inbreeding block (parent × offspring, F 25%)
+3. `Screenshot_20260829_071804.jpg` — HIGH RISK first-cousin detection (F 7.81%)
+4. `Screenshot_20260829_174722.jpg` — Recorded-source 0% shared-ancestry screen
+5. `Screenshot_2026_0827_123448.png` — Piglet Batch Details: milestones, foster, allocations
+6. `Screenshot_2026_0827_121321.png` — Sow Dossier: gestation tracker day 46/114, breeding history
+7. `Screenshot_2026_0827_120424.jpg` — 3-Generation Pedigree & Ancestry Tree
+8. `Screenshot_2026_0827_121654.png` — Fattener Market Selling: weights, brackets, BT scale
+9. `Screenshot_2026_0827_121212.png` — New Feed Order (auto-stock on delivery)
+10. `Screenshot_20260826_221050.jpg` — Signs/Symptoms search (pagtatae → E. coli protocol)
+
+**Post copy (Taglish):**
+
+```
+🐷❗ MAGKANONG BABOY ANG NAWAWALA SA'YO TAON-TAON DAHIL SA
+"WALA LANG TALAGANG RECORD"?
+
+Sa ARSwineTech Pro, ang buong baboyan mo — mula insemination
+hanggang kalabawan — nasa iisang app. KAHIT WALANG SIGNAL
+SA BUKID. 📴➡️📶
+
+Tingnan mo mismo (swipe the photos 👉):
+
+🧬 INBREEDING GUARD — 3-generation pedigree + Wright coefficient.
+   Parent × offspring? BLOCKED agad (F 25%). Pinsan mating?
+   FLAGGED (F 7.8%). Protektado ang quality ng breeder mo.
+
+🐖 COMPLETE BATCH RECORDS — farrowing → iron → castration →
+   weaning → market. Foster piglets, mortality, weights, at
+   "sino ang breeder, sino ang fattener" — lahat naka-track.
+
+♀ SOW DRILL-DOWN — gestation tracker (Day 46 of 114), expected
+   farrowing, breeding history, at 3-Gen Tree ng bawat inahin.
+
+🌾 FEED ORDERS & TRIALS — order forecasting, auto-stock pagdating
+   ng delivery, at head-to-head feed trials (FCR + ₱/kg gain)
+   para ALAM MO kung anong brand talaga ang sulit.
+
+💰 FATTENER MARKET SELLING — timbangan via Bluetooth scale,
+   price brackets per weight, at instant computation benta mo.
+
+💉 VACCINE & MEDICINE ALARMS — repeat doses, follow-ups, at
+   overdue boosters — may TUNOG na alarm kahit nakasara ang app.
+
+🩺 SIGNS/SYMPTOMS SEARCH — i-type ang "pagtatae", sasabihin ng
+   app ang likely condition + dosage reference (AI-assisted).
+
+📴 OFFLINE-FIRST — nagre-record ka kahit walang load;
+   auto-sync pagbalik ng signal. Hindi mawawala ang datos mo
+   kahit linisin mo pa ang browser.
+
+Sa panahong ₱37+/kilo ang feed at nasa ₱200+ ang live hog —
+ang farm na MAY SYSTEM ang lalamang. 💪
+
+💬 I-comment ang "BABOY" o i-message kami para sa FREE demo!
+📲 [ILAGAY ANG LINK / MESSENGER / CELLNUMBER]
+
+#SwineFarmingPH #HogFarmingPH #BaboyBusiness #PiggeryManagement
+#ASFRecovery #AgriTechPH #LivestockPhilippines #BackyardToCommercial
+#BreederPH #FatteningPH #FarmManagementSystem #UswaganNgMgaBaboyan
+```
