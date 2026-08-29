@@ -38,9 +38,73 @@
       <div class="semen-stock-menu">
         <button type="button" onclick="openFosterModal()"><span class="ss-icon">🤱</span><span><b>Foster batch</b><small>Move piglets from one or more litters to a surrogate nurse sow — heads are counted per sex, sources auto-adjust, and the fostered group becomes or merges into a fostered batch.</small></span></button>
         <button type="button" onclick="document.getElementById('pigletQuickMenu').remove(); openLinkedPigletModal()"><span class="ss-icon">🐖</span><span><b>Add farrowing batch</b><small>Record a sow's new farrowing (normal batch — unchanged flow).</small></span></button>
+        <!-- [REBUILD FIX 101] buyers / backyard growers: record purchased piglets -->
+        <button type="button" onclick="openPurchasedBatchModal()"><span class="ss-icon">🛒</span><span><b>Add purchased batch</b><small>Bought piglets from another farm — record supplier, heads and price per head; the cost is booked automatically into Financials under "Piglet Purchases".</small></span></button>
       </div>
     </div></div>`);
   }
+
+  /* [FIX 101] purchased-piglet batch (no farrowing sow on this farm) */
+  function openPurchasedBatchModal() {
+    document.getElementById('purchasedBatchModal')?.remove();
+    document.body.insertAdjacentHTML('beforeend', `<div class="due-modal-bg open" id="purchasedBatchModal" style="z-index:10000000!important" onclick="if(event.target===this)this.remove()">
+      <form class="due-modal" style="max-width:560px;width:96%;text-align:left" onsubmit="savePurchasedBatch(event)">
+        <div class="modal-top"><div><div class="eyebrow" style="color:var(--teal2);letter-spacing:.12em;font-weight:800">PIGLET BATCHES — PURCHASED</div><h2>🛒 Add purchased batch</h2><small class="muted">For piglets bought from another farm — becomes a normal batch you can track, feed, vaccinate and sell.</small></div><button type="button" class="close-reminder" onclick="document.getElementById('purchasedBatchModal')?.remove()">×</button></div>
+        <div class="reminder-fields">
+          <div class="field"><label>Batch ID</label><input name="id" placeholder="auto if blank · e.g. P2026-BUY1"></div>
+          <div class="field"><label>Supplier / source farm *</label><input name="supplier" required placeholder="e.g. Alvarez Farm, Iriga"></div>
+          <div class="field"><label>Purchase date *</label><input name="date" type="date" value="${new Date().toISOString().slice(0, 10)}" required></div>
+          <div class="field"><label>Breed</label><input name="breed" placeholder="e.g. Duroc × Landrace"></div>
+          <div class="field"><label>♂ Males *</label><input name="males" type="number" min="0" value="0" required></div>
+          <div class="field"><label>♀ Females *</label><input name="females" type="number" min="0" value="0" required></div>
+          <div class="field"><label>Price per head (₱) *</label><input name="price" type="number" min="0" step="0.01" required placeholder="e.g. 2500"></div>
+          <div class="field"><label>Age at purchase (days)</label><input name="age_days" type="number" min="0" placeholder="optional — sets birth date"></div>
+          <div class="field"><label>or Birth date (if known)</label><input name="birth" type="date"></div>
+          <div class="field"><label>Notes</label><input name="notes" placeholder="transport, health status on arrival…"></div>
+        </div>
+        <small class="muted" style="display:block;margin:10px 0">Total cost (heads × price) is recorded as an <b>Expense → "Piglet Purchases"</b> and appears in the Income Statement &amp; expense mix.</small>
+        <div class="due-actions" style="justify-content:flex-end"><button type="button" class="btn ghost" onclick="document.getElementById('purchasedBatchModal')?.remove()">Cancel</button><button class="btn">Save purchased batch</button></div>
+      </form></div>`);
+  }
+  window.openPurchasedBatchModal = openPurchasedBatchModal;
+
+  function savePurchasedBatch(e) {
+    e.preventDefault();
+    const d = Object.fromEntries(new FormData(e.target));
+    const males = Math.max(0, Math.floor(num(d.males) || 0));
+    const females = Math.max(0, Math.floor(num(d.females) || 0));
+    const totalHeads = males + females;
+    const price = Math.max(0, num(d.price) || 0);
+    if (!totalHeads) { toast('⚠ Enter the number of male and/or female piglets purchased.'); return; }
+    const pid = (d.id || '').trim() || ('P' + new Date().getFullYear() + '-BUY' + String((F().piglets || []).length + 1));
+    if ((F().piglets || []).some(b => b.id === pid)) { toast('⚠ That Batch ID already exists.'); return; }
+    const pDate = d.date || new Date().toISOString().slice(0, 10);
+    const ageDays = Math.max(0, Math.floor(num(d.age_days) || 0));
+    let birth = (d.birth || '').trim();
+    if (!birth && ageDays > 0) { const dt = new Date(pDate + 'T00:00:00'); dt.setDate(dt.getDate() - ageDays); birth = dt.toISOString().slice(0, 10); }
+    const supplier = (d.supplier || '').trim() || 'outside farm';
+    (F().piglets = F().piglets || []).push({
+      id: pid, dam_name: 'Purchased · ' + supplier, sow: 'Purchased · ' + supplier, sire_name: '—',
+      breed: (d.breed || '').trim(), birth: birth, males: males, females: females,
+      origin: 'purchased', supplier: supplier, purchase_date: pDate, purchase_price_per_head: price,
+      notes: d.notes || '', created_at: new Date().toISOString()
+    });
+    const total = totalHeads * price;
+    if (total > 0) {
+      (F().transactions = F().transactions || []).unshift({
+        id: 'tx-' + Date.now().toString(36) + '-pigbuy', date: pDate, type: 'Expense',
+        category: 'Piglet Purchases',
+        description: `Purchased ${totalHeads} piglet${totalHeads > 1 ? 's' : ''} @ ${(typeof peso === 'function' ? peso(price) : price)}/head from ${supplier} (Batch ${pid})`,
+        amount: total, paid: total, created_at: new Date().toISOString()
+      });
+    }
+    save();
+    document.getElementById('purchasedBatchModal')?.remove();
+    document.getElementById('pigletQuickMenu')?.remove();
+    if (typeof renderAll === 'function') renderAll();
+    toast(`🛒 Batch ${pid} recorded — ${(typeof peso === 'function' ? peso(total) : total)} booked under Piglet Purchases.`);
+  }
+  window.savePurchasedBatch = savePurchasedBatch;
 
   /* ── the foster-batch desk ───────────────────────────────────────────── */
   let fb = null;
