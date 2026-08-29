@@ -355,7 +355,8 @@
     market = {
       batchId: b ? b.id : '',
       weights: Array.from({ length: heads }, () => ''),
-      brackets: [{ min: 80, max: 90, rate: 140 }, { min: 90, max: 100, rate: 150 }]
+      brackets: [{ min: 80, max: 90, rate: 140 }, { min: 90, max: 100, rate: 150 }],
+      expenses: [] /* [FIX 99] additional manual expenses */
     };
   }
 
@@ -386,6 +387,10 @@
         <div class="fc-subhead" style="margin-top:18px"><b>Price brackets per weight</b><small class="muted">each pig is priced by the bracket its weight falls into</small></div>
         <div id="fcBrackets">${bRows}</div>
         <button class="btn ghost" style="margin-top:8px" onclick="marketAddBracket()">+ Add price bracket</button>
+        <!-- [FIX 99] additional expenses input -->
+        <div class="fc-subhead" style="margin-top:18px"><b>Additional expenses</b><small class="muted">hauling, labor, meds, pen costs…</small></div>
+        <div id="fcExpenses">${(market.expenses || []).map((e, i) => `<div class="fc-wrow" data-exp-row style="display:flex;gap:6px;align-items:center;margin:6px 0"><input data-ex="label" placeholder="e.g. Hauling" value="${esc(e.label || '')}" style="flex:1"><input data-ex="amt" type="number" min="0" step="0.01" inputmode="decimal" placeholder="₱" value="${esc(e.amt ?? '')}" oninput="marketRecalc()" style="width:110px"><button type="button" class="notch-del" onclick="marketDelExpense(${i})">×</button></div>`).join('') || '<small class="muted">None yet — feed cost is computed automatically below.</small>'}</div>
+        <button class="btn ghost" style="margin-top:8px" onclick="marketAddExpense()">+ Add expense</button>
       </div>
       <div>
         <div class="fc-subhead"><b>Automatic computation</b><small class="muted">updates as you type</small></div>
@@ -402,6 +407,9 @@
     market.brackets = [...document.querySelectorAll('#fcBrackets [data-br-row]')].map(r => ({
       min: r.querySelector('[data-br="min"]').value, max: r.querySelector('[data-br="max"]').value, rate: r.querySelector('[data-br="rate"]').value
     }));
+    market.expenses = [...document.querySelectorAll('#fcExpenses [data-exp-row]')].map(r => ({
+      label: r.querySelector('[data-ex="label"]').value, amt: r.querySelector('[data-ex="amt"]').value
+    }));
   }
   function marketMath() {
     const ws = market.weights.map(num).filter(v => v !== null && v > 0),
@@ -415,6 +423,53 @@
     const matched = rows.reduce((a, r) => a + r.heads, 0), amount = rows.reduce((a, r) => a + r.amount, 0);
     return { heads, kgSum, avg, rows, unmatched: heads - matched, amount, avgRate: kgSum ? amount / kgSum : 0 };
   }
+  /* [REBUILD FIX 99] smart feed-cost estimate for the batch being priced:
+     prefers the batch's feed trial (actual consumed kg × recorded ₱/kg), else
+     an age-based stage intake curve priced with the farm's recorded Feed
+     Inventory bag prices. Also returns ADG for the sell-timing estimator. */
+  function marketFeedEstimate() {
+    const b = batch(market.batchId);
+    const born = b ? ((+b.males || 0) + (+b.females || 0)) : 0;
+    const wsNow = market.weights.map(num).filter(v => v !== null && v > 0);
+    const heads = born || wsNow.length;
+    const plan = F().feedPlan || {};
+    const bagKgOf = t => { const o = plan.bagKg || {}; const k = Object.keys(o).find(x => x.toLowerCase() === String(t).toLowerCase()); return (k && +o[k]) || (String(t).toLowerCase() === 'pre starter' ? 25 : 50); };
+    const feedRows = F().feed || [];
+    const priceKg = t => { const r = feedRows.find(x => String(x.type || '').toLowerCase() === String(t).toLowerCase()); return r && +r.price ? (+r.price) / bagKgOf(t) : null; };
+    let pk = priceKg('Finisher'); if (pk === null) pk = priceKg('Grower'); if (pk === null) pk = priceKg('Starter');
+    let kg = null, cost = null, adg = null, source = '';
+    const trial = (F().feedTrials || []).filter(t => t.batch_id === market.batchId).slice(-1)[0];
+    if (trial) {
+      const gms = (trial.groups || []).map(g => groupMetrics(trial, g)).filter(x => x && (x.feed || 0) > 0);
+      const fKg = gms.reduce((a, x) => a + x.feed, 0);
+      const fCost = gms.reduce((a, x) => a + x.feed * (x.cost || 0), 0);
+      const gain = gms.reduce((a, x) => a + x.totalGain, 0);
+      if (fKg > 0) { kg = fKg; cost = fCost; source = 'feed trial (actual)'; }
+      if (gain > 0) adg = gms.reduce((a, x) => a + x.gainH, 0) / Math.max(1, gms.reduce((a, x) => a + x.dspan, 0));
+    }
+    if (kg === null && b && b.birth && heads > 0) {
+      const age = Math.max(0, days(b.birth, TODAY));
+      const p = plan.stageBags || {};
+      const stages = [
+        ['Pre Starter', 0, 28, (p.preStarter ? p.preStarter * bagKgOf('Pre Starter') / 28 : 0.35), priceKg('Pre Starter')],
+        ['Starter', 28, 56, (p.starter ? p.starter * bagKgOf('Starter') / 28 : 0.9), priceKg('Starter')],
+        ['Grower', 56, 91, (p.grower ? p.grower * bagKgOf('Grower') / 35 : 1.8), priceKg('Grower')],
+        ['Finisher', 91, 400, (p.finisher ? p.finisher * bagKgOf('Finisher') / 45 : 2.6), priceKg('Finisher')]
+      ];
+      let kSum = 0, cSum = 0;
+      stages.forEach(([name, a, z, rate, pr]) => {
+        const dIn = Math.max(0, Math.min(age, z) - a);
+        if (dIn <= 0) return;
+        const stageKg = heads * rate * dIn;
+        kSum += stageKg;
+        cSum += stageKg * (pr !== null ? pr : (pk || 0));
+      });
+      if (kSum > 0) { kg = kSum; cost = cSum; source = 'age-based estimate · your recorded bag prices'; }
+    }
+    if (kg !== null && cost === null) cost = kg * (pk || 0);
+    return { kg, cost, adg: adg || 0.7, pricePerKg: pk, source, heads };
+  }
+
   function marketResultsHTML() {
     const m = marketMath();
     const rows = m.rows.map(r => `<tr><td>${r.lo}–${r.hi} kg @ ${money(r.rate || 0)}/kg</td><td>${r.heads}</td><td>${r.kg.toFixed(1)} kg</td><td><b>${money(r.amount)}</b></td></tr>`).join('');
@@ -426,6 +481,36 @@
       ${m.unmatched > 0 ? `<div class="notice" style="margin-top:10px"><b>⚠ ${m.unmatched} pig${m.unmatched > 1 ? 's' : ''} outside all brackets</b> — add a price bracket that covers their weight.</div>` : ''}
       <div class="fc-total"><span>Estimated total price</span><b>${money(m.amount)}</b></div>
       <div class="summary-row"><span>Average price</span><b>${money(m.avgRate)}/kg</b></div>
+      ${(() => {
+        /* [FIX 99] income statement + sell-now-vs-next-month estimator */
+        const est = marketFeedEstimate();
+        const expTotal = (market.expenses || []).reduce((a, e) => a + (num(e.amt) || 0), 0);
+        const feedCost = est.cost || 0;
+        const totalCost = feedCost + expTotal;
+        const net = m.amount - totalCost;
+        const ws = market.weights.map(num).filter(v => v !== null && v > 0);
+        const brs = market.brackets.map(b => ({ lo: num(b.min), hi: num(b.max), rate: num(b.rate) })).filter(b => b.lo !== null && b.hi !== null && b.rate !== null);
+        const rateAt = w => { const hit = brs.find(b => w >= b.lo && w <= b.hi); if (hit) return hit.rate; const top = brs.slice().sort((a, b) => b.hi - a.hi)[0]; if (top && w > top.hi) return top.rate; const low = brs.slice().sort((a, b) => a.lo - b.lo)[0]; return low ? low.rate : 0; };
+        const revNext = ws.reduce((a, w) => a + (w + est.adg * 30) * rateAt(w + est.adg * 30), 0);
+        const feedNext = ws.length * 30 * 2.6 * (est.pricePerKg || 0);
+        const profitNext = revNext - feedCost - feedNext - expTotal;
+        const diff = profitNext - net;
+        const d30 = new Date(Date.now() + 30 * 86400000).toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' });
+        const avgNext = ws.length ? ws.reduce((a, w) => a + w + est.adg * 30, 0) / ws.length : 0;
+        return `
+      <div class="fc-subhead" style="margin-top:16px"><b>💹 Income computation</b><small class="muted">revenue − feed − expenses</small></div>
+      <div class="summary-row"><span>Feed consumed (${est.kg ? Math.round(est.kg) + ' kg · ' : ''}${est.source || 'no data'})</span><b>−${money(feedCost)}</b></div>
+      <div class="summary-row"><span>Additional expenses</span><b>−${money(expTotal)}</b></div>
+      <div class="summary-row"><span>Total production cost</span><b>−${money(totalCost)}</b></div>
+      <div class="fc-total" style="${net < 0 ? 'border-color:rgba(239,68,68,.5)' : ''}"><span>NET INCOME</span><b style="color:${net < 0 ? '#ff8b95' : '#64e5c0'}">${money(net)}</b></div>
+      <div class="summary-row"><span>Net per head / margin</span><b>${m.heads ? money(net / m.heads) + ' / ' + (m.amount ? Math.round(net / m.amount * 100) : 0) + '%' : '—'}</b></div>
+      ${ws.length ? `
+      <div class="fc-subhead" style="margin-top:16px"><b>⏱ Sell now or next month?</b><small class="muted">ADG ${ (est.adg * 1000).toFixed(0) } g/d · projects +30 days</small></div>
+      <div class="summary-row"><span>💰 Sell now (${m.heads} hd · ${m.avg.toFixed(0)} kg avg)</span><b style="color:${net < 0 ? '#ff8b95' : '#64e5c0'}">${money(net)}</b></div>
+      <div class="summary-row"><span>⏳ Sell ${d30} (~${avgNext.toFixed(0)} kg avg)</span><b style="color:${profitNext < 0 ? '#ff8b95' : '#64e5c0'}">${money(profitNext)}</b></div>
+      <small class="muted" style="display:block;margin-top:4px">Next-month view adds ~${money(feedNext)} feed for +${(avgNext - m.avg).toFixed(0)} kg/head at today's brackets.</small>
+      <div class="notice" style="margin-top:8px;${diff > 0 ? 'border-color:rgba(13,184,174,.6)' : 'border-color:rgba(245,158,11,.6)'}"><b>${diff > 0 ? `⏳ CONSIDER WAITING — projected +${money(diff)} more in 30 days.` : `💰 SELL NOW — waiting 30 days projects ${money(diff)} vs today.`}</b></div>` : ''}`;
+      })()}
     </div>`;
   }
   function marketRecalc() {
@@ -447,24 +532,34 @@
   function marketDelPig(i) { marketReadDOM(); market.weights.splice(i, 1); marketStructural(); }
   function marketAddBracket() { marketReadDOM(); market.brackets.push({ min: '', max: '', rate: '' }); marketStructural(); const inputs = document.querySelectorAll('#fcBrackets [data-br="min"]'); inputs[inputs.length - 1]?.focus(); }
   function marketDelBracket(i) { marketReadDOM(); market.brackets.splice(i, 1); marketStructural(); }
+  function marketAddExpense() { marketReadDOM(); (market.expenses = market.expenses || []).push({ label: '', amt: '' }); marketStructural(); }
+  function marketDelExpense(i) { marketReadDOM(); market.expenses.splice(i, 1); marketStructural(); }
+  window.marketAddExpense = marketAddExpense;
+  window.marketDelExpense = marketDelExpense;
   function marketSaveQuote() {
     marketReadDOM();
     const m = marketMath();
     if (!m.heads) { toast('Enter at least one pig weight first.'); return; }
     if (!m.rows.length) { toast('No weight falls inside a price bracket — add matching brackets.'); return; }
     const quotes = F().marketQuotes || (F().marketQuotes = []);
+    /* [FIX 99] persist expenses + income/timing snapshot with the quote */
+    const est = marketFeedEstimate();
+    const expTotal = (market.expenses || []).reduce((a, e) => a + (num(e.amt) || 0), 0);
     quotes.push({
       id: 'mq-' + Date.now(), batch_id: market.batchId, created: new Date().toISOString(),
       weights: market.weights.map(num).filter(v => v !== null),
       brackets: market.brackets.map(b => ({ min: num(b.min), max: num(b.max), rate: num(b.rate) })).filter(b => b.min !== null && b.max !== null),
-      heads: m.heads, kg: m.kgSum, avgW: m.avg, amount: m.amount, avgRate: m.avgRate
+      heads: m.heads, kg: m.kgSum, avgW: m.avg, amount: m.amount, avgRate: m.avgRate,
+      expenses: (market.expenses || []).map(e => ({ label: e.label || 'Expense', amt: num(e.amt) || 0 })),
+      feedCost: est.cost || 0, feedKg: est.kg, feedSource: est.source,
+      netIncome: m.amount - (est.cost || 0) - expTotal
     });
     save(); renderCenter(); toast('Price computation saved');
   }
   function marketOpenQuote(id) {
     const q = (F().marketQuotes || []).find(x => x.id === id);
     if (!q) return;
-    market = { batchId: q.batch_id, weights: q.weights.slice(), brackets: q.brackets.map(b => ({ ...b })) };
+    market = { batchId: q.batch_id, weights: q.weights.slice(), brackets: q.brackets.map(b => ({ ...b })), expenses: (q.expenses || []).map(e => ({ ...e })) };
     cur.batch = q.batch_id;
     renderCenter(); toast('Saved computation loaded');
   }
