@@ -98,6 +98,10 @@
 
   /* ── start / resume ── */
   window.arsStartTrial = async function () {
+    /* Safety: never silently hijack a signed-in REAL farm session on this
+       device — the trial swaps the active farm context. */
+    const realSession = document.body.classList.contains('farm-access-granted') && !window.arsIsTrialFarm();
+    if (realSession && !confirm('You are signed in to a REAL farm on this device.\n\nStart the demo trial anyway? You will be switched to the demo farm — your real data stays safe and you can sign back in anytime.')) return;
     let s = readState();
     if (s && Date.now() >= s.expiresAt) { window.arsTrialExpiredScreen(); return; }
     if (!s) {
@@ -122,7 +126,12 @@
   window.addEventListener('load', () => {
     const s = readState();
     const wantsTrial = /[?&]trial=1/.test(location.search) || location.hash.includes('trial');
-    if (!s) { if (wantsTrial) window.arsStartTrial(); return; }
+    if (!s) {
+      /* fresh visitor with the trial link — but never auto-switch a device
+         that is already signed in to a real farm */
+      if (wantsTrial && !document.body.classList.contains('farm-access-granted')) window.arsStartTrial();
+      return;
+    }
     if (Date.now() >= s.expiresAt) {
       if (wantsTrial) window.arsTrialExpiredScreen();
       return;
