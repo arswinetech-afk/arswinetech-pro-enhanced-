@@ -2326,6 +2326,34 @@
     return txs.slice().sort((a, b) => String(a.timestamp || a.date || a.created_at || '').localeCompare(String(b.timestamp || b.date || b.created_at || '')));
   }
 
+  /* [REBUILD FIX 95] DATED PAYMENT HISTORY. The statement used to show only a
+     running "Paid" per invoice, which made it look like the reseller paid on
+     the invoice date. Reconstruct the ACTUAL dated payments:
+       • payments recorded via the payment modal (farm Income transactions with
+         reseller_id + payment_allocations), dated by their entry date; and
+       • money paid at dispatch (invoice paid_amount not covered by any later
+         allocation), dated on the invoice date.                       */
+  function resellerPaymentHistory(f, r) {
+    const pays = [];
+    const allocByTx = {};
+    (f.transactions || []).forEach(t => {
+      if (!t || t.reseller_id !== r.id) return;
+      if (!/reseller payment/i.test(String(t.description || ''))) return;
+      if (['voided', 'deleted', 'undone'].includes(String(t.status || '').toLowerCase())) return;
+      pays.push({
+        date: String(t.date || t.created_at || '').slice(0, 10),
+        amount: Math.max(0, (num(t.amount) || 0)),
+        method: (String(t.description || '').match(/\(([^)]+)\)/) || [])[1] || 'payment'
+      });
+      (t.payment_allocations || []).forEach(a => { allocByTx[a.tx_id] = (allocByTx[a.tx_id] || 0) + (num(a.amount) || 0); });
+    });
+    resellerTransactionsFor(f, r).forEach(tx => {
+      const initial = Math.max(0, (num(tx.paid_amount) || 0)) - (allocByTx[tx.id] || 0);
+      if (initial > 0.005) pays.push({ date: String(tx.date || tx.timestamp || '').slice(0, 10), amount: initial, method: 'paid at dispatch' });
+    });
+    return pays.sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  }
+
   function recalculateResellerTx(tx) {
     tx.discount_amount = resellerTxDiscount(tx);
     tx.balance = resellerTxBalance(tx);
@@ -3853,9 +3881,14 @@
                   <b>${peso(tx.total_amount)}</b>
                 </div>
                 ${resellerTxDiscount(tx) > 0 ? `<small style="display:block;color:var(--ok)">Discount / readjustment: −${peso(resellerTxDiscount(tx))}</small>` : ''}
-                <small class="muted">Paid: ${peso(tx.paid_amount || 0)} · Bal: ${peso(resellerTxBalance(tx))}</small>
+                <small class="muted">Paid to date: ${peso(tx.paid_amount || 0)} · Bal: ${peso(resellerTxBalance(tx))}</small>
               </div>
             `).join('') || '<p class="muted">No transactions on file.</p>'}
+
+            ${(() => { /* [FIX 95] actual dated payments section */
+              const pays = resellerPaymentHistory(f, r);
+              return pays.length ? `<div class="rc-rule"></div><div style="font-size:11px;font-weight:bold;margin-bottom:6px">PAYMENTS RECEIVED (ACTUAL DATES):</div>${pays.map(p => `<div style="font-size:11.5px;padding:4px 0;border-bottom:1px dashed var(--line)"><div style="display:flex;justify-content:space-between"><span>${fmtDate(p.date)} · ${escH(p.method)}</span><b style="color:var(--ok)">${peso(p.amount)}</b></div></div>`).join('')}` : '';
+            })()}
 
             ${adjustments.length ? `<div class="rc-rule"></div><div style="font-size:11px;font-weight:bold;margin-bottom:6px">DISCOUNTS / READJUSTMENTS:</div>${adjustments.map(adj => `<div style="font-size:11.5px;padding:4px 0;border-bottom:1px dashed var(--line)"><div style="display:flex;justify-content:space-between"><span>${fmtDate(adj.date)} · ${escH(adj.type === 'discount_readjustment' ? 'Discount / Readjustment' : 'Adjustment')}</span><b style="color:var(--ok)">−${peso(adj.amount)}</b></div><small class="muted">Reason: ${escH(adj.reason || '—')}</small></div>`).join('')}` : ''}
 
@@ -4017,8 +4050,16 @@
       rTxs.slice(0, 6).forEach(tx => {
         add(`${tx.date} #${tx.id.slice(-6)}:`);
         add(row(`  Billed ${P(tx.total_amount)}`, `Bal ${P(resellerTxBalance(tx))}`));
-        if (resellerTxDiscount(tx) > 0) add(row(`  Disc ${P(resellerTxDiscount(tx))}`, `Paid ${P(tx.paid_amount || 0)}`));
+        if (resellerTxDiscount(tx) > 0) add(row(`  Disc ${P(resellerTxDiscount(tx))}`, `Paid to date ${P(tx.paid_amount || 0)}`));
       });
+
+      /* [FIX 95] dated payments on the thermal statement too */
+      const paysBt = resellerPaymentHistory(f, r);
+      if (paysBt.length) {
+        add(sep);
+        add("PAYMENTS RECEIVED:", { b: 1 });
+        paysBt.slice(-8).forEach(p => add(row(`  ${p.date} ${p.method}`, P(p.amount))));
+      }
 
       add(sep);
       add(row("TOTAL BILLED:", P(rBilled)));
