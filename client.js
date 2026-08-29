@@ -701,7 +701,12 @@ window.ARSCloud = (() => {
     const onlyKeys = options.dirtyOnly === false ? null : new Set(dirtyKeysForFarm(farmId));
     if (onlyKeys && !onlyKeys.size) return { success: true, count: 0, pending: false };
     const rows = buildRows(farmId, farm, onlyKeys);
-    if (!rows.length) return { success: true, count: 0, pending: Boolean(onlyKeys?.size) };
+    if (!rows.length) {
+      /* [REBUILD FIX 96] dirty keys with no buildable rows can never upload —
+         clear them so the indicator doesn't spin "Pending changes" forever. */
+      (onlyKeys || new Set()).forEach(key => dirtyVersions.delete(key));
+      return { success: true, count: 0, pending: hasDirtyChanges(farmId) };
+    }
 
     // Re-read the server state before writing. If another device changed a row
     // after this device's baseline, do not overwrite it silently.
@@ -709,6 +714,7 @@ window.ARSCloud = (() => {
     try {
       serverRows = (await listFarmRows(farmId)).rows;
     } catch (error) {
+      window.__arsLastPushError = `Cloud preflight failed: ${error.message}`;
       return { success: false, reason: `Cloud preflight failed: ${error.message}` };
     }
     const serverMap = serverRowMap(serverRows);
@@ -745,13 +751,21 @@ window.ARSCloud = (() => {
         const key = rowKey(farmId, row.entity_type, row.local_id);
         cloudVersions.set(key, { updated_at: row.payload.updated_at });
         if ((dirtyVersions.get(key) || 0) === versionsAtStart.get(key)) dirtyVersions.delete(key);
+        /* [FIX 96] refresh local reseller-tx sync badges so pickup cards stop
+           saying "pending cloud verification" after a verified upload. */
+        if (row.entity_type === 'semen_reseller_tx') {
+          const item = (farm.semenResellerTx || []).find(x => String(x._ars_cloud_local_id || x.id || '') === row.local_id);
+          if (item) { item.sync_status = 'verified'; delete item.sync_last_error; }
+        }
       });
       const now = new Date().toISOString();
       window.__arsPendingUnverifiedSave = false;
+      window.__arsLastPushError = null;
       if (window.STORE) window.STORE.setItem('ars-last-cloud-sync', now);
       window.__arsLastSuccessfulSyncAt = now;
       return { success: true, count: writable.length, pending: hasDirtyChanges(farmId) };
     } catch (error) {
+      window.__arsLastPushError = error.message || String(error); /* [FIX 96] */
       return { success: false, reason: error.message || String(error), pending: true };
     }
   }
