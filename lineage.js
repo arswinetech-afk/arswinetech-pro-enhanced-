@@ -82,8 +82,55 @@
     if (!box) return;
     let q = (query || '').toLowerCase();
     box.classList.add('open');
-    box.querySelectorAll('button[data-search]').forEach(b => b.style.display = !q || b.dataset.search.includes(q) ? 'flex' : 'none')
+    box.querySelectorAll('button[data-search]:not(.boar-suggest)').forEach(b => b.style.display = !q || b.dataset.search.includes(q) ? 'flex' : 'none');
+    /* [FIX 98] surface ACTIVE farm boars too — typing "Freeza" now fetches him */
+    box.querySelectorAll('button.boar-suggest').forEach(b => b.remove());
+    if (q.length >= 2) {
+      (F().boars || []).filter(b => String(b.status || 'Active') === 'Active')
+        .filter(b => `${b.name} ${b.id} ${b.breed || ''}`.toLowerCase().includes(q))
+        .slice(0, 6)
+        .forEach(b => {
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'boar-suggest';
+          btn.dataset.search = `${b.name} ${b.id}`.toLowerCase();
+          btn.innerHTML = `<b>♂ ${esc(b.name)} · ACTIVE BOAR</b><span>${esc(b.breed || '')}${b.sire || b.dam ? ' · lineage on file' : ''}</span>`;
+          btn.onclick = () => window.selectBoarAsSource(b.id);
+          box.appendChild(btn);
+        });
+    }
   }
+
+  /* [FIX 98] pick an active boar as the genetic source: use his latest semen
+     lot when one exists; otherwise pre-fill the new-source form from his
+     registry record (name, breed, sire, dam) so one tap records a collection. */
+  function selectBoarAsSource(boarId) {
+    const b = (F().boars || []).find(x => x.id === boarId);
+    if (!b) return;
+    const lots = semenLots().filter(l =>
+      (l.boar_id && String(l.boar_id).toLowerCase() === String(b.id).toLowerCase()) ||
+      (l.boar_name && String(l.boar_name).toLowerCase() === String(b.name).toLowerCase()));
+    if (lots.length) {
+      const latest = lots.slice().sort((a, z) => String(z.collection_date || z.collection || '').localeCompare(String(a.collection_date || a.collection || '')))[0];
+      selectSemenBatch(latest.id);
+      return;
+    }
+    const idx = +(document.querySelector('#breedModal form')?.dataset.sowIndex ?? 0);
+    const box = document.getElementById('manualSemenSource');
+    if (box && box.style.display === 'none') toggleManualSemenSource(idx);
+    const setV = (n, v) => { const el = document.querySelector(`#breedModal [name="${n}"]`); if (el) el.value = v ?? ''; };
+    setV('manual_boar_name', b.name);
+    setV('manual_boar_id', b.id);
+    setV('manual_breed', b.breed || '');
+    setV('manual_sire_ref', b.sire || b.sireRef || '');
+    setV('manual_dam_ref', b.dam || b.damRef || '');
+    setV('manual_source_role', 'active');
+    const input = document.getElementById('semenBatchSearch');
+    if (input) input.value = `♂ ${b.name} (active boar — recording fresh collection)`;
+    document.getElementById('semenSuggestions')?.classList.remove('open');
+    previewManualSemen(idx);
+  }
+  window.selectBoarAsSource = selectBoarAsSource;
 
   function selectSemenBatch(id) {
     let lot = semenLots().find(x => x.id === id),
@@ -142,7 +189,7 @@
     if (!lot || !box) return;
     let f = +result.f || 0,
       /* [FIX 85] 0% with missing pedigree is NOT "safe" — show caution tone */
-      level = f === 0 ? (result.incomplete ? 'caution' : 'safe') : f < 6.25 ? 'caution' : f < 12.5 ? 'high' : 'critical',
+      level = f === 0 ? (result.incomplete && !result.recordedSource ? 'caution' : 'safe') : f < 6.25 ? 'caution' : f < 12.5 ? 'high' : 'critical',
       blocked = prohibited(result, boar, sow),
       btn = document.getElementById('recordInseminationBtn');
     if (btn) {
@@ -152,9 +199,13 @@
     if (level === 'critical') criticalTone();
     let banner = f > 0 ? `<div class="inbreed-banner ${level}"><div class="inbreed-title">${level==='critical'?'⚠ CRITICAL RISK - INBREEDING DETECTED':level==='high'?'⚠ HIGH RISK - INBREEDING DETECTED':'⚠ CAUTION - INBREEDING DETECTED'} · F ${f.toFixed(2)}%</div><div><b>Relationship Detected:</b> ${escX(result.relationship||'Common ancestor relationship')}</div><div><b>Mating Type:</b> ${escX(result.message)}</div>${level==='critical'?'<div class="inbreed-impact">This mating may significantly increase genetic defects and reduced performance.</div>':''}${blocked?'<div class="inbreed-block">BREEDING BLOCKED — prohibited genetic relationship.</div>':''}</div>`
       : result.incomplete
-        ? `<div class="inbreed-banner caution"><div class="inbreed-title">✓ 0% DETECTED IN AVAILABLE PEDIGREE — NOT A GUARANTEE</div><div>${escX(result.message)}</div></div>`
+        ? (result.recordedSource
+          /* [FIX 98] recorded / reference sources get a calm, honest screen —
+             no alarming amber wall; coverage notes tucked into a disclosure. */
+          ? `<div class="inbreed-banner safe"><div class="inbreed-title">✓ RECORDED SOURCE · 0% SHARED ANCESTRY DETECTED</div><div>Screened against the sow's pedigree using the source's recorded / reference lineage — no common ancestors found. Outside reference ancestors are kept as lineage notes; you do not need to register them as sows/boars.</div>${result.gaps && result.gaps.length ? `<details style="margin-top:6px"><summary class="muted" style="font-size:11px;cursor:pointer">Pedigree coverage notes (${result.gaps.length})</summary>${result.gaps.slice(0, 6).map(g => `<small style="display:block;opacity:.8">· ${escX(g)}</small>`).join('')}</details>` : ''}</div>`
+          : `<div class="inbreed-banner caution"><div class="inbreed-title">✓ 0% DETECTED IN AVAILABLE PEDIGREE — NOT A GUARANTEE</div><div>${escX(result.message)}</div></div>`)
         : `<div class="inbreed-banner safe"><div class="inbreed-title">✓ SAFE · F 0.00%</div><div>${escX(result.message)}</div></div>`;
-    const gapsHtml = result.incomplete && result.gaps && result.gaps.length
+    const gapsHtml = result.incomplete && !result.recordedSource && result.gaps && result.gaps.length
       ? `<div class="inbreed-gaps" style="margin-top:6px">${result.gaps.slice(0, 5).map(g => `<small style="display:block;opacity:.85">⚠ ${escX(g)}</small>`).join('')}</div>` : '';
     const pathsHtml = result.paths && result.paths.length
       ? `<div class="inbreed-paths" style="margin-top:8px"><b style="font-size:11px;letter-spacing:.06em;text-transform:uppercase">Wright path breakdown</b><table style="width:100%;font-size:11.5px;border-collapse:collapse;margin-top:4px"><thead><tr style="opacity:.75"><th style="text-align:left;padding:2px 4px">Common ancestor</th><th style="text-align:left;padding:2px 4px">Sire side</th><th style="text-align:left;padding:2px 4px">Dam side</th><th style="text-align:left;padding:2px 4px">F(A)</th><th style="text-align:right;padding:2px 4px">Contribution</th></tr></thead><tbody>${result.paths.map(p => `<tr><td style="padding:2px 4px">${escX(p.label)}</td><td style="padding:2px 4px">n=${p.nS}</td><td style="padding:2px 4px">n=${p.nD}</td><td style="padding:2px 4px">${(p.fA * 100).toFixed(2)}%</td><td style="padding:2px 4px;text-align:right"><b>${(p.contrib * 100).toFixed(2)}%</b></td></tr>`).join('')}</tbody></table><div style="margin-top:4px;font-size:11.5px"><b>Total Wright coefficient: ${f.toFixed(2)}%</b> · ${result.incomplete ? 'limited by missing pedigree data' : 'complete within recorded 3 generations'}</div></div>` : '';
@@ -172,6 +223,9 @@
     const wright = wrightResultFor([[lot.boar_name, 0], [lot.boar_id, 0], [boar?.sireRef || boar?.sire || lot.sireRef, 1], [boar?.damRef || boar?.dam || lot.damRef, 1]], sow);
     const direct = directLineageResult(lot.boar_name, lot.boar_id || lot.boar_name, sow, lot.sireRef, lot.damRef);
     const result = direct ? Object.assign({}, direct, { paths: wright?.paths, gaps: wright?.gaps, incomplete: wright?.incomplete }) : wright;
+    /* [FIX 98] a registry record (Active or Reference) means the source is
+       "recorded" — screen calmly instead of the incomplete-warning wall. */
+    if (result) result.recordedSource = Boolean(boar);
     sourcePreview(lot, boar, sow, result)
   }
 
@@ -193,6 +247,8 @@
     const wright = wrightResultFor([[name, 0], [d.manual_boar_id, 0], [d.manual_sire_ref, 1], [d.manual_dam_ref, 1]], sow);
     const direct = directLineageResult(name, d.manual_boar_id, sow, d.manual_sire_ref, d.manual_dam_ref);
     let result = direct ? Object.assign({}, direct, { paths: wright?.paths, gaps: wright?.gaps, incomplete: wright?.incomplete }) : wright;
+    /* [FIX 98] registered boar or declared reference parents = recorded source */
+    if (result) result.recordedSource = Boolean(existing) || Boolean(d.manual_sire_ref || d.manual_dam_ref);
     sourcePreview({
       boar_name: name,
       semen_batch_no: d.manual_batch_no || generatedBatch(name, d.manual_collection_date),
