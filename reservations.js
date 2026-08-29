@@ -1446,6 +1446,8 @@
     const editLines0 = Array.isArray(r.lines) && r.lines.length ? r.lines : [{ gender: r.gender || 'female', quantity: r.quantity }];
     const g0 = r.gender === 'mixed' ? (editLines0[0]?.gender || 'female') : (r.gender || 'female');
     const q0 = editLines0.filter(L => L.gender === g0).reduce((a, L) => a + (+L.quantity || 0), 0) || r.quantity;
+    /* [FIX 97] editable price/head — initial value per selected gender */
+    const p0 = (editLines0.find(L => L.gender === g0) || editLines0[0] || {}).price ?? (r.quantity ? Math.round((+r.total || 0) / (+r.quantity || 1)) : 0);
     document.querySelectorAll('#editReservationModal').forEach(el => el.remove());
     document.body.insertAdjacentHTML('beforeend', `
       <div class="due-modal-bg open" id="editReservationModal" onclick="if(event.target===this)this.remove()" style="z-index:999999!important">
@@ -1499,7 +1501,7 @@
           <div class="form-grid" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:14px">
             <div class="field" style="margin:0">
               <label>Quantity (heads)</label>
-              <input name="quantity" id="editQtyInput" type="number" min="0" value="${q0}" ${['released', 'cancelled'].includes(r.status) ? 'disabled' : ''}>
+              <input name="quantity" id="editQtyInput" type="number" min="0" value="${q0}" oninput="window.editResPriceHeadChange && window.editResPriceHeadChange()" ${['released', 'cancelled'].includes(r.status) ? 'disabled' : ''}>
             </div>
             <div class="field" style="margin:0">
               <label>Gender</label>
@@ -1510,7 +1512,8 @@
             </div>
             <div class="field" style="margin:0">
               <label>Price / head (₱)</label>
-              <input type="number" value="${(Array.isArray(r.lines) && r.lines[0] && r.lines[0].price) || (r.quantity ? Math.round(r.total / r.quantity) : 0)}" disabled>
+              <!-- [FIX 97] now editable — updates the line price & total -->
+              <input name="price_head" id="editPriceHeadInput" type="number" min="0" step="0.01" value="${p0}" oninput="window.editResPriceHeadChange && window.editResPriceHeadChange()" ${['released', 'cancelled'].includes(r.status) ? 'disabled' : ''}>
             </div>
           </div>
           <small class="muted" style="display:block;margin:-8px 0 12px">Quantity applies to the selected gender. Increasing re-reserves heads from the batch pool (if available); decreasing returns heads to the pool; setting 0 removes that gender's line. Floating waitlist quantities adjust freely.</small>
@@ -1630,6 +1633,24 @@
       }
     }
 
+    /* [REBUILD FIX 97] editable price/head — applies to the selected gender's
+       line, then recomputes total & balance (price × qty is authoritative). */
+    const priceHeadRaw = String(d.price_head || '').trim();
+    if (priceHeadRaw !== '' && !['released', 'cancelled'].includes(r.status)) {
+      const priceHead = Math.max(0, parseFloat(priceHeadRaw) || 0);
+      let pLines = Array.isArray(r.lines) && r.lines.length ? r.lines : null;
+      if (!pLines) {
+        pLines = [{ batch_id: r.batch_id || '', breed: '', dam: '', sire: '', source: r.source || 'breeder', gender: gSel, quantity: +r.quantity || 0, price: priceHead }];
+        r.lines = pLines;
+      }
+      const pLine = pLines.find(L => L.gender === gSel) || pLines[0];
+      if (pLine && (+pLine.price || 0) !== priceHead) {
+        pLine.price = priceHead;
+        r.total = pLines.reduce((a, L) => a + (+L.quantity || 0) * (+L.price || 0), 0);
+        r.balance = Math.max(0, r.total - r.paid);
+      }
+    }
+
     /* [REBUILD FIX 73] batch re-assignment (e.g. floating waitlist → real batch
        after farrowing, or correcting a wrong batch). Ledger pools stay
        consistent: old reserved heads returned, new heads re-reserved. */
@@ -1735,6 +1756,26 @@
     const lines = Array.isArray(r.lines) ? r.lines : [];
     const q = lines.filter(L => L.gender === g).reduce((a, L) => a + (+L.quantity || 0), 0);
     inp.value = q || (String(r.gender) === g ? (+r.quantity || 0) : 0) || '';
+    /* [FIX 97] refresh price/head for the newly selected gender too */
+    const priceInp = document.getElementById('editPriceHeadInput');
+    if (priceInp) {
+      const line = lines.find(L => L.gender === g);
+      priceInp.value = line && line.price !== undefined && line.price !== null && line.price !== '' ? line.price : '';
+    }
+    window.editResPriceHeadChange && window.editResPriceHeadChange();
+  };
+
+  /* [REBUILD FIX 97] live-recalc Total & balance when qty or price/head changes */
+  window.editResPriceHeadChange = function () {
+    const modal = document.getElementById('editReservationModal');
+    if (!modal) return;
+    const q = parseFloat(modal.querySelector('[name="quantity"]')?.value) || 0;
+    const p = parseFloat(modal.querySelector('[name="price_head"]')?.value) || 0;
+    const totalInp = modal.querySelector('[name="total"]');
+    if (totalInp && q > 0 && p > 0) {
+      totalInp.value = Math.round(q * p);
+      window.calcEditResBalance && window.calcEditResBalance();
+    }
   };
 
   /* [REBUILD FIX 74] restore an accidentally cancelled reservation */
