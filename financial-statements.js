@@ -207,11 +207,19 @@
     return { feed, semen };
   }
 
-  function bookValue(items, quantityFields) {
+  function bookValue(items, kind) {
+    /* [REBUILD FIX 103] the old version read the PRICE field as the QUANTITY,
+       squaring purchase prices into absurd totals (₱100,000 boar → ₱10B).
+       One sow/boar record = one animal; purchased piglet batches =
+       heads × price-per-head. Only explicit value fields count. */
     return (items || []).reduce((sum, item) => {
-      const quantity = num(quantityFields.reduce((value, key) => value || num(item[key]), 0));
-      const value = num(item.book_value || item.purchase_price || item.unit_value || item.unit_price || item.price);
-      return sum + quantity * value;
+      if (kind === 'piglets') {
+        const perHead = num(item.purchase_price_per_head || item.unit_value || item.book_value);
+        const heads = (+item.males || 0) + (+item.females || 0);
+        return perHead && heads ? sum + perHead * heads : sum;
+      }
+      const value = num(item.book_value || item.purchase_price || item.unit_value);
+      return value ? sum + value : sum;
     }, 0);
   }
 
@@ -222,7 +230,7 @@
     // keeps the Balance Sheet cash equal to the Statement of Cash Flows and
     // excludes non-cash mortality adjustments.
     const cashBalance = cash.netChange;
-    const biological = bookValue(farm.sows, ['book_value', 'purchase_price', 'unit_value']) + bookValue(farm.boars, ['book_value', 'purchase_price', 'unit_value']) + bookValue(farm.piglets, ['book_value', 'unit_value', 'unit_price']);
+    const biological = bookValue(farm.sows, 'sows') + bookValue(farm.boars, 'boars') + bookValue(farm.piglets, 'piglets');
     const assets = { cash: cashBalance, receivables: summary.receivables, feed: inventory.feed, semen: inventory.semen, biological };
     const liabilities = { accountsPayable: summary.expenses.reduce((sum, t) => sum + Math.max(0, t.amount - t.paid), 0), customerDeposits: summary.depositCash, debt: Math.max(0, cash.loanIn - cash.principalOut) };
     const totalAssets = Object.values(assets).reduce((sum, value) => sum + value, 0);
