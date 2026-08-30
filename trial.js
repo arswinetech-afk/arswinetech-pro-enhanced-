@@ -339,14 +339,21 @@
     if (cfg && window.ARSCloud?.rawRequest && navigator.onLine) {
       try {
         const res = await window.ARSCloud.rawRequest('/rest/v1/trial_beacons?order=started_at.desc&limit=50', { method: 'GET' });
-        const list = Array.isArray(res) ? res : [];
-        rowsHtml = list.length ? `<div class="table-wrap"><table class="table" style="min-width:420px;font-size:12px"><thead><tr><th>Trial</th><th>Status</th><th>Days left</th><th>Data</th><th>Contact</th></tr></thead><tbody>${list.map(t => {
-          const left = Math.max(0, Math.ceil((new Date(t.expires_at) - Date.now()) / 86400000));
-          const c = t.counts || {};
-          return `<tr><td><b>${String(t.id).slice(-6)}</b><br><small>${String(t.started_at || '').slice(0, 10)}</small></td><td>${t.status === 'migrated' ? '✅ migrated' : left === 0 ? '⏳ expired' : '🎁 active'}</td><td>${left}</td><td>${c.sows || 0} sows · ${c.batches || 0} batches</td><td>${t.contact || '—'}</td></tr>`;
-        }).join('')}</tbody></table></div>` : '<div class="empty" style="padding:16px">No trials beaconed yet.</div>';
+        if (Array.isArray(res)) {
+          const list = res;
+          rowsHtml = list.length ? `<div class="table-wrap"><table class="table" style="min-width:420px;font-size:12px"><thead><tr><th>Trial</th><th>Status</th><th>Days left</th><th>Data</th><th>Contact</th></tr></thead><tbody>${list.map(t => {
+            const left = Math.max(0, Math.ceil((new Date(t.expires_at) - Date.now()) / 86400000));
+            const c = t.counts || {};
+            return `<tr><td><b>${String(t.id).slice(-6)}</b><br><small>${String(t.started_at || '').slice(0, 10)}</small></td><td>${t.status === 'migrated' ? '✅ migrated' : left === 0 ? '⏳ expired' : '🎁 active'}</td><td>${left}</td><td>${c.sows || 0} sows · ${c.batches || 0} batches</td><td>${t.contact || '—'}</td></tr>`;
+          }).join('')}</tbody></table></div>` : '<div class="empty" style="padding:16px">No trials beaconed yet — trial devices report automatically once they open the app next time.</div>';
+        } else {
+          /* [FIX 108] table not installed yet → clear one-time setup note */
+          const em = String((res && res.message) || '').replace(/</g, '&lt;');
+          rowsHtml = `<div class="empty" style="padding:16px">⚙ <b>One-time setup:</b> in your Supabase Dashboard → SQL Editor, paste the file <b>supabase/trial_beacons.sql</b> and press Run. Trial devices will start appearing here automatically on their next app open.<br><small class="muted">${em}</small></div>`;
+        }
       } catch (e) {
-        rowsHtml = `<div class="empty" style="padding:16px">Could not read trial board: ${e.message || e}. Run supabase/trial_beacons.sql first.</div>`;
+        const em = String(e.message || e).replace(/</g, '&lt;');
+        rowsHtml = `<div class="empty" style="padding:16px">⚙ <b>One-time setup:</b> run <b>supabase/trial_beacons.sql</b> once in Supabase → SQL Editor to enable the live trial dashboard.<br><small class="muted">${em}</small></div>`;
       }
     }
     document.body.insertAdjacentHTML('beforeend', `<div class="due-modal-bg open" id="trialBoardModal" style="z-index:10000001!important" onclick="if(event.target===this)this.remove()"><div class="due-modal" style="max-width:640px;width:96%;text-align:left"><div class="modal-top"><div><div class="eyebrow" style="color:#7dd3fc;font-weight:800">🎁 TRIAL DASHBOARD</div><h2>Who is on trial / needs migration</h2></div><button type="button" class="close-reminder" onclick="document.getElementById('trialBoardModal')?.remove()">×</button></div>${rowsHtml}<div class="due-actions" style="justify-content:flex-end"><button class="btn ghost" onclick="window.arsImportTrialPacketUI && window.arsImportTrialPacketUI()">📥 Import trial packet</button><button class="btn" onclick="document.getElementById('trialBoardModal')?.remove()">Close</button></div></div></div>`);
@@ -363,11 +370,12 @@
       return;
     }
     if (Date.now() >= s.expiresAt) {
+      beacon('expired'); /* [FIX 108] owner sees expired trials needing follow-up */
       if (wantsTrial) window.arsTrialExpiredScreen();
       return;
     }
     setTimeout(() => {
-      if (document.body.classList.contains('farm-access-granted')) injectBanner();
+      if (document.body.classList.contains('farm-access-granted')) { injectBanner(); beacon('active'); /* [FIX 108] self-report on every open so the owner's board fills once the table exists */ }
       else window.arsStartTrial();
     }, 400);
   });

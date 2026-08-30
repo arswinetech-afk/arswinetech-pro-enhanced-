@@ -3239,7 +3239,8 @@ async function login(e) {
   } catch (err) {
     const msg = err && err.message ? err.message : '';
     if (msg.includes('Invalid login credentials') || msg.includes('invalid_credentials')) {
-      showLoginError('Invalid email or password. Please verify your password or reset it in Supabase Auth.');
+      /* [FIX 108] farmer-friendly wording — no backend jargon for new users */
+      showLoginError('Wrong email or password. Please try again, or tap "Forgot password?" to reset it.');
     } else {
       showLoginError(msg || 'Unable to sign in. Check your email and password.');
     }

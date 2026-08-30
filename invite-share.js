@@ -95,6 +95,12 @@
   }
 
   async function openInviteModal(id) {
+    /* [FIX 108] trial farms are device-only & unauthenticated — explain kindly
+       instead of showing backend errors to first-timers. */
+    if (window.arsIsTrialFarm && window.arsIsTrialFarm()) {
+      if (window.toast) window.toast('🎁 Trials live on this device only. Staff invitations unlock automatically when you subscribe.');
+      return;
+    }
     id = id || farmId;
     if (!canSeeInviteCode(id)) { toast("Only the farm owner or the ARSwineTech platform developer can view the invitation code."); return; }
     inviteFarm = id;
