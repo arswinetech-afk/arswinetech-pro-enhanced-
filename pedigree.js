@@ -177,7 +177,7 @@
   /* Build one node in the shared animal/batch pedigree tree. The optional
      subjectOverride supplies parents for a piglet batch, whose own record is
      not part of the sow/boar registry but still has a real dam and sire. */
-  function buildAnimalNode(rawRef, side = 'root', gen = 0, relLabel = 'Subject Animal', subjectOverride = null) {
+  function buildAnimalNode(rawRef, side = 'root', gen = 0, relLabel = 'Subject Animal', subjectOverride = null, maxGen = 2) { /* [FIX 113] maxGen lets the herdbook report draw 4 ancestor generations */
     if (!rawRef || rawRef === '—' || rawRef === '-' || String(rawRef).toLowerCase() === 'unknown') {
       return {
         id: '',
@@ -221,8 +221,8 @@
       subjectIcon: isSubjectOverride ? (subjectOverride.subjectIcon || '👑') : null,
       subjectMeta: isSubjectOverride ? (subjectOverride.subjectMeta || '') : null,
       subjectDetails: isSubjectOverride ? (subjectOverride.subjectDetails || {}) : null,
-      sireNode: gen < 2 ? buildAnimalNode(sireRef, 'sire', gen + 1, gen === 0 ? '♂ Sire (Father)' : (gen === 1 ? 'Paternal Grandsire' : 'Great-Grandsire')) : null,
-      damNode: gen < 2 ? buildAnimalNode(damRef, 'dam', gen + 1, gen === 0 ? '♀ Dam (Mother)' : (gen === 1 ? 'Maternal Granddam' : 'Great-Granddam')) : null
+      sireNode: gen < maxGen ? buildAnimalNode(sireRef, 'sire', gen + 1, gen === 0 ? '♂ Sire (Father)' : (gen === 1 ? 'Paternal Grandsire' : (gen === 2 ? 'Great-Grandsire' : '4th-Gen Sire')), null, maxGen) : null,
+      damNode: gen < maxGen ? buildAnimalNode(damRef, 'dam', gen + 1, gen === 0 ? '♀ Dam (Mother)' : (gen === 1 ? 'Maternal Granddam' : (gen === 2 ? 'Great-Granddam' : '4th-Gen Dam')), null, maxGen) : null
     };
   }
 
@@ -647,86 +647,419 @@
     schedulePedigreeConnectorDraw();
   }
 
-  /* [REBUILD FIX 112] PROFESSIONAL PRINTABLE PEDIGREE REPORT.
-     The old button called window.print() directly, so the dark app UI printed
-     as blank pages. This builds a dedicated white certificate-style document
-     (same visual family as the Reservation Certificate, QR included) into a
-     print-isolated container, for sows, active boars and piglet batches. */
+  /* [REBUILD FIX 113] PROFESSIONAL HERDBOOK-GRADE PEDIGREE & LINEAGE REPORT.
+     Rebuilds the printable report to the platform herdbook specimen:
+     landscape A4 · 4-generation visual pedigree diagram (Subject → Parents →
+     Grandparents → Great-Grandparents → 4th Generation) with branching
+     connector lines, blue sire / pink dam color coding, ♂/♀ sex icons,
+     photo (or placeholder) boxes, animal information, inbreeding &
+     relationship analysis, breeding & performance summary, QR verification,
+     farm information / certification / legend footer and round seal.
+     Works for sows, active boars and piglet batches. */
+
+  function prHash(s) { let h = 5381; s = String(s || ''); for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0; return h; }
+
+  /* Placeholder "photo" — a clean pig silhouette tinted by sex, used when no
+     real photo is recorded for an ancestor (spec allows placeholders). */
+  function prPig(tone) {
+    const bg = tone === 'M' ? '#e8f1fa' : tone === 'F' ? '#fbeef4' : '#f1efe9';
+    const c = tone === 'M' ? '#9dbfe0' : tone === 'F' ? '#e2aec7' : '#c9c2b4';
+    const d = tone === 'M' ? '#6d9cc9' : tone === 'F' ? '#cf7fa6' : '#a9a294';
+    return `<svg class="pr-pig" viewBox="0 0 64 48" preserveAspectRatio="xMidYMid slice" aria-hidden="true"><rect width="64" height="48" fill="${bg}"/><g fill="${c}"><path d="M13 25q-7-2-5-8" stroke="${c}" stroke-width="2.4" fill="none" stroke-linecap="round"/><ellipse cx="29" cy="27" rx="17" ry="11"/><circle cx="46" cy="21" r="8.5"/><path d="M41 14l-3.5-6 5.5 2z"/><path d="M49 13l2-6 3.5 6z"/><rect x="17" y="33" width="4.4" height="9" rx="2"/><rect x="26" y="35" width="4.4" height="9" rx="2"/><rect x="35" y="34" width="4.4" height="9" rx="2"/></g><ellipse cx="52.5" cy="23" rx="3.6" ry="2.8" fill="${d}"/><circle cx="45" cy="19" r="1.2" fill="#333"/></svg>`;
+  }
+
+  function prUnknown(sex) { return { id: '', name: 'UNKNOWN', breed: '—', kind: sex === 'M' ? 'Boar' : 'Sow', sex, exists: false, sireNode: null, damNode: null }; }
+
+  function prBox(n, gen, key) {
+    const male = n.sex === 'M', female = n.sex === 'F';
+    const tone = male ? 'M' : female ? 'F' : 'X';
+    const icon = male ? '♂' : female ? '♀' : '🐖';
+    const cls = 'pr-box ' + (male ? 'pr-m' : female ? 'pr-f' : 'pr-x') + (n.exists ? '' : ' pr-unk') + ' pr-g' + gen;
+    const photo = (gen === 0 && n.photo) ? `<img class="pr-ph" src="${n.photo}" alt="">` : prPig(n.exists ? tone : 'X');
+    if (gen === 0) {
+      return `<div class="${cls}" data-prk="${key}"><span class="pr-sex">${icon}</span><div class="pr-ph-wrap">${photo}</div><div class="pr-plate">${escP(n.name || n.id || '—')}<small>${escP(n.id || '')}</small></div></div>`;
+    }
+    if (gen === 4) {
+      return `<div class="${cls}" data-prk="${key}"><span class="pr-sex">${icon}</span>${photo}<div class="pr-tx"><b>${escP(n.name || 'UNKNOWN')}</b><small>${escP(n.id || '—')}</small></div></div>`;
+    }
+    return `<div class="${cls}" data-prk="${key}"><span class="pr-sex">${icon}</span>${photo}<div class="pr-tx"><b>${escP(n.name || 'UNKNOWN')}</b><small>${escP(n.id || '—')}</small><i>${escP(n.breed || '—')}</i></div></div>`;
+  }
+
+  const prRow = (l, v) => `<div class="pr-row"><span>${l}</span><b>${escP(v === '' || v === null || v === undefined ? '—' : v)}</b></div>`;
+  const prSec = (title, inner) => `<section class="pr-sec"><h3>${title}</h3>${inner}</section>`;
+
+  /* Breeding & performance summary computed from the farm's own records. */
+  function prPerfRows(a, farm) {
+    const idOf = x => String(x && (x.id || x.name || '')).toLowerCase();
+    const me = idOf(a), meName = String(a.name || '').toLowerCase();
+    const batches = (farm.piglets || []).filter(b => {
+      const d = String(b.dam || b.sow || b.dam_name || '').toLowerCase();
+      return d === me || (meName && d === meName);
+    });
+    const sireOf = b => String(b.sire || b.sire_name || '').toLowerCase();
+    if (currentPedIsBatch) {
+      const tb = (+a.males || 0) + (+a.females || 0) + (+a.stillborn || 0) + (+a.mummified || 0);
+      const age = a.birth ? Math.max(0, Math.floor((Date.now() - new Date(a.birth).getTime()) / 864e5)) : null;
+      return prRow('Total Born', tb || ((+a.males || 0) + (+a.females || 0))) +
+        prRow('Males / Females', `${+a.males || 0} ♂ / ${+a.females || 0} ♀`) +
+        prRow('Stillborn', +a.stillborn || 0) +
+        prRow('Dam (Mother)', a.dam_name || a.dam || a.sow || '—') +
+        prRow('Sire Used', a.sire_name || a.sire || '—') +
+        prRow('Weaned Date', a.weanedAt || a.weaning_date ? fmtDP(a.weanedAt || a.weaning_date) : 'Not yet weaned') +
+        prRow('Age', age === null ? '—' : age + ' days');
+    }
+    const isBoar = !currentPedIsBatch && (a.sex === 'M' || a.kind === 'Boar' || (farm.boars || []).some(b => idOf(b) === me));
+    if (isBoar) {
+      const litters = (farm.piglets || []).filter(b => sireOf(b) === me || (meName && sireOf(b) === meName));
+      const piglets = litters.reduce((s, b) => s + (+b.males || 0) + (+b.females || 0), 0);
+      const services = (farm.breedingRecords || []).filter(r => String(r.sire || r.sire_name || r.boar || '').toLowerCase() === me).length;
+      const bottles = (farm.semen || []).filter(s => String(s.boar || s.boar_id || s.boar_name || s.name || '').toLowerCase() === me).length;
+      return prRow('Status', a.status || 'Active Boar') +
+        prRow('Semen Bottles On Hand', bottles) +
+        prRow('Services Recorded', services) +
+        prRow('Litters Sired', litters.length) +
+        prRow('Piglets Sired', piglets) +
+        prRow('Avg Litter Size', litters.length ? (piglets / litters.length).toFixed(1) : '—');
+    }
+    /* Sow (default) — litter statistics from her piglet batches. */
+    let totalBorn = 0, bornAlive = 0, deaths = 0;
+    batches.forEach(b => {
+      const ba = (+b.males || 0) + (+b.females || 0);
+      bornAlive += ba;
+      totalBorn += (+b.total_born || 0) || (ba + (+b.stillborn || 0) + (+b.mummified || 0));
+      (farm.pigletLedger || []).forEach(x => {
+        if (x.batch_id !== b.id || x.type !== 'mortality' || ['undone', 'deleted'].includes(x.status)) return;
+        if (b.weanedAt && String(x.created_at || '') > String(b.weanedAt)) return; /* post-weaning death */
+        deaths += +x.quantity || 0;
+      });
+    });
+    const weaned = Math.max(0, bornAlive - deaths);
+    const last = batches.slice().sort((x, y) => String(y.birth || y.date || y.created_at || '').localeCompare(String(x.birth || x.date || x.created_at || '')))[0];
+    const lastIns = a.insemination || a.last_insemination ||
+      ((farm.breedingRecords || []).filter(r => String(r.sow || r.dam || r.sow_name || '').toLowerCase() === me).sort((x, y) => String(y.date || '').localeCompare(String(x.date || '')))[0] || {}).date || '';
+    return prRow('Parity', (a.parity !== undefined && a.parity !== null && a.parity !== '') ? a.parity : batches.length) +
+      prRow('Total Born', totalBorn || '—') +
+      prRow('Born Alive', bornAlive || '—') +
+      prRow('Weaned', bornAlive ? weaned : '—') +
+      prRow('Average Litter Size', batches.length ? (bornAlive / batches.length).toFixed(1) : '—') +
+      prRow('Average Weaning Weight', a.avg_weaning_weight || a.weaning_weight || '—') +
+      prRow('Pre-weaning Mortality', bornAlive ? ((deaths / bornAlive) * 100).toFixed(1) + '%' : '—') +
+      prRow('Last Insemination', lastIns ? fmtDP(lastIns) : '—') +
+      prRow('Sire Used', last ? (last.sire_name || last.sire || '—') : '—') +
+      prRow('Semen Ref.', last ? (last.semen_ref || last.semen_lot || last.semenRef || '—') : '—');
+  }
+
+  let prLastCols = null;
+
+  /* Elbow connectors drawn with layout offsets (scale-independent, so the
+     same lines print correctly at 100% zoom). Sire edges blue, dam pink. */
+  function prDrawLines() {
+    const svg = document.getElementById('prLines');
+    const tree = document.getElementById('prTree');
+    if (!svg || !tree || !prLastCols) return;
+    let out = '';
+    const cols = prLastCols;
+    for (let g = 0; g < 4; g++) {
+      for (let i = 0; i < cols[g].length; i++) {
+        const p = tree.querySelector(`[data-prk="${g}-${i}"]`);
+        if (!p) continue;
+        [[2 * i, 'pr-line-m'], [2 * i + 1, 'pr-line-f']].forEach(([ci, cls]) => {
+          const c = tree.querySelector(`[data-prk="${g + 1}-${ci}"]`);
+          if (!c) return;
+          const x1 = p.offsetLeft + p.offsetWidth - 1, y1 = p.offsetTop + p.offsetHeight / 2;
+          const x2 = c.offsetLeft + 1, y2 = c.offsetTop + c.offsetHeight / 2;
+          const mx = Math.round((x1 + x2) / 2);
+          out += `<path d="M ${x1} ${y1} H ${mx} V ${y2} H ${x2}" class="${cls}"/>`;
+        });
+      }
+    }
+    svg.innerHTML = out;
+  }
+  window.prDrawLines = prDrawLines;
+
+  function prFit() {
+    const z = document.getElementById('prZoom');
+    if (!z) return;
+    const s = Math.min(1, (window.innerWidth - 36) / 1120);
+    z.style.transform = `scale(${s})`;
+    z.style.width = (1120 * s) + 'px';
+    z.style.height = (790 * s) + 'px';
+    prFitLeft();
+    prDrawLines();
+  }
+  window.prFit = prFit;
+
+  /* Guarantees the info column always fits the page height: if the recorded
+     data makes the sections taller than the page area, gently zoom them down
+     (never below 72%) instead of clipping the verification block. */
+  function prFitLeft() {
+    const aside = document.querySelector('#pedigreeReport .pr-left');
+    const inner = document.querySelector('#pedigreeReport .pr-leftin');
+    if (!aside || !inner) return;
+    inner.style.zoom = '1';
+    const avail = aside.clientHeight, need = inner.scrollHeight;
+    if (need > avail) inner.style.zoom = String(Math.max(0.72, (avail / need) * 0.995));
+  }
+  window.prFitLeft = prFitLeft;
+
   function exportPedigreeReport() {
     const a = currentPedSubject;
     if (!a) { if (window.toast) window.toast('Open a pedigree tree first.'); return; }
-    const t = currentPedTreeData || {};
-    const sire = t.sireNode || null, dam = t.damNode || null;
-    const pgs = sire ? sire.sireNode : null, pgd = sire ? sire.damNode : null;
-    const mgs = dam ? dam.sireNode : null, mgd = dam ? dam.damNode : null;
     const farm = (typeof F === 'function' ? F() : {}) || {};
-    const farmLogo = farm.logo || farm.logo_url || '';
-    const docId = 'PED-' + String(a.id || a.name || '').replace(/[^a-z0-9]/gi, '').slice(-6).toUpperCase() + '-' + String(Date.now()).slice(-4);
-    const genDate = new Date().toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' });
+    const farmLogo = farm.logo || farm.logo_url || document.querySelector('.sidebar .logo-img')?.src || 'assets/arswinetech-logo.png';
+    const fid = (typeof farmId !== 'undefined' && farmId) ? farmId : (farm.id || farm.farm_id || '');
+
+    /* Deep 4-generation tree from the subject's recorded lineage. */
+    const root = buildAnimalNode(a.id || a.name, 'root', 0, 'Subject Animal', currentPedIsBatch ? {
+      id: a.id || a.name, name: a.name || a.id, breed: a.breed || 'Breed not recorded',
+      kind: 'Piglet Batch', sex: a.sex || '—', photo: a.photo || '',
+      sireRef: a.sireRef || a.sire_id || a.sire || a.sire_name || '',
+      damRef: a.damRef || a.dam_id || a.dam || a.dam_name || a.sow || ''
+    } : null, 4);
+    if (!currentPedIsBatch && (a.photo || (root.hit && root.hit.photo))) root.photo = a.photo || root.hit.photo;
+
+    const norm = (n, sex) => n || prUnknown(sex);
+    const cols = [[root]];
+    for (let g = 1; g <= 4; g++) {
+      const cur = [];
+      cols[g - 1].forEach(p => cur.push(norm(p.sireNode, 'M'), norm(p.damNode, 'F')));
+      cols.push(cur);
+    }
+    prLastCols = cols;
+
+    /* Inbreeding & relationship analysis. */
+    const sireRef0 = root.sireNode && root.sireNode.exists ? (root.sireNode.id || root.sireNode.name) : '';
+    const damRef0 = root.damNode && root.damNode.exists ? (root.damNode.id || root.damNode.name) : '';
+    let fCoef = '0.00', riskLevel = 'NONE', commonN = 0;
+    if (sireRef0 && damRef0 && typeof compatibility === 'function') {
+      try { const r = compatibility(sireRef0, damRef0); fCoef = (+r.f || 0).toFixed(2); riskLevel = r.r || r.risk || 'SAFE'; commonN = (r.common || []).length; } catch (e) {}
+    } else {
+      const m = String(currentPedRisk || '').match(/^([A-Z][A-Z ]*?)\s*\(/);
+      if (m) riskLevel = m[1].trim();
+    }
+    const sameSireBefore = (farm.piglets || []).filter(b =>
+      String(b.dam || b.sow || '').toLowerCase() === String(a.id || a.name || '').toLowerCase() &&
+      String(b.sire || b.sire_name || '').toLowerCase() === String(sireRef0).toLowerCase()).length > 1;
+
+    const now = new Date();
+    const genDate = now.toLocaleDateString('en-PH', { day: '2-digit', month: 'short', year: 'numeric' });
+    const reportNo = `ARS-PED-${now.getFullYear()}-${String(prHash(a.id || a.name) % 100000).padStart(5, '0')}`;
+    const verifyCode = 'ARS-VPY-' + prHash((a.id || a.name) + '|' + (farm.name || '')).toString(36).toUpperCase().padStart(6, '0').slice(0, 6);
+    const regNo = a.registration_no || a.reg_no || (`ARS-${now.getFullYear()}-${String(prHash('reg:' + (a.id || a.name)) % 1000000).padStart(6, '0')}`);
+    const sexLabel = currentPedIsBatch ? 'Piglet Batch 🐖' : (a.sex === 'M' ? 'Male ♂' : a.sex === 'F' ? 'Female ♀' : '—');
+
     const qr = window.generateCertQRCode
       ? window.generateCertQRCode(JSON.stringify({
-          app: 'ARSwineTech Pro', doc: 'PEDIGREE & LINEAGE REPORT', farm: farm.name || '',
-          id: a.id || a.name, name: a.name || a.id,
+          app: 'ARSwineTech Pro', doc: 'PEDIGREE & LINEAGE REPORT', reportNo,
+          farm: farm.name || '', id: a.id || a.name, name: a.name || a.id,
           kind: currentPedIsBatch ? 'Piglet Batch' : (a.kind || 'Animal'),
           breed: a.breed || '—', birth: a.birth || a.dob || '',
-          sire: sire && sire.exists ? sire.name : 'unknown', dam: dam && dam.exists ? dam.name : 'unknown',
-          patGrandsire: pgs && pgs.exists ? pgs.name : 'unknown', patGranddam: pgd && pgd.exists ? pgd.name : 'unknown',
-          matGrandsire: mgs && mgs.exists ? mgs.name : 'unknown', matGranddam: mgd && mgd.exists ? mgd.name : 'unknown',
-          screening: currentPedRisk, generated: new Date().toISOString()
-        }), docId)
+          sire: sireRef0 || 'unknown', dam: damRef0 || 'unknown',
+          generations: 4, screening: `${riskLevel} (${fCoef}% F)`,
+          verification: verifyCode, generated: now.toISOString()
+        }), reportNo)
       : '';
-    const row = (l, v) => `<div style="display:flex;justify-content:space-between;gap:10px;padding:6px 2px;border-bottom:1px solid #e8eaed;font-size:12px"><span style="color:#697580">${l}</span><b style="text-align:right">${escP(v || '—')}</b></div>`;
-    const nodeBox = (n, role, pct) => `<section class="cflat" style="flex:1;min-width:230px"><div class="csec-head">${role} · ${pct} GENETICS</div>${row('Name', n && n.exists ? (n.name || n.id) : 'Unknown Ancestor')}${row('Breed', n && n.exists ? n.breed : '—')}${row('Tag / ID', n && n.id ? n.id : '—')}${row('Type', n && n.exists ? n.kind : '—')}</section>`;
+
+    const colHead = ['ANIMAL', 'PARENTS', 'GRANDPARENTS', 'GREAT-GRANDPARENTS', '4TH GENERATION'];
+    const colCls = ['c0', 'c1', 'c2', 'c3', 'c4'];
+    const treeHtml = cols.map((col, g) =>
+      `<div class="pr-col ${colCls[g]}">${col.map((n, i) => prBox(n, g, `${g}-${i}`)).join('')}</div>`).join('');
+
+    const perfTitle = currentPedIsBatch ? 'BATCH SUMMARY' : ((a.sex === 'M' || a.kind === 'Boar') ? 'BREEDING & SERVICE SUMMARY' : 'BREEDING & PERFORMANCE SUMMARY');
+
     document.getElementById('pedigreeReport')?.remove();
     document.body.insertAdjacentHTML('beforeend', `
-      <div class="drill-bg" id="pedigreeReport" style="position:fixed!important;inset:0!important;z-index:9999999!important;overflow:auto!important">
-        <article class="certificate" style="position:relative">
-          <button class="close-reminder no-print" onclick="document.getElementById('pedigreeReport').remove()" title="Close report">×</button>
-          <header class="cert-top">
-            <div class="ct-logo">${farmLogo ? `<img src="${farmLogo}" alt="farm logo">` : ''}</div>
-            <div class="ct-mid">
-              <div class="ct-farm">${escP(farm.name || 'Farm')}</div>
-              <h1>Pedigree &amp; Lineage Report</h1>
-              <div class="ct-sub">3-Generation Verified Pedigree · Genetic Traceability Record</div>
-              <div class="ct-meta">Document No. <b>${docId}</b> &nbsp;·&nbsp; Generated <b>${genDate}</b></div>
+    <div id="pedigreeReport">
+      <style>
+        #pedigreeReport{position:fixed;inset:0;z-index:9999999;background:#39424b;overflow:auto;padding:14px 0 46px;font-family:'Segoe UI',Arial,sans-serif}
+        #pedigreeReport .pr-toolbar{position:sticky;top:0;z-index:6;display:flex;justify-content:center;gap:10px;padding:8px 0 10px;background:linear-gradient(#2b343d,#2b343dee)}
+        #prZoom{margin:0 auto;transform-origin:top left}
+        .pr-page{width:1120px;height:790px;background:#fcfcfa;color:#182430;display:flex;flex-direction:column;box-shadow:0 14px 44px #000a;border:1px solid #d7dcd5}
+        .pr-head{display:flex;align-items:center;gap:12px;padding:8px 14px;background:#fff;border-bottom:3px solid #1e6b3a}
+        .pr-head img.pr-logo{width:44px;height:44px;object-fit:contain}
+        .pr-brand b{display:block;font-size:16px;color:#1e6b3a;letter-spacing:.2px}
+        .pr-brand small{display:block;font-size:8.5px;color:#5c6a76}
+        .pr-title{flex:1;text-align:center}
+        .pr-title h1{margin:0;font-size:19px;letter-spacing:1.2px;color:#152418}
+        .pr-title small{display:block;font-size:10px;font-weight:700;color:#1e6b3a;letter-spacing:1.6px;margin-top:2px}
+        .pr-meta{border:1px solid #b9c4b9;border-radius:3px;font-size:8.6px;padding:5px 9px;background:#fff;min-width:170px}
+        .pr-meta div{display:flex;justify-content:space-between;gap:10px;padding:1px 0}
+        .pr-meta b{font-weight:700}
+        .pr-body{flex:1;display:flex;gap:9px;padding:9px 11px;min-height:0}
+        .pr-left{width:250px;flex:0 0 250px;overflow:hidden}
+        .pr-leftin{display:flex;flex-direction:column;gap:6px}
+        .pr-sec{border:1px solid #cfd8cf;background:#fff}
+        .pr-sec h3{margin:0;background:#1e6b3a;color:#fff;font-size:8.4px;letter-spacing:.7px;padding:3px 8px;text-transform:uppercase}
+        .pr-row{display:flex;justify-content:space-between;gap:8px;font-size:8.6px;padding:2px 8px;border-bottom:1px solid #eef1ee}
+        .pr-row:last-child{border-bottom:none}
+        .pr-row span{color:#5c6a76}
+        .pr-row b{text-align:right;font-weight:600}
+        .pr-subj{border:1px solid #cfd8cf;background:#fff;padding:5px;text-align:center}
+        .pr-subj .pr-ph-wrap img,.pr-subj .pr-ph-wrap .pr-pig{width:100%;height:70px;object-fit:cover;display:block;border:1px solid #e2e6e2}
+        .pr-subj .pr-plate{font-size:9.5px;font-weight:700;padding:3px 2px 2px;margin-top:4px}
+        .pr-subj .pr-plate small{display:block;font-weight:600;font-size:8px;color:#41505c}
+        .pr-subj.pm .pr-plate{background:#ddebfa;color:#1d4f86}
+        .pr-subj.pf .pr-plate{background:#f9dcea;color:#a52a68}
+        .pr-subj.px .pr-plate{background:#eceade;color:#5d5a4a}
+        .pr-verify{display:flex;gap:7px;padding:6px;align-items:center}
+        .pr-verify .pr-qr{flex:0 0 64px;width:64px;height:64px}
+        .pr-verify .pr-qr svg,.pr-verify .pr-qr img,.pr-verify .pr-qr canvas{width:64px!important;height:64px!important}
+        .pr-verify ul{margin:0;padding:0;list-style:none;font-size:7.8px;color:#33413a;line-height:1.55}
+        .pr-verify ul li::before{content:'✓ ';color:#1e6b3a;font-weight:700}
+        .pr-verify .pr-vcode{font-size:8px;margin-top:3px;color:#1e6b3a;font-weight:700}
+        .pr-tree-wrap{flex:1;display:flex;flex-direction:column;min-width:0}
+        .pr-cols-head{display:flex;gap:8px;margin-bottom:6px}
+        .pr-cols-head span{color:#fff;background:#1e6b3a;font-size:7.8px;font-weight:700;letter-spacing:.6px;padding:3px 4px;text-align:center;border-radius:2px}
+        .pr-cols-head .h0{width:12%}.pr-cols-head .h1{width:19%}.pr-cols-head .h2{width:21%}.pr-cols-head .h3{width:22%}.pr-cols-head .h4{width:26%}
+        .pr-tree{position:relative;flex:1;display:flex;gap:8px;min-height:0}
+        #prLines{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+        .pr-line-m{stroke:#3f7fbf;stroke-width:1.5;fill:none}
+        .pr-line-f{stroke:#e0619c;stroke-width:1.5;fill:none}
+        .pr-col{display:flex;flex-direction:column;justify-content:space-around;min-width:0;gap:2px}
+        .pr-col.c0{width:12%}.pr-col.c1{width:19%}.pr-col.c2{width:21%}.pr-col.c3{width:22%}.pr-col.c4{width:26%}
+        .pr-box{position:relative;background:#fff;border:1.4px solid #9aa39a;border-radius:3px;display:flex;align-items:center;gap:5px;padding:3px 5px}
+        .pr-m{border-color:#3f7fbf}.pr-f{border-color:#e0619c}.pr-x{border-color:#b3ac9d}
+        .pr-unk{border-style:dashed;border-color:#b9bfb9;background:#fafaf7}
+        .pr-box .pr-pig{width:30px;height:24px;flex:0 0 30px;border-radius:2px;display:block}
+        .pr-tx{min-width:0;line-height:1.3}
+        .pr-tx b{display:block;font-size:8.4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .pr-tx small{display:block;font-size:7.4px;color:#41505c;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .pr-tx i{display:block;font-style:normal;font-size:7px;color:#77848f;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .pr-sex{position:absolute;top:0px;right:3px;font-size:9px;font-weight:800}
+        .pr-m .pr-sex{color:#2d6bb9}.pr-f .pr-sex{color:#d34d90}.pr-x .pr-sex{color:#8a8474}
+        .pr-g4 .pr-pig{width:20px;height:16px;flex-basis:20px}
+        .pr-g4{padding:2px 4px}
+        .pr-g4 .pr-tx b{font-size:7.2px}
+        .pr-g4 .pr-tx small{font-size:6.4px}
+        .pr-g4 .pr-sex{font-size:8px}
+        .pr-g0{flex-direction:column;padding:4px;margin:0 auto;width:92%}
+        .pr-g0 .pr-ph-wrap{width:100%}
+        .pr-g0 .pr-pig,.pr-g0 img.pr-ph{width:100%;height:76px;object-fit:cover;display:block;border-radius:2px}
+        .pr-g0 .pr-plate{width:100%;font-size:8.8px;font-weight:700;padding:2.5px 0;text-align:center;margin-top:3px;border-radius:2px}
+        .pr-g0 .pr-plate small{display:block;font-size:7.4px;font-weight:600}
+        .pr-g0.pr-m .pr-plate{background:#ddebfa;color:#1d4f86}
+        .pr-g0.pr-f .pr-plate{background:#f9dcea;color:#a52a68}
+        .pr-g0.pr-x .pr-plate{background:#eceade;color:#5d5a4a}
+        .pr-foot{display:flex;gap:9px;padding:7px 11px;background:#fff;border-top:2.5px solid #1e6b3a;align-items:stretch}
+        .pr-fcell{border:1px solid #cfd8cf;padding:5px 8px;font-size:8.4px;border-radius:2px}
+        .pr-fcell h4{margin:0 0 4px;text-align:center;color:#1e6b3a;font-size:8.4px;letter-spacing:.7px;text-transform:uppercase}
+        .pr-farm{flex:0 0 225px}
+        .pr-cert{flex:1;text-align:center;display:flex;flex-direction:column;justify-content:space-between}
+        .pr-cert p{margin:0;font-size:8.2px;color:#33413a;line-height:1.5}
+        .pr-cert .pr-sign{border-top:1px solid #444;width:78%;margin:8px auto 2px}
+        .pr-cert small{font-size:8px;color:#182430;font-weight:600}
+        .pr-legend{flex:0 0 190px}
+        .pr-legend .pr-li{display:flex;align-items:center;gap:7px;font-size:8.2px;padding:1.5px 2px}
+        .pr-legend .pr-li .sym{font-weight:800;width:12px;text-align:center}
+        .pr-legend .sym.m{color:#2d6bb9}.pr-legend .sym.f{color:#d34d90}
+        .pr-legend .lline{width:26px;height:0;border-top:2px solid #3f7fbf}
+        .pr-legend .lline.f{border-top-color:#e0619c}
+        .pr-seal{flex:0 0 92px;display:flex;align-items:center;justify-content:center}
+        .pr-disc{background:#1e6b3a;color:#fff;text-align:center;font-size:7.6px;letter-spacing:.4px;padding:3px 0}
+        @media print{
+          @page{size:A4 landscape;margin:0}
+          html,body{background:#fff!important}
+          body:has(>#pedigreeReport)>*:not(#pedigreeReport){display:none!important}
+          #pedigreeReport{position:static!important;inset:auto!important;overflow:visible!important;background:#fff!important;padding:0!important}
+          #pedigreeReport .pr-toolbar{display:none!important}
+          #prZoom{transform:none!important;width:auto!important;height:auto!important;margin:0!important}
+          .pr-page{box-shadow:none!important;border:none!important}
+          *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+        }
+      </style>
+      <div class="pr-toolbar no-print">
+        <button type="button" class="btn btn-pdf" onclick="window.print()">🖨 Download PDF / Print</button>
+        <button type="button" class="btn ghost" onclick="document.getElementById('pedigreeReport').remove()">✕ Close</button>
+      </div>
+      <div id="prZoom">
+        <div class="pr-page">
+          <header class="pr-head">
+            <img class="pr-logo" src="${farmLogo}" alt="logo" onerror="this.style.visibility='hidden'">
+            <div class="pr-brand"><b>ARSwineTech Pro</b><small>Digital Herdbook &amp; Swine Management System</small></div>
+            <div class="pr-title"><h1>PEDIGREE &amp; LINEAGE REPORT</h1><small>4-GENERATION PEDIGREE DIAGRAM</small></div>
+            <div class="pr-meta">
+              <div><span>Report No.:</span><b>${reportNo}</b></div>
+              <div><span>Date Generated:</span><b>${genDate}</b></div>
+              <div><span>Page:</span><b>1 of 1</b></div>
             </div>
-            <div class="ct-right no-print"><div class="cert-btn-group"><button class="btn btn-pdf" onclick="window.print()" title="Print or Save as PDF">Download PDF</button><button class="btn ghost" onclick="document.getElementById('pedigreeReport').remove()">Close</button></div></div>
           </header>
-          <div class="cert-rule"></div>
-          <main>
-            <div class="cduo">
-              <section class="cflat">
-                <div class="csec-head">Subject ${currentPedIsBatch ? 'Piglet Batch' : 'Animal'}</div>
-                ${row('Name', a.name || a.id)}${row('ID / Tag', a.id || a.name)}${row('Type', currentPedIsBatch ? 'Piglet Batch' : (a.kind || 'Breeder'))}${row('Breed', a.breed || '—')}${row('Birth / DOB', a.birth || a.dob || '—')}${row('Parity', (a.parity !== undefined && a.parity !== null && a.parity !== '') ? 'P' + a.parity : '—')}
+          <div class="pr-body">
+            <aside class="pr-left"><div class="pr-leftin">
+              ${prSec('ANIMAL INFORMATION',
+                prRow('Animal Name', a.name || a.id) +
+                prRow('Animal ID', a.id || a.name) +
+                prRow('Breed', a.breed || '—') +
+                prRow('Sex', sexLabel) +
+                prRow('Date of Birth', (a.birth || a.dob) ? fmtDP(a.birth || a.dob) : '—') +
+                prRow('Birth Farm', a.birth_farm || farm.name || '—') +
+                prRow('Ear Tag', a.ear_tag || a.earTag || a.id || '—') +
+                prRow('Generation', a.generation || a.gen || '—') +
+                prRow('Status', a.status || (currentPedIsBatch ? 'Piglet Batch' : 'Active')) +
+                prRow('Registration No.', regNo))}
+              <div class="pr-subj ${a.sex === 'M' ? 'pm' : a.sex === 'F' ? 'pf' : 'px'}">
+                <div class="pr-ph-wrap">${root.photo ? `<img src="${root.photo}" alt="">` : prPig(a.sex === 'M' ? 'M' : a.sex === 'F' ? 'F' : 'X')}</div>
+                <div class="pr-plate">${escP(a.name || a.id || '—')}<small>${escP(a.id || '')}</small></div>
+              </div>
+              ${prSec('INBREEDING &amp; RELATIONSHIP ANALYSIS',
+                prRow('Inbreeding Coefficient (F)', fCoef + '%') +
+                prRow('Relationship Risk', riskLevel) +
+                prRow('Generations Analyzed', 4) +
+                prRow('Common Ancestors', commonN) +
+                prRow('Semen Lineage Checked', sireRef0 ? 'YES' : 'NO') +
+                prRow('Previous Use Detected', sameSireBefore ? 'YES' : 'NO'))}
+              ${prSec(perfTitle, prPerfRows(a, farm))}
+              <section class="pr-sec"><h3>VERIFICATION</h3>
+                <div class="pr-verify">
+                  <div class="pr-qr">${qr}</div>
+                  <div>
+                    <ul><li>Animal Identity</li><li>Pedigree &amp; Lineage</li><li>Breeding History</li><li>Semen Source</li><li>Registration Status</li></ul>
+                    <div class="pr-vcode">Verification Code:<br>${verifyCode}</div>
+                  </div>
+                </div>
               </section>
-              <section class="cflat">
-                <div class="csec-head">Genetic Screening</div>
-                ${row('Lineage status', currentPedRisk || 'CLEAN LINEAGE (0.0% Risk)')}${row('Generations verified', '3')}
-                <p style="font-size:11px;color:#697580;margin-top:8px">Sire and dam lines screened against recorded farm lineage for common ancestors. ${String(currentPedRisk || '').startsWith('CLEAN') ? 'No shared ancestors detected within 3 generations.' : 'Review the flagged relationship before proceeding with this mating.'}</p>
-              </section>
-            </div>
-            <div class="csec-head" style="margin-top:16px">Generation 1 — Parents</div>
-            <div class="cduo">${nodeBox(sire, '♂ SIRE (FATHER)', '50%')}${nodeBox(dam, '♀ DAM (MOTHER)', '50%')}</div>
-            <div class="csec-head" style="margin-top:16px">Generation 2 — Grandparents</div>
-            <div class="cduo">${nodeBox(pgs, '♂ PAT. GRANDSIRE', '25%')}${nodeBox(pgd, '♀ PAT. GRANDDAM', '25%')}</div>
-            <div class="cduo" style="margin-top:10px">${nodeBox(mgs, '♂ MAT. GRANDSIRE', '25%')}${nodeBox(mgd, '♀ MAT. GRANDDAM', '25%')}</div>
-          </main>
+            </div></aside>
+            <section class="pr-tree-wrap">
+              <div class="pr-cols-head">${colHead.map((h, i) => `<span class="h${i}">${h}</span>`).join('')}</div>
+              <div class="pr-tree" id="prTree">
+                <svg id="prLines"></svg>
+                ${treeHtml}
+              </div>
+            </section>
+          </div>
           <footer>
-            <div class="cert-bottom">
-              <div class="cert-verify">
-                <div class="cv-qr">${qr}<small>SCAN TO VERIFY</small></div>
-                <div class="cv-text"><b>Pedigree Verification</b><p>Scan to verify this lineage record.</p><small>${escP(a.name || a.id)} · ${escP(farm.name || '')} · ${docId}</small></div>
+            <div class="pr-foot">
+              <div class="pr-fcell pr-farm"><h4>Farm Information</h4>
+                ${prRow('Farm ID', fid || '—')}${prRow('Farm Name', farm.name || '—')}${prRow('Location', farm.location || farm.address || farm.municipality || '—')}${prRow('Owner', farm.owner || farm.owner_name || '—')}
               </div>
-              <div class="cert-signs2">
-                <div class="cs"><span class="cs-line"></span><b>Prepared by</b><small>Signature over printed name · Date</small></div>
-                <div class="cs"><span class="cs-line"></span><b>Farm Owner / Representative</b><small>Signature over printed name · Date</small></div>
+              <div class="pr-fcell pr-cert"><h4>Certification</h4>
+                <p>This is to certify that the above information is true and correct based on the records of ARSwineTech Pro.</p>
+                <div class="pr-sign"></div><small>Authorized Signature</small>
+              </div>
+              <div class="pr-fcell pr-legend"><h4>Legend</h4>
+                <div class="pr-li"><span class="sym m">♂</span> Boar (Male)</div>
+                <div class="pr-li"><span class="sym f">♀</span> Sow (Female)</div>
+                <div class="pr-li"><span class="lline"></span> Sire Line</div>
+                <div class="pr-li"><span class="lline f"></span> Dam Line</div>
+              </div>
+              <div class="pr-seal">
+                <svg viewBox="0 0 100 100" width="86" height="86">
+                  <circle cx="50" cy="50" r="48" fill="#fff" stroke="#1e6b3a" stroke-width="3"/>
+                  <circle cx="50" cy="50" r="34" fill="#1e6b3a"/>
+                  <path id="prSealArc" d="M 50,50 m -41,0 a 41,41 0 1,1 82,0 a 41,41 0 1,1 -82,0" fill="none"/>
+                  <text font-size="8.2" font-weight="700" fill="#1e6b3a" letter-spacing="1.5"><textPath href="#prSealArc" startOffset="0%">ARSWINETECH PRO ★ VERIFIED &amp; REGISTERED ★</textPath></text>
+                  <g transform="translate(32,38) scale(0.56)" fill="#fff"><ellipse cx="29" cy="27" rx="17" ry="11"/><circle cx="46" cy="21" r="8.5"/><path d="M41 14l-3.5-6 5.5 2z"/><path d="M49 13l2-6 3.5 6z"/><rect x="17" y="33" width="4.4" height="9" rx="2"/><rect x="26" y="35" width="4.4" height="9" rx="2"/><rect x="35" y="34" width="4.4" height="9" rx="2"/></g>
+                </svg>
               </div>
             </div>
-            <div class="cv-meta cv-meta-line"><span>Generated On<b>${genDate}</b></span><span>Generated By<b>${escP(farm.name || '')}</b></span><span>Document ID<b>${docId}</b></span></div>
-            <div class="cert-foot-note">This document is system-generated by ARSwineTech Pro and may be verified using the QR code.<br>Thank you for trusting ${escP(farm.name || '')}!</div>
+            <div class="pr-disc">This report is system-generated and does not require physical signature.</div>
           </footer>
-        </article>
-      </div>`);
+        </div>
+      </div>
+    </div>`);
+    prFit();
+    window.removeEventListener('resize', prFit);
+    window.addEventListener('resize', prFit);
+    requestAnimationFrame(() => { prDrawLines(); prFit(); });
   }
   window.exportPedigreeReport = exportPedigreeReport;
 
