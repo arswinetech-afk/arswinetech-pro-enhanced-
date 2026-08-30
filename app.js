@@ -3069,6 +3069,7 @@ async function activateFarmContext(id, options = {}) {
     if (window.updateSyncIndicator) window.updateSyncIndicator('offline', 'Offline', 'Cloud was not contacted. Local records are not marked as synchronized.');
     renderAll();
     applyAccess();
+    if (window.arsPostFarmActivate) window.arsPostFarmActivate(targetId); /* [FIX 106] */
     return true;
   }
 
@@ -3103,6 +3104,8 @@ async function activateFarmContext(id, options = {}) {
   if (onboardScr) onboardScr.classList.remove('open');
   setFarmSelect();
   renderAll();
+  /* [FIX 106] let the trial module offer data migration after real activation */
+  if (window.arsPostFarmActivate) window.arsPostFarmActivate(targetId);
   applyAccess();
   return true;
 }

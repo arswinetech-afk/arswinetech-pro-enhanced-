@@ -1098,6 +1098,7 @@ window.ARSCloud = (() => {
     deleteAppRecordsBatch,
     cleanCloudTestRecords,
     pushFarm,
+    rawRequest: request, /* [FIX 106] trial beacons & owner trial board */
     saveFarmLogo,
     syncFarmRecord,
     verifyFarmSave,

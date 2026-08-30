@@ -118,8 +118,151 @@
     window.arsSessionUser = window.arsSessionUser || { email: 'trial@arswinetech.demo', name: 'Trial Farmer' };
     if (typeof window.activateFarmContext === 'function') {
       const ok = await window.activateFarmContext(s.farmId, { offline: true });
-      if (ok) { injectBanner(); if (window.toast) window.toast(`🎁 Trial started — ${daysLeft(s)} days of full access. Explore everything!`); }
+      if (ok) { injectBanner(); beacon('active'); if (window.toast) window.toast(`🎁 Trial started — ${daysLeft(s)} days of full access. Explore everything!`); }
     }
+  };
+
+  /* ═══ [REBUILD FIX 106] TRIAL → SUBSCRIBER DATA MIGRATION ═══
+     Trial data is device-local by design. When the client subscribes and signs
+     in (or joins via invitation), we OFFER to merge their trial records into
+     the real farm — additive-only, pre-backup, then cloud-pushed. The owner
+     can also receive a "migration packet" file via Messenger and import it
+     into the target farm from the sync menu. */
+  const dbAll = () => { try { return JSON.parse(localStorage.getItem('arswine-db-v1') || '{}'); } catch (_) { return {}; } };
+  const KEYS = ['sows', 'boars', 'piglets', 'feed', 'transactions', 'reservations', 'medicines', 'reminders', 'vaccinations', 'treatments', 'pigletLedger', 'feedOrders', 'feedTrials'];
+  const countsOf = f => ({ sows: (f.sows || []).length, boars: (f.boars || []).length, batches: (f.piglets || []).length, reservations: (f.reservations || []).length, transactions: (f.transactions || []).length });
+
+  function beacon(status) {
+    /* Optional live census — requires supabase/trial_beacons.sql to be run once.
+       Fails silently otherwise; everything else keeps working. */
+    try {
+      const cfg = window.ARS_SUPABASE_CONFIG;
+      const s = readState();
+      if (!cfg || !s || !navigator.onLine) return;
+      const f = dbAll()[s.farmId] || {};
+      fetch(cfg.url + '/rest/v1/trial_beacons?on_conflict=id', {
+        method: 'POST',
+        headers: { apikey: cfg.anonKey, Authorization: 'Bearer ' + cfg.anonKey, 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates,return=minimal' },
+        body: JSON.stringify({ id: s.farmId, started_at: new Date(s.startedAt).toISOString(), expires_at: new Date(s.expiresAt).toISOString(), status: status || 'active', counts: countsOf(f), contact: s.contact || null, updated_at: new Date().toISOString() })
+      }).catch(() => {});
+    } catch (_) {}
+  }
+
+  window.arsMergeFarmData = function (src, label) {
+    const dst = window.F ? window.F() : null;
+    if (!src || !dst) return 0;
+    let added = 0;
+    KEYS.forEach(k => {
+      (src[k] || []).forEach(item => {
+        if (!item || typeof item !== 'object') return;
+        const arr = (dst[k] = dst[k] || []);
+        const dup = arr.some(x => (item.id && x.id === item.id) || (item.name && x.name === item.name && ['sows', 'boars', 'medicines'].includes(k)));
+        if (!dup) { const copy = JSON.parse(JSON.stringify(item)); delete copy._ars_cloud_local_id; arr.push(copy); added++; }
+      });
+    });
+    (dst.migration_log = dst.migration_log || []).push({ from: label || 'trial', at: new Date().toISOString(), added });
+    return added;
+  };
+
+  async function pushActiveFarm() {
+    if (window.ARSCloud && typeof window.ARSCloud.pushFarm === 'function') {
+      return await window.ARSCloud.pushFarm(window.__arsActiveFarmId || window.farmId, window.F(), { dirtyOnly: false });
+    }
+    return null;
+  }
+
+  function trialCounts() { const s = readState(); return s ? countsOf(dbAll()[s.farmId] || {}) : null; }
+
+  window.arsPostFarmActivate = function (targetId) {
+    const s = readState();
+    if (!s || s.migrated || String(targetId) === String(s.farmId)) return;
+    const c = trialCounts();
+    if (!c || (c.sows + c.batches + c.reservations + c.transactions) === 0) return;
+    if (document.getElementById('trialMigrateModal')) return;
+    document.body.insertAdjacentHTML('beforeend', `<div class="due-modal-bg open" id="trialMigrateModal" style="z-index:10000001!important">
+      <div class="due-modal" style="max-width:520px;width:94%;text-align:left">
+        <div class="modal-top"><div><div class="eyebrow" style="color:#7dd3fc;font-weight:800">🚀 WELCOME, SUBSCRIBER!</div><h2>Migrate your trial data?</h2></div><button type="button" class="close-reminder" onclick="document.getElementById('trialMigrateModal')?.remove()">×</button></div>
+        <p class="muted">We found your trial records on this device: <b>${c.sows} sows · ${c.boars} boars · ${c.batches} batches · ${c.reservations} reservations · ${c.transactions} transactions</b>. Add them to <b>${(window.F() || {}).name || 'your new farm'}</b>? Records are ADDED only — nothing existing is deleted or overwritten.</p>
+        <div class="due-actions" style="justify-content:flex-end;flex-wrap:wrap">
+          <button class="btn ghost" onclick="window.arsExportTrialPacket && window.arsExportTrialPacket()">📤 Export backup first</button>
+          <button class="btn ghost" onclick="document.getElementById('trialMigrateModal')?.remove()">Later</button>
+          <button class="btn" onclick="window.arsMigrateTrialNow && window.arsMigrateTrialNow()">🚀 Migrate now</button>
+        </div>
+      </div></div>`);
+  };
+
+  window.arsMigrateTrialNow = async function () {
+    const s = readState(); if (!s) return;
+    const src = dbAll()[s.farmId]; if (!src) return;
+    const added = window.arsMergeFarmData(src, s.farmId);
+    if (typeof window.save === 'function') window.save();
+    const res = await pushActiveFarm();
+    if (res && res.success !== false) {
+      s.migrated = true; writeState(s); beacon('migrated');
+      document.getElementById('trialMigrateModal')?.remove();
+      if (window.toast) window.toast(`✅ Migrated ${added} records into your real farm and synced to the cloud.`);
+      if (typeof window.renderAll === 'function') window.renderAll();
+    } else {
+      if (window.toast) window.toast(`⚠ Saved locally (${added} records) but cloud sync pending: ${res?.reason || 'retry when online.'}`);
+    }
+  };
+
+  window.arsExportTrialPacket = function () {
+    const s = readState(); if (!s) return;
+    const contact = prompt('Optional: your contact (Messenger/phone) so the developer can assist migration:', '') || '';
+    if (contact) { s.contact = contact; writeState(s); }
+    const packet = { kind: 'ars-trial-packet', version: 1, exported_at: new Date().toISOString(), trial: { id: s.farmId, started_at: new Date(s.startedAt).toISOString(), expires_at: new Date(s.expiresAt).toISOString(), days_left: daysLeft(s), contact: s.contact || null, migrated: !!s.migrated }, counts: trialCounts(), farm: dbAll()[s.farmId] || {} };
+    const blob = new Blob([JSON.stringify(packet, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `ARSwineTech-trial-packet-${s.farmId}.json`;
+    document.body.appendChild(a); a.click(); setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(a.href); }, 300);
+    beacon('active');
+    if (window.toast) window.toast('📤 Packet downloaded — send it to the developer via Messenger.');
+  };
+
+  /* ── OWNER tools (sync menu): import a packet / view live trial board ── */
+  window.arsImportTrialPacketUI = function () {
+    const inp = document.createElement('input');
+    inp.type = 'file'; inp.accept = 'application/json,.json';
+    inp.onchange = async () => {
+      const f = inp.files?.[0]; if (!f) return;
+      const text = await f.text();
+      try {
+        const p = JSON.parse(text);
+        if (p.kind !== 'ars-trial-packet' || !p.farm) throw new Error('Not a trial packet file.');
+        const c = p.counts || countsOf(p.farm);
+        if (!confirm(`Import trial ${p.trial?.id || ''} into ACTIVE farm "${(window.F() || {}).name || ''}"?\n\n${c.sows} sows · ${c.batches} batches · ${c.reservations} reservations · ${c.transactions} transactions will be ADDED (duplicates skipped). Existing records are never deleted.`)) return;
+        const added = window.arsMergeFarmData(p.farm, p.trial?.id || 'packet');
+        if (typeof window.save === 'function') window.save();
+        const res = await pushActiveFarm();
+        if (window.toast) window.toast(res && res.success !== false ? `✅ Imported ${added} trial records into ${(window.F() || {}).name} and synced.` : `⚠ Imported ${added} records locally; cloud push pending.`);
+        if (typeof window.renderAll === 'function') window.renderAll();
+      } catch (e) {
+        if (window.toast) window.toast('⚠ Could not import: ' + (e.message || e));
+      }
+    };
+    inp.click();
+  };
+
+  window.arsTrialBoard = async function () {
+    const box = document.getElementById('trialBoardModal'); box?.remove();
+    const cfg = window.ARS_SUPABASE_CONFIG;
+    let rowsHtml = '<div class="empty" style="padding:16px">No beacon table yet — run <b>supabase/trial_beacons.sql</b> once in your Supabase SQL editor to enable the live trial dashboard.</div>';
+    if (cfg && window.ARSCloud?.rawRequest && navigator.onLine) {
+      try {
+        const res = await window.ARSCloud.rawRequest('/rest/v1/trial_beacons?order=started_at.desc&limit=50', { method: 'GET' });
+        const list = Array.isArray(res) ? res : [];
+        rowsHtml = list.length ? `<div class="table-wrap"><table class="table" style="min-width:420px;font-size:12px"><thead><tr><th>Trial</th><th>Status</th><th>Days left</th><th>Data</th><th>Contact</th></tr></thead><tbody>${list.map(t => {
+          const left = Math.max(0, Math.ceil((new Date(t.expires_at) - Date.now()) / 86400000));
+          const c = t.counts || {};
+          return `<tr><td><b>${String(t.id).slice(-6)}</b><br><small>${String(t.started_at || '').slice(0, 10)}</small></td><td>${t.status === 'migrated' ? '✅ migrated' : left === 0 ? '⏳ expired' : '🎁 active'}</td><td>${left}</td><td>${c.sows || 0} sows · ${c.batches || 0} batches</td><td>${t.contact || '—'}</td></tr>`;
+        }).join('')}</tbody></table></div>` : '<div class="empty" style="padding:16px">No trials beaconed yet.</div>';
+      } catch (e) {
+        rowsHtml = `<div class="empty" style="padding:16px">Could not read trial board: ${e.message || e}. Run supabase/trial_beacons.sql first.</div>`;
+      }
+    }
+    document.body.insertAdjacentHTML('beforeend', `<div class="due-modal-bg open" id="trialBoardModal" style="z-index:10000001!important" onclick="if(event.target===this)this.remove()"><div class="due-modal" style="max-width:640px;width:96%;text-align:left"><div class="modal-top"><div><div class="eyebrow" style="color:#7dd3fc;font-weight:800">🎁 TRIAL DASHBOARD</div><h2>Who is on trial / needs migration</h2></div><button type="button" class="close-reminder" onclick="document.getElementById('trialBoardModal')?.remove()">×</button></div>${rowsHtml}<div class="due-actions" style="justify-content:flex-end"><button class="btn ghost" onclick="window.arsImportTrialPacketUI && window.arsImportTrialPacketUI()">📥 Import trial packet</button><button class="btn" onclick="document.getElementById('trialBoardModal')?.remove()">Close</button></div></div></div>`);
   };
 
   /* boot: ?trial=1 auto-starts; returning visitors resume; expired → lock */

@@ -365,6 +365,12 @@
             <button type="button" class="btn small" onclick="window.scheduleAutoPush && window.scheduleAutoPush(0)">🔄 Retry sync now</button>
           </div>` : ''}
 
+          <!-- [REBUILD FIX 106] owner tools: live trial census + packet import -->
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin:14px 0">
+            <button type="button" class="btn ghost" style="flex:1" onclick="window.arsTrialBoard && window.arsTrialBoard()">🎁 Trial dashboard — who's on trial / needs migration</button>
+            <button type="button" class="btn ghost" style="flex:1" onclick="window.arsImportTrialPacketUI && window.arsImportTrialPacketUI()">📥 Import trial packet into active farm</button>
+          </div>
+
           <!-- Direct JSON Export / Import Tray -->
           <div style="background:rgba(0,0,0,0.25);border:1px solid var(--line);border-radius:14px;padding:14px 16px;margin:14px 0">
             <b style="font-size:13.5px;display:flex;align-items:center;gap:6px">
