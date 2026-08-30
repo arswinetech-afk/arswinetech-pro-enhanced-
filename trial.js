@@ -378,5 +378,8 @@
       if (document.body.classList.contains('farm-access-granted')) { injectBanner(); beacon('active'); /* [FIX 108] self-report on every open so the owner's board fills once the table exists */ }
       else window.arsStartTrial();
     }, 400);
+    /* [FIX 109] re-beacon whenever connectivity returns so the owner board
+       catches up even if the first beacon raced the SQL setup */
+    window.addEventListener('online', () => { const st = readState(); if (st && Date.now() < st.expiresAt) beacon('active'); });
   });
 })();
