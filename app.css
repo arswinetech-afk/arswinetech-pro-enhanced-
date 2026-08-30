@@ -140,6 +140,14 @@ body.app-modal-open{overflow:hidden!important;touch-action:none}.modal-bg.open,.
 /* Body's dark-theme gradient must never paint behind the printed page. */
 @media print{html,body{background:#fff!important}}
 
+/* [REBUILD FIX 112] print isolation for the Pedigree & Lineage Report */
+@media print{
+  body:has(>#pedigreeReport)>*:not(#pedigreeReport){display:none!important}
+  #pedigreeReport{position:static!important;display:block!important;inset:auto!important;overflow:visible!important;background:none!important;backdrop-filter:none!important;padding:0!important}
+  #pedigreeReport .certificate{position:static!important;width:100%!important;max-width:none!important;max-height:none!important;height:auto!important;overflow:visible!important;box-shadow:none!important;border-radius:0!important;margin:0!important}
+  #pedigreeReport, #pedigreeReport *{visibility:visible!important}
+}
+
 /* ── [REBUILD] Batch performance record form, hub strip, certificate metric cells
    and ear-notch registry (js/batch-performance.js) ─────────────────────────── */
 .perf-modal{max-width:700px;text-align:left}

@@ -170,6 +170,9 @@
   }
 
   let currentPedTreeData = null;
+  let currentPedSubject = null; /* [FIX 112] captured for the printable report */
+  let currentPedRisk = '';
+  let currentPedIsBatch = false;
 
   /* Build one node in the shared animal/batch pedigree tree. The optional
      subjectOverride supplies parents for a piglet batch, whose own record is
@@ -564,6 +567,8 @@
       } catch(e) {}
     }
 
+    currentPedSubject = a; currentPedRisk = inbreedingRiskText; currentPedIsBatch = isBatchSubject; /* [FIX 112] */
+
     const headerEyebrow = isBatchSubject ? '🐖 3-GENERATION PIGLET BATCH LINEAGE' : '🧬 3-GENERATION GENETIC PEDIGREE & ANCESTRY TREE';
     const headerTag = isBatchSubject ? `Piglet Batch · ${a.birth ? fmtDP(a.birth) : 'birth date not recorded'}` : `${a.breed || 'Pedigree Animal'} · ${a.parity ? 'P' + a.parity : (a.kind || 'Breeder')}`;
     const headerSub = isBatchSubject
@@ -632,7 +637,7 @@
           <div class="due-actions" style="margin-top:16px;justify-content:space-between;flex-wrap:wrap;gap:8px">
             <div style="display:flex;gap:8px;flex-wrap:wrap">
               ${editLineageAction}
-              <button type="button" class="btn ghost" onclick="window.print()">🖨 Export Pedigree PDF</button>
+              <button type="button" class="btn ghost" onclick="window.exportPedigreeReport()">🖨 Export Pedigree PDF</button>
             </div>
             <button type="button" class="btn ghost" onclick="document.getElementById('pedigreeTreeModal').remove()">Close</button>
           </div>
@@ -641,6 +646,89 @@
     `);
     schedulePedigreeConnectorDraw();
   }
+
+  /* [REBUILD FIX 112] PROFESSIONAL PRINTABLE PEDIGREE REPORT.
+     The old button called window.print() directly, so the dark app UI printed
+     as blank pages. This builds a dedicated white certificate-style document
+     (same visual family as the Reservation Certificate, QR included) into a
+     print-isolated container, for sows, active boars and piglet batches. */
+  function exportPedigreeReport() {
+    const a = currentPedSubject;
+    if (!a) { if (window.toast) window.toast('Open a pedigree tree first.'); return; }
+    const t = currentPedTreeData || {};
+    const sire = t.sireNode || null, dam = t.damNode || null;
+    const pgs = sire ? sire.sireNode : null, pgd = sire ? sire.damNode : null;
+    const mgs = dam ? dam.sireNode : null, mgd = dam ? dam.damNode : null;
+    const farm = (typeof F === 'function' ? F() : {}) || {};
+    const farmLogo = farm.logo || farm.logo_url || '';
+    const docId = 'PED-' + String(a.id || a.name || '').replace(/[^a-z0-9]/gi, '').slice(-6).toUpperCase() + '-' + String(Date.now()).slice(-4);
+    const genDate = new Date().toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' });
+    const qr = window.generateCertQRCode
+      ? window.generateCertQRCode(JSON.stringify({
+          app: 'ARSwineTech Pro', doc: 'PEDIGREE & LINEAGE REPORT', farm: farm.name || '',
+          id: a.id || a.name, name: a.name || a.id,
+          kind: currentPedIsBatch ? 'Piglet Batch' : (a.kind || 'Animal'),
+          breed: a.breed || '—', birth: a.birth || a.dob || '',
+          sire: sire && sire.exists ? sire.name : 'unknown', dam: dam && dam.exists ? dam.name : 'unknown',
+          patGrandsire: pgs && pgs.exists ? pgs.name : 'unknown', patGranddam: pgd && pgd.exists ? pgd.name : 'unknown',
+          matGrandsire: mgs && mgs.exists ? mgs.name : 'unknown', matGranddam: mgd && mgd.exists ? mgd.name : 'unknown',
+          screening: currentPedRisk, generated: new Date().toISOString()
+        }), docId)
+      : '';
+    const row = (l, v) => `<div style="display:flex;justify-content:space-between;gap:10px;padding:6px 2px;border-bottom:1px solid #e8eaed;font-size:12px"><span style="color:#697580">${l}</span><b style="text-align:right">${escP(v || '—')}</b></div>`;
+    const nodeBox = (n, role, pct) => `<section class="cflat" style="flex:1;min-width:230px"><div class="csec-head">${role} · ${pct} GENETICS</div>${row('Name', n && n.exists ? (n.name || n.id) : 'Unknown Ancestor')}${row('Breed', n && n.exists ? n.breed : '—')}${row('Tag / ID', n && n.id ? n.id : '—')}${row('Type', n && n.exists ? n.kind : '—')}</section>`;
+    document.getElementById('pedigreeReport')?.remove();
+    document.body.insertAdjacentHTML('beforeend', `
+      <div class="drill-bg" id="pedigreeReport" style="position:fixed!important;inset:0!important;z-index:9999999!important;overflow:auto!important">
+        <article class="certificate" style="position:relative">
+          <button class="close-reminder no-print" onclick="document.getElementById('pedigreeReport').remove()" title="Close report">×</button>
+          <header class="cert-top">
+            <div class="ct-logo">${farmLogo ? `<img src="${farmLogo}" alt="farm logo">` : ''}</div>
+            <div class="ct-mid">
+              <div class="ct-farm">${escP(farm.name || 'Farm')}</div>
+              <h1>Pedigree &amp; Lineage Report</h1>
+              <div class="ct-sub">3-Generation Verified Pedigree · Genetic Traceability Record</div>
+              <div class="ct-meta">Document No. <b>${docId}</b> &nbsp;·&nbsp; Generated <b>${genDate}</b></div>
+            </div>
+            <div class="ct-right no-print"><div class="cert-btn-group"><button class="btn btn-pdf" onclick="window.print()" title="Print or Save as PDF">Download PDF</button><button class="btn ghost" onclick="document.getElementById('pedigreeReport').remove()">Close</button></div></div>
+          </header>
+          <div class="cert-rule"></div>
+          <main>
+            <div class="cduo">
+              <section class="cflat">
+                <div class="csec-head">Subject ${currentPedIsBatch ? 'Piglet Batch' : 'Animal'}</div>
+                ${row('Name', a.name || a.id)}${row('ID / Tag', a.id || a.name)}${row('Type', currentPedIsBatch ? 'Piglet Batch' : (a.kind || 'Breeder'))}${row('Breed', a.breed || '—')}${row('Birth / DOB', a.birth || a.dob || '—')}${row('Parity', (a.parity !== undefined && a.parity !== null && a.parity !== '') ? 'P' + a.parity : '—')}
+              </section>
+              <section class="cflat">
+                <div class="csec-head">Genetic Screening</div>
+                ${row('Lineage status', currentPedRisk || 'CLEAN LINEAGE (0.0% Risk)')}${row('Generations verified', '3')}
+                <p style="font-size:11px;color:#697580;margin-top:8px">Sire and dam lines screened against recorded farm lineage for common ancestors. ${String(currentPedRisk || '').startsWith('CLEAN') ? 'No shared ancestors detected within 3 generations.' : 'Review the flagged relationship before proceeding with this mating.'}</p>
+              </section>
+            </div>
+            <div class="csec-head" style="margin-top:16px">Generation 1 — Parents</div>
+            <div class="cduo">${nodeBox(sire, '♂ SIRE (FATHER)', '50%')}${nodeBox(dam, '♀ DAM (MOTHER)', '50%')}</div>
+            <div class="csec-head" style="margin-top:16px">Generation 2 — Grandparents</div>
+            <div class="cduo">${nodeBox(pgs, '♂ PAT. GRANDSIRE', '25%')}${nodeBox(pgd, '♀ PAT. GRANDDAM', '25%')}</div>
+            <div class="cduo" style="margin-top:10px">${nodeBox(mgs, '♂ MAT. GRANDSIRE', '25%')}${nodeBox(mgd, '♀ MAT. GRANDDAM', '25%')}</div>
+          </main>
+          <footer>
+            <div class="cert-bottom">
+              <div class="cert-verify">
+                <div class="cv-qr">${qr}<small>SCAN TO VERIFY</small></div>
+                <div class="cv-text"><b>Pedigree Verification</b><p>Scan to verify this lineage record.</p><small>${escP(a.name || a.id)} · ${escP(farm.name || '')} · ${docId}</small></div>
+              </div>
+              <div class="cert-signs2">
+                <div class="cs"><span class="cs-line"></span><b>Prepared by</b><small>Signature over printed name · Date</small></div>
+                <div class="cs"><span class="cs-line"></span><b>Farm Owner / Representative</b><small>Signature over printed name · Date</small></div>
+              </div>
+            </div>
+            <div class="cv-meta cv-meta-line"><span>Generated On<b>${genDate}</b></span><span>Generated By<b>${escP(farm.name || '')}</b></span><span>Document ID<b>${docId}</b></span></div>
+            <div class="cert-foot-note">This document is system-generated by ARSwineTech Pro and may be verified using the QR code.<br>Thank you for trusting ${escP(farm.name || '')}!</div>
+          </footer>
+        </article>
+      </div>`);
+  }
+  window.exportPedigreeReport = exportPedigreeReport;
 
   /* Piglet batches inherit the same tree visualizer. A batch is not an animal
      registry row, so resolve its recorded dam/sire through the batch's

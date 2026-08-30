@@ -5,6 +5,7 @@
   const txt = v => v === undefined || v === null || v === '' ? 'N/A' : v;
   const field = (label, value) => `<div class="cert-field"><span>${label}</span><b>${txt(value)}</b></div>`;
 
+  window.generateCertQRCode = generateCertQRCode; /* [FIX 112] reused by pedigree report */
   function generateCertQRCode(payloadText, fallbackId = '') {
     try {
       if (window.QRCode) {
