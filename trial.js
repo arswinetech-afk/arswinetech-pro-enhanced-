@@ -21,10 +21,10 @@
   window.arsIsTrialFarm = () => { const s = readState(); return !!(s && String(s.farmId) === String(window.__arsActiveFarmId || window.farmId)); };
 
   /* ── seeded demo farm so every screen has life on first open ── */
-  function seedFarm(id) {
+  function seedFarm(id, name) {
     const d = off => new Date(Date.now() - off * DAY).toISOString().slice(0, 10);
     return {
-      name: 'Demo Farm (15-Day Trial)',
+      name: name || 'My Trial Farm',
       trial: true,
       sows: [
         { id: 'S-001', name: 'Luningning', breed: 'Large White', parity: 3, status: 'Pregnant', insemination: d(45), sire: 'Thor', dam: 'Malaika', dob: d(900), vaccine: 'Hog Cholera', vaccineDate: d(30) },
@@ -96,6 +96,56 @@
       </div></div>`);
   };
 
+  /* ── [FIX 107] trial signup: their OWN farm name + credentials ──
+     Collecting these up front makes subscribing one-tap later (signUp with the
+     same email/password, farm created under their chosen name, then merge).
+     The password is kept ONLY on this device, obfuscated, purely so the
+     conversion step doesn't require retyping; real auth tokens replace it. */
+  function openTrialSignup() {
+    document.getElementById('trialSignupModal')?.remove();
+    document.body.insertAdjacentHTML('beforeend', `<div class="due-modal-bg open" id="trialSignupModal" style="z-index:10000001!important">
+      <form class="due-modal" style="max-width:480px;width:94%;text-align:left" onsubmit="window.arsBeginTrial(event)">
+        <div class="modal-top"><div><div class="eyebrow" style="color:#7dd3fc;font-weight:800">🎁 15-DAY FREE TRIAL</div><h2>Create your trial farm</h2><small class="muted">Full access, no payment. Your farm lives on this device for 15 days — if you subscribe, we create your cloud account with these same details and move everything across.</small></div><button type="button" class="close-reminder" onclick="document.getElementById('trialSignupModal')?.remove()">×</button></div>
+        <div class="reminder-fields">
+          <div class="field"><label>Your farm name *</label><input name="farm_name" required placeholder="e.g. Dela Cruz Piggery"></div>
+          <div class="field"><label>Email *</label><input name="email" type="email" required placeholder="you@example.com"></div>
+          <div class="field"><label>Choose a password *</label><input name="password" type="password" minlength="6" required placeholder="at least 6 characters"></div>
+        </div>
+        <small class="muted" style="display:block;margin:10px 0">We'll use this email to follow up on your trial. Credentials stay on this device to make subscribing one-tap.</small>
+        <div class="due-actions" style="justify-content:flex-end"><button type="button" class="btn ghost" onclick="document.getElementById('trialSignupModal')?.remove()">Cancel</button><button class="btn">Start my 15-day trial →</button></div>
+      </form></div>`);
+  }
+
+  window.arsBeginTrial = function (e) {
+    e.preventDefault();
+    const d = Object.fromEntries(new FormData(e.target));
+    const farmName = String(d.farm_name || '').trim();
+    const email = String(d.email || '').trim().toLowerCase();
+    const pw = String(d.password || '');
+    if (!farmName) return;
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { if (window.toast) window.toast('⚠ Please enter a valid email address.'); return; }
+    if (pw.length < 6) { if (window.toast) window.toast('⚠ Password must be at least 6 characters.'); return; }
+    const id = 'trial-' + Date.now().toString(36);
+    const s = { startedAt: Date.now(), expiresAt: Date.now() + DAYS * DAY, farmId: id, farmName, email, passB64: btoa(unescape(encodeURIComponent(pw))) };
+    writeState(s);
+    try {
+      const db = JSON.parse(localStorage.getItem('arswine-db-v1') || '{}');
+      db[id] = seedFarm(id, farmName);
+      localStorage.setItem('arswine-db-v1', JSON.stringify(db));
+    } catch (_) {}
+    document.getElementById('trialSignupModal')?.remove();
+    enterTrial(s);
+  };
+
+  async function enterTrial(s) {
+    window.arsMemberships = [{ farm_id: s.farmId, role: 'owner', plan: 'full', is_active: true }];
+    window.arsSessionUser = window.arsSessionUser || { email: s.email || 'trial@arswinetech.demo', name: s.farmName || 'Trial Farmer' };
+    if (typeof window.activateFarmContext === 'function') {
+      const ok = await window.activateFarmContext(s.farmId, { offline: true });
+      if (ok) { injectBanner(); beacon('active'); if (window.toast) window.toast(`🎁 Welcome, ${s.farmName}! ${daysLeft(s)} days of full access — explore everything.`); }
+    }
+  }
+
   /* ── start / resume ── */
   window.arsStartTrial = async function () {
     /* Safety: never silently hijack a signed-in REAL farm session on this
@@ -104,21 +154,57 @@
     if (realSession && !confirm('You are signed in to a REAL farm on this device.\n\nStart the demo trial anyway? You will be switched to the demo farm — your real data stays safe and you can sign back in anytime.')) return;
     let s = readState();
     if (s && Date.now() >= s.expiresAt) { window.arsTrialExpiredScreen(); return; }
-    if (!s) {
-      const id = 'trial-' + Date.now().toString(36);
-      s = { startedAt: Date.now(), expiresAt: Date.now() + DAYS * DAY, farmId: id };
-      writeState(s);
-      try {
-        const db = JSON.parse(localStorage.getItem('arswine-db-v1') || '{}');
-        db[id] = seedFarm(id);
-        localStorage.setItem('arswine-db-v1', JSON.stringify(db));
-      } catch (_) {}
+    if (!s) { openTrialSignup(); return; }
+    await enterTrial(s);
+  };
+
+  /* ── [FIX 107] one-tap conversion: create the real cloud account with the
+     credentials chosen at trial start, create their farm under the same name,
+     then merge all trial records and push. Falls back to signIn if the
+     account already exists (e.g. confirmed via email earlier). */
+  window.arsSubscribeAndMigrate = async function () {
+    const s = readState();
+    if (!s || !window.ARSCloud) return;
+    const email = s.email;
+    const pw = (() => { try { return decodeURIComponent(escape(atob(s.passB64 || ''))); } catch (_) { return ''; } })();
+    if (!email || !pw) { if (window.toast) window.toast('⚠ Trial has no saved credentials — use Export packet instead.'); return; }
+    if (window.toast) window.toast('🔐 Creating your account…');
+    let authed = false;
+    try { await window.ARSCloud.signUp(email, pw); authed = true; }
+    catch (err) {
+      const msg = String(err?.message || err);
+      if (/already|exists|registered|duplicate/i.test(msg)) {
+        try { await window.ARSCloud.signIn(email, pw); authed = true; }
+        catch (e2) { if (window.toast) window.toast('⚠ Sign-in failed: ' + (e2?.message || e2) + ' — check your password or email confirmation.'); return; }
+      } else {
+        if (window.toast) window.toast('⚠ Account creation failed: ' + msg + ' — if we emailed you a confirmation link, confirm it first, then tap migrate again.');
+        return;
+      }
     }
-    window.arsMemberships = [{ farm_id: s.farmId, role: 'owner', plan: 'full', is_active: true }];
-    window.arsSessionUser = window.arsSessionUser || { email: 'trial@arswinetech.demo', name: 'Trial Farmer' };
-    if (typeof window.activateFarmContext === 'function') {
-      const ok = await window.activateFarmContext(s.farmId, { offline: true });
-      if (ok) { injectBanner(); beacon('active'); if (window.toast) window.toast(`🎁 Trial started — ${daysLeft(s)} days of full access. Explore everything!`); }
+    if (!authed) return;
+    let memberships = [];
+    try { memberships = (await window.ARSCloud.getFarmMemberships()) || []; } catch (_) {}
+    let farmId = memberships[0] && memberships[0].farm_id;
+    if (!farmId) {
+      try {
+        const on = await window.ARSCloud.onboard({ first_name: (s.farmName || 'My Farm').split(' ')[0], last_name: 'Owner', mobile_number: s.contact || '', farm_name: s.farmName || s.farmId, farm_address: '', barangay: '', municipality: '', province: '' });
+        farmId = on && (on.farm_id || on.id || (Array.isArray(on) && on[0] && (on[0].farm_id || on[0].id)));
+      } catch (e3) { if (window.toast) window.toast('⚠ Farm creation failed: ' + (e3?.message || e3)); return; }
+    }
+    if (!farmId) { if (window.toast) window.toast('⚠ Could not find or create your farm — contact support with your trial packet.'); return; }
+    const ok = await window.activateFarmContext(farmId, {});
+    if (!ok) { if (window.toast) window.toast('⚠ Could not open your new farm yet — try again online.'); return; }
+    const src = dbAll()[s.farmId];
+    const added = window.arsMergeFarmData(src, s.farmId);
+    if (typeof window.save === 'function') window.save();
+    const res = await pushActiveFarm();
+    if (res && res.success !== false) {
+      s.migrated = true; writeState(s); beacon('migrated');
+      document.getElementById('trialMigrateModal')?.remove();
+      if (window.toast) window.toast(`✅ Account created and ${added} trial records migrated to ${s.farmName} — synced to the cloud!`);
+      if (typeof window.renderAll === 'function') window.renderAll();
+    } else {
+      if (window.toast) window.toast(`⚠ Merged ${added} records locally; cloud sync pending: ${res?.reason || 'retry when online.'}`);
     }
   };
 
@@ -184,9 +270,10 @@
         <div class="modal-top"><div><div class="eyebrow" style="color:#7dd3fc;font-weight:800">🚀 WELCOME, SUBSCRIBER!</div><h2>Migrate your trial data?</h2></div><button type="button" class="close-reminder" onclick="document.getElementById('trialMigrateModal')?.remove()">×</button></div>
         <p class="muted">We found your trial records on this device: <b>${c.sows} sows · ${c.boars} boars · ${c.batches} batches · ${c.reservations} reservations · ${c.transactions} transactions</b>. Add them to <b>${(window.F() || {}).name || 'your new farm'}</b>? Records are ADDED only — nothing existing is deleted or overwritten.</p>
         <div class="due-actions" style="justify-content:flex-end;flex-wrap:wrap">
-          <button class="btn ghost" onclick="window.arsExportTrialPacket && window.arsExportTrialPacket()">📤 Export backup first</button>
+          <button class="btn ghost" onclick="window.arsExportTrialPacket && window.arsExportTrialPacket()">📤 Export packet</button>
           <button class="btn ghost" onclick="document.getElementById('trialMigrateModal')?.remove()">Later</button>
-          <button class="btn" onclick="window.arsMigrateTrialNow && window.arsMigrateTrialNow()">🚀 Migrate now</button>
+          <button class="btn ghost" onclick="window.arsMigrateTrialNow && window.arsMigrateTrialNow()">Merge into signed-in farm</button>
+          <button class="btn" onclick="window.arsSubscribeAndMigrate && window.arsSubscribeAndMigrate()">🚀 Create my account &amp; migrate</button>
         </div>
       </div></div>`);
   };
