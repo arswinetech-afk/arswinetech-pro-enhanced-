@@ -224,15 +224,26 @@
     try {
       const cfg = window.ARS_SUPABASE_CONFIG;
       const s = readState();
-      if (!cfg || !s || !navigator.onLine) return;
+      if (!cfg || !s || !navigator.onLine) return Promise.resolve({ ok: false, status: 0 });
       const f = dbAll()[s.farmId] || {};
-      fetch(cfg.url + '/rest/v1/trial_beacons?on_conflict=id', {
+      return fetch(cfg.url + '/rest/v1/trial_beacons?on_conflict=id', {
         method: 'POST',
         headers: { apikey: cfg.anonKey, Authorization: 'Bearer ' + cfg.anonKey, 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates,return=minimal' },
         body: JSON.stringify({ id: s.farmId, started_at: new Date(s.startedAt).toISOString(), expires_at: new Date(s.expiresAt).toISOString(), status: status || 'active', counts: countsOf(f), contact: s.contact || null, updated_at: new Date().toISOString() })
-      }).catch(() => {});
-    } catch (_) {}
+      }).then(r => ({ ok: r.ok, status: r.status })).catch(() => ({ ok: false, status: 0 }));
+    } catch (_) { return Promise.resolve({ ok: false, status: 0 }); }
   }
+
+  /* [FIX 110] manual, verifiable report — lets a trial device prove the
+     census pipeline and shows the real reason if it ever fails. */
+  window.arsBeaconNow = async function () {
+    const r = await beacon('active');
+    if (window.toast) {
+      if (r && r.ok) window.toast('📡 Reported! The platform owner will see this trial on the Trial dashboard.');
+      else window.toast('⚠ Report failed (HTTP ' + ((r && r.status) || 'offline') + '). Owner: run supabase/trial_beacons.sql once in Supabase → SQL Editor.');
+    }
+    return r;
+  };
 
   window.arsMergeFarmData = function (src, label) {
     const dst = window.F ? window.F() : null;

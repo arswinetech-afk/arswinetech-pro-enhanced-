@@ -365,6 +365,9 @@
             <button type="button" class="btn small" onclick="window.scheduleAutoPush && window.scheduleAutoPush(0)">🔄 Retry sync now</button>
           </div>` : ''}
 
+          <!-- [REBUILD FIX 110] trial devices: manual verifiable report -->
+          ${window.arsIsTrialFarm && window.arsIsTrialFarm() ? `<div style="margin:14px 0"><button type="button" class="btn ghost" style="width:100%" onclick="window.arsBeaconNow && window.arsBeaconNow()">📡 Report my trial to the developer dashboard</button></div>` : ''}
+
           <!-- [REBUILD FIX 106/108] owner tools (platform admin ONLY):
                live trial census + packet import -->
           ${window.ARSCloud && window.ARSCloud.isPlatformAdmin && window.ARSCloud.isPlatformAdmin() ? `<div style="display:flex;gap:8px;flex-wrap:wrap;margin:14px 0">
