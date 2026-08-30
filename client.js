@@ -1067,7 +1067,27 @@ window.ARSCloud = (() => {
     };
   }
 
+  /* [REBUILD FIX 111] lightweight change probe (~300 bytes) so heartbeats no
+     longer re-download the whole farm on every tick — protects the Supabase
+     free-plan egress quota. Returns row count + newest updated_at. */
+  async function farmSyncHead(farmId) {
+    loadSessionOnce();
+    const res = await fetch(`${c.url}/rest/v1/app_records?farm_id=eq.${encodeURIComponent(farmId)}&select=updated_at&order=updated_at.desc&limit=1`, {
+      headers: {
+        apikey: c.anonKey,
+        Authorization: `Bearer ${token || c.anonKey}`,
+        Prefer: 'count=exact',
+        Accept: 'application/json'
+      }
+    });
+    const range = res.headers.get('content-range') || '';
+    const count = parseInt(range.split('/').pop() || '0', 10) || 0;
+    const body = await res.json().catch(() => []);
+    return { ok: res.ok, count, maxUpdated: (Array.isArray(body) && body[0] && body[0].updated_at) || null };
+  }
+
   return {
+    farmSyncHead,
     signIn,
     signUp,
     signOut,

@@ -22,6 +22,7 @@
   let pollIntervalTimer = null;
   let lastPushTimestamp = 0;
   let lastPullTimestamp = 0;
+  let lastSyncHead = null; /* [FIX 111] cheap change-probe baseline */
   let isSyncingInProgress = false;
 
   function updateSyncIndicator(state, customLabel = '', tooltip = '') {
@@ -218,6 +219,21 @@
       return;
     }
 
+    /* [REBUILD FIX 111] EGRESS SAVER: probe count + newest updated_at first
+       (~300 B). Skip the full dataset download entirely when nothing changed. */
+    if (!force && typeof ARSCloud.farmSyncHead === 'function') {
+      try {
+        const head = await ARSCloud.farmSyncHead(fId);
+        if (head && head.ok) {
+          if (lastSyncHead && head.count === lastSyncHead.count && head.maxUpdated === lastSyncHead.maxUpdated) {
+            updateSyncIndicator('synced', 'Synced', 'Up to date — lightweight check, no download needed.');
+            return;
+          }
+          lastSyncHead = head;
+        }
+      } catch (_) { /* fall through to full pull */ }
+    }
+
     // Editing forms must not be replaced while a user is typing. A search
     // field is different: it is only a view filter, so we can refresh the
     // cloud data and restore the query afterward.
@@ -239,6 +255,10 @@
       updateSyncIndicator('syncing', 'Refreshing cloud...');
       const res = await ARSCloud.pullFarm(fId);
       lastPullTimestamp = Date.now();
+      /* [FIX 111] refresh the lightweight baseline after a real pull */
+      if (typeof ARSCloud.farmSyncHead === 'function') {
+        ARSCloud.farmSyncHead(fId).then(h => { if (h && h.ok) lastSyncHead = h; }).catch(() => {});
+      }
       if (!res || res.success === false) {
         updateSyncIndicator('error', 'Sync blocked', res?.reason || 'Cloud refresh failed; local data was not marked current.');
         return;
@@ -318,7 +338,7 @@
       if (document.visibilityState === 'visible') {
         performBackgroundPull(false);
       }
-    }, 18000);
+    }, 30000); /* [FIX 111] 18s→30s: full pulls now only happen after a changed probe */
   }
 
   /* ═══════════════════════════════════════════════════════════════════════════
