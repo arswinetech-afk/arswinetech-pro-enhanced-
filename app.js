@@ -2667,7 +2667,22 @@ function subscriptionPage() {
       ['full', 'Full Access', '₱1,299 / month', ['All pages and forecasting', 'Finance, POS and semen inventory', 'Cloud backup and multi-device sync', 'Priority farm support']],
       ['platform', 'Platform Admin', 'Private', ['All Full Access features', 'User and farm administration', 'Available only to ARSwineTech']]
     ];
-  document.getElementById('subscription').innerHTML = `<div class="panel subscription-hero"><div><div class="eyebrow">YOUR FARM PLAN</div><h2>${current==='platform'?'Platform Administration':current==='full'?'Full Access':'Starter'}${current==='platform'?'':' subscription'}</h2><p class="muted">${current==='platform'?'Verified platform owner access is active across all registered farms and application features.':'Upgrade when you are ready to unlock your farm’s complete operational toolkit.'}</p></div><span class="tag">${current==='full'?'ACTIVE · FULL ACCESS':current==='platform'?'PLATFORM ADMIN':'ACTIVE · STARTER'}</span></div><div class="section subscription-plans">${plans.map(p=>`<div class="panel plan-card ${p[0]==='full'?'featured':''}"><div class="plan-label">${p[0]==='full'?'MOST COMPLETE':'ARSWINETECH PRO'}</div><h2>${p[1]}</h2><div class="price">${p[2]}</div><ul>${p[3].map(x=>`<li>${x}</li>`).join('')}</ul>${p[0]==='platform'?'<button class="btn ghost" disabled>Administrator only</button>':p[0]===current?'<button class="btn ghost" disabled>Current plan</button>':`<button class="btn" onclick="choosePlan('${p[0]}')">${p[0]==='full'?'Upgrade to Full Access':'Select Starter'}</button>`}</div>`).join('')}</div><p class="muted" style="font-size:12px;margin-top:16px">Prototype checkout: selecting a plan updates access immediately. Production checkout should connect to Google Play Billing, Apple In-App Purchase, or a PCI-compliant payment provider and validate the subscription on the server.</p>`
+  const fp = (typeof F === 'function' && F()) ? F() : {}; /* [FIX 118] farm profile values */
+  document.getElementById('subscription').innerHTML = `<div class="panel subscription-hero"><div><div class="eyebrow">YOUR FARM PLAN</div><h2>${current==='platform'?'Platform Administration':current==='full'?'Full Access':'Starter'}${current==='platform'?'':' subscription'}</h2><p class="muted">${current==='platform'?'Verified platform owner access is active across all registered farms and application features.':'Upgrade when you are ready to unlock your farm’s complete operational toolkit.'}</p></div><span class="tag">${current==='full'?'ACTIVE · FULL ACCESS':current==='platform'?'PLATFORM ADMIN':'ACTIVE · STARTER'}</span></div><div class="section subscription-plans">${plans.map(p=>`<div class="panel plan-card ${p[0]==='full'?'featured':''}"><div class="plan-label">${p[0]==='full'?'MOST COMPLETE':'ARSWINETECH PRO'}</div><h2>${p[1]}</h2><div class="price">${p[2]}</div><ul>${p[3].map(x=>`<li>${x}</li>`).join('')}</ul>${p[0]==='platform'?'<button class="btn ghost" disabled>Administrator only</button>':p[0]===current?'<button class="btn ghost" disabled>Current plan</button>':`<button class="btn" onclick="choosePlan('${p[0]}')">${p[0]==='full'?'Upgrade to Full Access':'Select Starter'}</button>`}</div>`).join('')}</div><p class="muted" style="font-size:12px;margin-top:16px">Prototype checkout: selecting a plan updates access immediately. Production checkout should connect to Google Play Billing, Apple In-App Purchase, or a PCI-compliant payment provider and validate the subscription on the server.</p>
+  <div class="panel" style="margin-top:18px;padding:16px">
+    <div class="eyebrow">FARM PROFILE</div>
+    <h2 style="margin:6px 0 4px">🏠 Registration details</h2>
+    <p class="muted" style="font-size:12px;margin-bottom:12px">Used to auto-fill the Owner and Location on your Pedigree &amp; Lineage Reports. Save once — it syncs with your farm.</p>
+    <form onsubmit="saveFarmProfile(event)" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px">
+      <div class="field"><label>Owner full name</label><input name="owner" value="${esc(fp.owner || fp.owner_name || '')}" placeholder="e.g. Andy Resuena Albar"></div>
+      <div class="field"><label>Mobile number (optional)</label><input name="mobile" value="${esc(fp.mobile || '')}"></div>
+      <div class="field"><label>Farm address (optional)</label><input name="address" value="${esc(fp.address || '')}"></div>
+      <div class="field"><label>Barangay (optional)</label><input name="barangay" value="${esc(fp.barangay || '')}"></div>
+      <div class="field"><label>Municipality / City</label><input name="municipality" value="${esc(fp.municipality || '')}" placeholder="e.g. Ocampo"></div>
+      <div class="field"><label>Province</label><input name="province" value="${esc(fp.province || '')}" placeholder="e.g. Camarines Sur"></div>
+      <div style="grid-column:1/-1"><button class="btn">💾 Save farm profile</button></div>
+    </form>
+  </div>`
 }
 
 function choosePlan(plan) {
@@ -3655,3 +3670,24 @@ function arsBoarPhotoRemove(id) {
   if (rec) arsRemoveAnimalPhoto(rec, () => { if (window.openBoarDetailModal) window.openBoarDetailModal(rec); });
 }
 window.arsBoarPhotoRemove = arsBoarPhotoRemove;
+
+/* [REBUILD FIX 118] Save the Farm Profile (owner + registration address).
+   Stored on the farm record so it syncs with the farm and auto-fills the
+   Pedigree & Lineage Report's Farm Information block. */
+function saveFarmProfile(e) {
+  e.preventDefault();
+  const f = (typeof F === 'function' && F()) ? F() : null;
+  if (!f) { toast('No active farm.'); return; }
+  const d = new FormData(e.target);
+  f.owner = f.owner_name = String(d.get('owner') || '').trim();
+  f.mobile = String(d.get('mobile') || '').trim();
+  f.address = String(d.get('address') || '').trim();
+  f.barangay = String(d.get('barangay') || '').trim();
+  f.municipality = String(d.get('municipality') || '').trim();
+  f.province = String(d.get('province') || '').trim();
+  f.location = [f.municipality, f.province].filter(Boolean).join(', ') || f.address;
+  save();
+  renderAll();
+  toast('✓ Farm profile saved — reports now show your owner name and location.');
+}
+window.saveFarmProfile = saveFarmProfile;
