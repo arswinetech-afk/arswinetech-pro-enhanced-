@@ -781,8 +781,11 @@
     if (!tree || !boxesEl || !svg || !prLastNodes || !prLastNodes.length) return;
     const W = tree.clientWidth, H = tree.clientHeight;
     if (!W || !H) return;
-    const gap = 10;
-    const ws = PR_FRAC.map(f => Math.floor(W * f));
+    /* [FIX 122] reserve the inter-column gaps BEFORE splitting the width, so
+       the 5 columns + 4 gaps fit exactly (last column no longer overflows). */
+    const gap = 8;
+    const avail = Math.max(200, W - gap * 4);
+    const ws = PR_FRAC.map(f => Math.floor(avail * f));
     const xs = []; let acc = 0;
     ws.forEach((w, g) => { xs[g] = acc; acc += w + gap; });
     const leafRows = prLastNodes.filter(r => !r.s && !r.d).length || 1;
