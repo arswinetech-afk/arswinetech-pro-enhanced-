@@ -662,11 +662,11 @@
 
   function prHash(s) { let h = 5381; s = String(s || ''); for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0; return h; }
 
-  /* [FIX 115] "shadow" placeholder — a neutral monochrome silhouette used
-     ONLY when the animal has no registered photo. Real registered photos
-     (uploaded on the sow card / boar profile) always take priority. */
+  /* [FIX 116] "shadow" placeholder — a smooth professional vector silhouette
+     (assets/pig-shadow.jpg) used ONLY when the animal has no registered
+     photo. Real registered photos always take priority. */
   function prPig() {
-    return `<svg class="pr-pig" viewBox="0 0 64 48" preserveAspectRatio="xMidYMid slice" aria-hidden="true"><rect width="64" height="48" fill="#edeff0"/><g fill="#aeb6bc"><path d="M13.2 25.6c-3-.7-5-2.7-4.6-5.3.1-.8 1.2-.9 1.5-.1.6 1.6 1.9 2.6 3.6 2.9z"/><ellipse cx="29.5" cy="27.5" rx="16.5" ry="10.8"/><circle cx="46" cy="21" r="8.2"/><path d="M41 14.2c-1.6-2.7-1.3-4.8.4-6.2 1 1.6 2.2 2.7 3.7 3.3z"/><path d="M49 13.2c.2-3 1.4-4.7 3.6-5.1.3 1.9 1 3.4 2 4.7z"/><path d="M52 21.6c2 .2 3.3 1 3.3 2.1s-1.3 1.9-3.3 1.7z"/><rect x="17.5" y="33" width="4.8" height="10" rx="2.3"/><rect x="26" y="35" width="4.8" height="10" rx="2.3"/><rect x="34.5" y="34" width="4.8" height="10" rx="2.3"/><rect x="41.5" y="31.5" width="4.8" height="10" rx="2.3"/></g></svg>`;
+    return `<img class="pr-pig" src="assets/pig-shadow.jpg" alt="">`;
   }
 
   function prUnknown(sex) { return { id: '', name: 'UNKNOWN', breed: '—', kind: sex === 'M' ? 'Boar' : 'Sow', sex, exists: false, sireNode: null, damNode: null }; }
@@ -830,6 +830,12 @@
     } : null, 4);
     if (!currentPedIsBatch && (a.photo || (root.hit && root.hit.photo))) root.photo = a.photo || root.hit.photo;
 
+    /* [FIX 116] auto-detect sex: a registered sow is Female, a registered
+       boar is Male — the report never shows a blank sex for breeders. */
+    const inList = list => (list || []).some(x => x === a || (a && x && ((a.id && (x.id === a.id || x.name === a.id)) || (a.name && (x.name === a.name || x.id === a.name)))));
+    const effSex = a.sex || (currentPedIsBatch ? '' : (inList(farm.sows) ? 'F' : inList(farm.boars) ? 'M' : ''));
+    if (effSex) root.sex = effSex;
+
     const norm = (n, sex) => n || prUnknown(sex);
     const cols = [[root]];
     for (let g = 1; g <= 4; g++) {
@@ -858,7 +864,7 @@
     const reportNo = `ARS-PED-${now.getFullYear()}-${String(prHash(a.id || a.name) % 100000).padStart(5, '0')}`;
     const verifyCode = 'ARS-VPY-' + prHash((a.id || a.name) + '|' + (farm.name || '')).toString(36).toUpperCase().padStart(6, '0').slice(0, 6);
     const regNo = a.registration_no || a.reg_no || (`ARS-${now.getFullYear()}-${String(prHash('reg:' + (a.id || a.name)) % 1000000).padStart(6, '0')}`);
-    const sexLabel = currentPedIsBatch ? 'Piglet Batch 🐖' : (a.sex === 'M' ? 'Male ♂' : a.sex === 'F' ? 'Female ♀' : '—');
+    const sexLabel = currentPedIsBatch ? 'Piglet Batch 🐖' : (effSex === 'M' ? 'Male ♂' : effSex === 'F' ? 'Female ♀' : '—');
 
     /* [FIX 114] compact payload → low-density QR that stays crisp at 62px. */
     const qr = window.generateCertQRCode
@@ -998,12 +1004,12 @@
                 prRow('Breed', a.breed || '—') +
                 prRow('Sex', sexLabel) +
                 prRow('Date of Birth', (a.birth || a.dob) ? fmtDP(a.birth || a.dob) : '—') +
-                prRow('Birth Farm', a.birth_farm || farm.name || '—') +
-                prRow('Ear Tag', a.ear_tag || a.earTag || a.id || '—') +
+                prRow('Birth Farm', a.birth_farm || a.source_farm || a.source || a.supplier || farm.name || '—') + /* [FIX 116] source farm wins; current farm only when blank */
+                prRow('Ear Tag', a.ear_tag || a.earTag || '—') + /* [FIX 116] real ear tag only — never the system ID */
                 prRow('Generation', a.generation || a.gen || '—') +
                 prRow('Status', a.status || (currentPedIsBatch ? 'Piglet Batch' : 'Active')) +
                 prRow('Registration No.', regNo))}
-              <div class="pr-subj ${a.sex === 'M' ? 'pm' : a.sex === 'F' ? 'pf' : 'px'}">
+              <div class="pr-subj ${effSex === 'M' ? 'pm' : effSex === 'F' ? 'pf' : 'px'}">
                 <div class="pr-ph-wrap">${root.photo ? `<img src="${root.photo}" alt="">` : prPig()}</div>
                 <div class="pr-plate">${escP(a.name || a.id || '—')}<small>${escP(a.id || '')}</small></div>
               </div>

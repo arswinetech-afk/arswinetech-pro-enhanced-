@@ -808,6 +808,8 @@ const configs = {
     fields: [
       ['id', 'Sow ID', 'text'],
       ['name', 'Sow Name', 'text'],
+      /* [FIX 116] physical ear tag — shown in the Pedigree & Lineage Report */
+      ['ear_tag', 'Ear Tag (optional)', 'text'],
       ['sire', 'Sire', 'text'],
       ['dam', 'Dam', 'text'],
       ['breed', 'Breed', 'select:Large White,Landrace,Duroc,Yorkshire,Crossbred,Custom / Other Breed'],
