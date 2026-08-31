@@ -672,6 +672,10 @@
   function prUnknown(sex) { return { id: '', name: 'UNKNOWN', breed: '—', kind: sex === 'M' ? 'Boar' : 'Sow', sex, exists: false, sireNode: null, damNode: null }; }
 
   function prBox(n, gen, key, term) { /* [FIX 119] term = branch terminates here */
+    if (!n.exists) { /* [FIX 120] greyed-out unrecorded position */
+      const icon = n.sex === 'M' ? '♂' : '♀';
+      return `<div class="pr-box pr-ghost pr-g${gen}" data-prk="${key}" style="width:100%;height:100%"><span class="pr-sex">${icon}</span>${prPig()}<div class="pr-tx"><b>Not recorded</b><small>—</small></div></div>`;
+    }
     const male = n.sex === 'M', female = n.sex === 'F';
     const icon = male ? '♂' : female ? '♀' : '🐖';
     const cls = 'pr-box ' + (male ? 'pr-m' : female ? 'pr-f' : 'pr-x') + ' pr-g' + gen;
@@ -793,9 +797,10 @@
       boxes += `<div class="pr-absbox" style="position:absolute;left:${xs[r.gen]}px;top:${(y - h / 2).toFixed(1)}px;width:${w}px;height:${h}px">${prBox(r.n, r.gen, r.key, term)}</div>`;
     });
     prLastNodes.forEach(r => {
-      [['s', 'pr-line-m'], ['d', 'pr-line-f']].forEach(([k, cls]) => {
+      ['s', 'd'].forEach(k => {
         const p = r[k];
         if (!p) return;
+        const cls = p.ghost ? 'pr-line-g' : (p.n.sex === 'M' ? 'pr-line-m' : 'pr-line-f');
         const x1 = r.X + r.BW - 1, y1 = r.Y, x2 = xs[p.gen] + 1, y2 = p.Y;
         const mx = Math.round((x1 + x2) / 2);
         lines += `<path d="M ${x1} ${y1.toFixed(1)} H ${mx} V ${y2.toFixed(1)} H ${x2}" class="${cls}"/>`;
@@ -866,21 +871,24 @@
        terminates where the sire/dam is not in the database. */
     const prNodes = [];
     let prSlots = 0;
-    (function walk(n, gen, key) {
-      if (!n || !n.exists) return null;
-      const s = gen < 4 ? walk(n.sireNode, gen + 1, key + 's') : null;
-      const d = gen < 4 ? walk(n.damNode, gen + 1, key + 'd') : null;
+    /* [FIX 120] the full 4-generation grid returns — but UNRECORDED positions
+       render as quiet greyed-out "not recorded" boxes (shadow photo, faded
+       text, light connectors) while recorded ancestors keep full color. */
+    (function walk(node, gen, key) {
+      const live = node && node.exists ? node : null;
+      const s = gen < 4 ? walk(live ? live.sireNode : null, gen + 1, key + 's') : null;
+      const d = gen < 4 ? walk(live ? live.damNode : null, gen + 1, key + 'd') : null;
       let y;
       if (s && d) y = (s.y + d.y) / 2;
       else if (s || d) y = (s || d).y;
       else y = (prSlots++) * 40 + 20;
-      const rec = { n, gen, key, y, s, d };
+      const rec = { n: live || { name: '', id: '', sex: key.endsWith('s') ? 'M' : 'F', exists: false }, gen, key, y, s, d, ghost: !live };
       prNodes.push(rec);
       return rec;
     })(root, 0, '0');
     prLastNodes = prNodes;
-    const maxGen = prNodes.reduce((m, r) => Math.max(m, r.gen), 0);
-    const genLabel = a.generation || a.gen || (maxGen === 0 ? 'Foundation' : 'F' + maxGen);
+    const recDepth = prNodes.filter(r => !r.ghost).reduce((m, r) => Math.max(m, r.gen), 0);
+    const genLabel = a.generation || a.gen || (recDepth === 0 ? 'Foundation' : 'F' + recDepth);
 
     /* Inbreeding & relationship analysis. */
     const sireRef0 = root.sireNode && root.sireNode.exists ? (root.sireNode.id || root.sireNode.name) : '';
@@ -963,6 +971,12 @@
         #prLines{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
         .pr-line-m{stroke:#3f7fbf;stroke-width:1.5;fill:none}
         .pr-line-f{stroke:#e0619c;stroke-width:1.5;fill:none}
+        .pr-line-g{stroke:#d5dade;stroke-width:1.1;fill:none}
+        .pr-ghost{border-color:#d9dee1;background:#f3f5f5}
+        .pr-ghost .pr-tx b{color:#aeb6bc;font-weight:600}
+        .pr-ghost .pr-tx small{color:#c3cacd}
+        .pr-ghost .pr-sex{opacity:.4}
+        .pr-ghost .pr-pig{opacity:.55;filter:grayscale(1)}
         .pr-col{display:flex;flex-direction:column;justify-content:space-around;min-width:0;gap:2px}
         .pr-col.c0{width:12%}.pr-col.c1{width:19%}.pr-col.c2{width:21%}.pr-col.c3{width:22%}.pr-col.c4{width:26%}
         .pr-box{position:relative;background:#fff;border:1.4px solid #9aa39a;border-radius:3px;display:flex;align-items:center;gap:5px;padding:3px 5px}
