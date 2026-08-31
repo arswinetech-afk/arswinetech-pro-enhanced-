@@ -5,7 +5,7 @@
 //     script could run against a brand-new index.html (old JS + new DOM = boot crashes).
 //   • Icons / images / fonts      → cache-first (content rarely changes).
 //   • Bump CACHE_NAME on every release; activate() purges older caches.
-const CACHE_NAME = 'arswinetech-pro-v163-column-fit-2026-08-31';
+const CACHE_NAME = 'arswinetech-pro-v164-edge-sync-scale-2026-08-31';
 const APP_SHELL = [
   './',
   './index.html',
@@ -85,6 +85,9 @@ self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
   const url = new URL(event.request.url);
   if (url.origin !== self.location.origin) return;
+  /* [FIX 124] sync head probes must always reach the edge live — never
+     serve them from the offline cache (stale head = broken sync). */
+  if (url.pathname === '/ars-head') return;
 
   const fromNetworkThenCache = () =>
     fetch(event.request)

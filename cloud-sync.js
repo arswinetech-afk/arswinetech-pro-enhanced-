@@ -197,6 +197,10 @@
           queueSafeRetry(5000);
         } else {
           updateSyncIndicator('synced', 'Synced', `✓ ${res?.count || 0} changed records verified with the cloud.`);
+          /* [FIX 124] refresh the edge head so other devices see the change now */
+          if (typeof ARSCloud.edgeHeadPut === 'function' && typeof ARSCloud.farmSyncHead === 'function') {
+            ARSCloud.farmSyncHead(fId).then(h => { if (h && h.ok) ARSCloud.edgeHeadPut(fId, h); }).catch(() => {});
+          }
         }
       } catch (e) {
         updateSyncIndicator('pending', 'Pending changes', `${e.message || String(e)} A safe retry is scheduled.`);
@@ -223,7 +227,10 @@
        (~300 B). Skip the full dataset download entirely when nothing changed. */
     if (!force && typeof ARSCloud.farmSyncHead === 'function') {
       try {
-        const head = await ARSCloud.farmSyncHead(fId);
+        /* [FIX 124] ask the Cloudflare edge cache first (zero Supabase
+           egress); fall back to the direct probe when absent/empty. */
+        let head = (typeof ARSCloud.edgeHeadGet === 'function') ? await ARSCloud.edgeHeadGet(fId) : null;
+        if (!head) head = await ARSCloud.farmSyncHead(fId);
         if (head && head.ok) {
           if (lastSyncHead && head.count === lastSyncHead.count && head.maxUpdated === lastSyncHead.maxUpdated) {
             updateSyncIndicator('synced', 'Synced', 'Up to date — lightweight check, no download needed.');
@@ -257,7 +264,7 @@
       lastPullTimestamp = Date.now();
       /* [FIX 111] refresh the lightweight baseline after a real pull */
       if (typeof ARSCloud.farmSyncHead === 'function') {
-        ARSCloud.farmSyncHead(fId).then(h => { if (h && h.ok) lastSyncHead = h; }).catch(() => {});
+        ARSCloud.farmSyncHead(fId).then(h => { if (h && h.ok) { lastSyncHead = h; if (typeof ARSCloud.edgeHeadPut === 'function') ARSCloud.edgeHeadPut(fId, h); } }).catch(() => {});
       }
       if (!res || res.success === false) {
         updateSyncIndicator('error', 'Sync blocked', res?.reason || 'Cloud refresh failed; local data was not marked current.');
@@ -332,13 +339,23 @@
       updateSyncIndicator('offline', 'Offline', 'Working offline. Records saved on phone.');
     });
 
-    // 5. Periodic background heartbeat polling every 18 seconds
-    if (pollIntervalTimer) clearInterval(pollIntervalTimer);
-    pollIntervalTimer = setInterval(() => {
-      if (document.visibilityState === 'visible') {
-        performBackgroundPull(false);
-      }
-    }, 30000); /* [FIX 111] 18s→30s: full pulls now only happen after a changed probe */
+    /* 5. [FIX 123] ADAPTIVE HEARTBEAT WITH JITTER — replaces the lockstep
+       30s setInterval. Every device draws its own rhythm: 30s + 0–10s random
+       jitter while visible, 2–2.5min while hidden. A 10,000-device fleet
+       spreads its probes instead of hitting the backend in synchronized
+       waves (no thundering herd); behavior on visibility/online events is
+       unchanged (those still probe immediately). */
+    if (pollIntervalTimer) { clearTimeout(pollIntervalTimer); pollIntervalTimer = null; }
+    const scheduleHeartbeat = () => {
+      const hidden = document.visibilityState !== 'visible';
+      const base = hidden ? 120000 : 30000;
+      const jitter = Math.floor(Math.random() * (hidden ? 30000 : 10000));
+      pollIntervalTimer = setTimeout(() => {
+        if (document.visibilityState === 'visible') performBackgroundPull(false);
+        scheduleHeartbeat();
+      }, base + jitter);
+    };
+    scheduleHeartbeat();
   }
 
   /* ═══════════════════════════════════════════════════════════════════════════

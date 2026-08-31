@@ -1086,8 +1086,50 @@ window.ARSCloud = (() => {
     return { ok: res.ok, count, maxUpdated: (Array.isArray(body) && body[0] && body[0].updated_at) || null };
   }
 
+  /* [REBUILD FIX 124] OPTIONAL EDGE HEAD CACHE (Cloudflare KV via _worker.js).
+     The "did my farm change?" probe is served from the Cloudflare edge at
+     /ars-head instead of Supabase — zero DB egress for unchanged polls.
+     Safety rules:
+       • auto-detected: if /ars-head is missing or misbehaves, the edge layer
+         disables itself for the session and the direct probe is used;
+       • read-only cache: real pulls/pushes always go straight to Supabase;
+       • writes are fire-and-forget AFTER a successful Supabase write;
+       • 60s KV TTL bounds staleness when an older app version writes. */
+  let edgeHeadDisabled = false;
+  async function edgeHeadGet(farmId) {
+    if (edgeHeadDisabled || !farmId) return null;
+    try {
+      const res = await fetch(`/ars-head?farm=${encodeURIComponent(farmId)}`, { headers: { Accept: 'application/json' } });
+      const ct = res.headers.get('content-type') || '';
+      if (res.status === 404 && ct.includes('application/json')) {
+        const j = await res.json().catch(() => null);
+        if (j && j.missing) return null; /* edge is live but empty → caller falls back once */
+      }
+      if (!res.ok || !ct.includes('application/json')) { edgeHeadDisabled = true; return null; }
+      const j = await res.json();
+      if (j && j.farm === farmId && typeof j.count === 'number') {
+        return { ok: true, count: j.count, maxUpdated: j.maxUpdated || null, edge: true };
+      }
+      edgeHeadDisabled = true;
+      return null;
+    } catch (_) { return null; }
+  }
+  function edgeHeadPut(farmId, head) {
+    if (edgeHeadDisabled || !farmId || !head || !head.ok) return;
+    try {
+      fetch('/ars-head', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ farm: farmId, count: head.count, maxUpdated: head.maxUpdated }),
+        keepalive: true
+      }).catch(() => {});
+    } catch (_) { /* never block sync on the cache */ }
+  }
+
   return {
     farmSyncHead,
+    edgeHeadGet,
+    edgeHeadPut,
     signIn,
     signUp,
     signOut,
