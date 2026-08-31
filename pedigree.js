@@ -659,13 +659,12 @@
 
   function prHash(s) { let h = 5381; s = String(s || ''); for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0; return h; }
 
-  /* Placeholder "photo" — a clean pig silhouette tinted by sex, used when no
-     real photo is recorded for an ancestor (spec allows placeholders). */
+  /* [FIX 114] placeholder "photo" — professional herdbook-style stock images
+     (sow / boar / piglet) bundled in assets/, used when an ancestor has no
+     recorded photo of its own. */
   function prPig(tone) {
-    const bg = tone === 'M' ? '#e8f1fa' : tone === 'F' ? '#fbeef4' : '#f1efe9';
-    const c = tone === 'M' ? '#9dbfe0' : tone === 'F' ? '#e2aec7' : '#c9c2b4';
-    const d = tone === 'M' ? '#6d9cc9' : tone === 'F' ? '#cf7fa6' : '#a9a294';
-    return `<svg class="pr-pig" viewBox="0 0 64 48" preserveAspectRatio="xMidYMid slice" aria-hidden="true"><rect width="64" height="48" fill="${bg}"/><g fill="${c}"><path d="M13 25q-7-2-5-8" stroke="${c}" stroke-width="2.4" fill="none" stroke-linecap="round"/><ellipse cx="29" cy="27" rx="17" ry="11"/><circle cx="46" cy="21" r="8.5"/><path d="M41 14l-3.5-6 5.5 2z"/><path d="M49 13l2-6 3.5 6z"/><rect x="17" y="33" width="4.4" height="9" rx="2"/><rect x="26" y="35" width="4.4" height="9" rx="2"/><rect x="35" y="34" width="4.4" height="9" rx="2"/></g><ellipse cx="52.5" cy="23" rx="3.6" ry="2.8" fill="${d}"/><circle cx="45" cy="19" r="1.2" fill="#333"/></svg>`;
+    const src = tone === 'M' ? 'assets/ph-boar.jpg' : tone === 'F' ? 'assets/ph-sow.jpg' : 'assets/ph-piglet.jpg';
+    return `<img class="pr-pig" src="${src}" alt="" loading="lazy">`;
   }
 
   function prUnknown(sex) { return { id: '', name: 'UNKNOWN', breed: '—', kind: sex === 'M' ? 'Boar' : 'Sow', sex, exists: false, sireNode: null, damNode: null }; }
@@ -807,6 +806,7 @@
     if (!a) { if (window.toast) window.toast('Open a pedigree tree first.'); return; }
     const farm = (typeof F === 'function' ? F() : {}) || {};
     const farmLogo = farm.logo || farm.logo_url || document.querySelector('.sidebar .logo-img')?.src || 'assets/arswinetech-logo.png';
+    const appLogoSrc = document.querySelector('.sidebar .logo-img')?.src || 'assets/arswinetech-logo.png'; /* [FIX 114] seal uses the real app logo */
     const fid = (typeof farmId !== 'undefined' && farmId) ? farmId : (farm.id || farm.farm_id || '');
 
     /* Deep 4-generation tree from the subject's recorded lineage. */
@@ -848,16 +848,9 @@
     const regNo = a.registration_no || a.reg_no || (`ARS-${now.getFullYear()}-${String(prHash('reg:' + (a.id || a.name)) % 1000000).padStart(6, '0')}`);
     const sexLabel = currentPedIsBatch ? 'Piglet Batch 🐖' : (a.sex === 'M' ? 'Male ♂' : a.sex === 'F' ? 'Female ♀' : '—');
 
+    /* [FIX 114] compact payload → low-density QR that stays crisp at 62px. */
     const qr = window.generateCertQRCode
-      ? window.generateCertQRCode(JSON.stringify({
-          app: 'ARSwineTech Pro', doc: 'PEDIGREE & LINEAGE REPORT', reportNo,
-          farm: farm.name || '', id: a.id || a.name, name: a.name || a.id,
-          kind: currentPedIsBatch ? 'Piglet Batch' : (a.kind || 'Animal'),
-          breed: a.breed || '—', birth: a.birth || a.dob || '',
-          sire: sireRef0 || 'unknown', dam: damRef0 || 'unknown',
-          generations: 4, screening: `${riskLevel} (${fCoef}% F)`,
-          verification: verifyCode, generated: now.toISOString()
-        }), reportNo)
+      ? window.generateCertQRCode(`ARSWINETECH PRO|PEDIGREE|${reportNo}|${verifyCode}|${a.id || a.name}|${farm.name || ''}|F=${fCoef}%`, reportNo)
       : '';
 
     const colHead = ['ANIMAL', 'PARENTS', 'GRANDPARENTS', 'GREAT-GRANDPARENTS', '4TH GENERATION'];
@@ -902,8 +895,8 @@
         .pr-subj.pf .pr-plate{background:#f9dcea;color:#a52a68}
         .pr-subj.px .pr-plate{background:#eceade;color:#5d5a4a}
         .pr-verify{display:flex;gap:7px;padding:6px;align-items:center}
-        .pr-verify .pr-qr{flex:0 0 64px;width:64px;height:64px}
-        .pr-verify .pr-qr svg,.pr-verify .pr-qr img,.pr-verify .pr-qr canvas{width:64px!important;height:64px!important}
+        .pr-verify .pr-qr{flex:0 0 66px;width:66px;height:66px;position:relative}
+        #pedigreeReport .pr-qr .cert-qr{width:66px!important;height:66px!important;min-width:0!important;min-height:0!important;border-width:2px!important;border-radius:4px!important;padding:2px!important;box-sizing:border-box!important}
         .pr-verify ul{margin:0;padding:0;list-style:none;font-size:7.8px;color:#33413a;line-height:1.55}
         .pr-verify ul li::before{content:'✓ ';color:#1e6b3a;font-weight:700}
         .pr-verify .pr-vcode{font-size:8px;margin-top:3px;color:#1e6b3a;font-weight:700}
@@ -920,7 +913,7 @@
         .pr-box{position:relative;background:#fff;border:1.4px solid #9aa39a;border-radius:3px;display:flex;align-items:center;gap:5px;padding:3px 5px}
         .pr-m{border-color:#3f7fbf}.pr-f{border-color:#e0619c}.pr-x{border-color:#b3ac9d}
         .pr-unk{border-style:dashed;border-color:#b9bfb9;background:#fafaf7}
-        .pr-box .pr-pig{width:30px;height:24px;flex:0 0 30px;border-radius:2px;display:block}
+        .pr-box .pr-pig{width:30px;height:24px;flex:0 0 30px;border-radius:2px;display:block;object-fit:cover;background:#eceae4;border:1px solid #e0ded6}
         .pr-tx{min-width:0;line-height:1.3}
         .pr-tx b{display:block;font-size:8.4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
         .pr-tx small{display:block;font-size:7.4px;color:#41505c;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -954,7 +947,9 @@
         .pr-legend .sym.m{color:#2d6bb9}.pr-legend .sym.f{color:#d34d90}
         .pr-legend .lline{width:26px;height:0;border-top:2px solid #3f7fbf}
         .pr-legend .lline.f{border-top-color:#e0619c}
-        .pr-seal{flex:0 0 92px;display:flex;align-items:center;justify-content:center}
+        .pr-seal{flex:0 0 92px;position:relative;width:88px;height:88px;margin:auto}
+        .pr-seal svg.pr-seal-ring{position:absolute;inset:0;width:100%;height:100%}
+        .pr-seal-logo{position:absolute;left:50%;top:50%;width:50px;height:50px;transform:translate(-50%,-50%);object-fit:contain;background:#fff;border-radius:50%}
         .pr-disc{background:#1e6b3a;color:#fff;text-align:center;font-size:7.6px;letter-spacing:.4px;padding:3px 0}
         @media print{
           @page{size:A4 landscape;margin:0}
@@ -1042,13 +1037,13 @@
                 <div class="pr-li"><span class="lline f"></span> Dam Line</div>
               </div>
               <div class="pr-seal">
-                <svg viewBox="0 0 100 100" width="86" height="86">
-                  <circle cx="50" cy="50" r="48" fill="#fff" stroke="#1e6b3a" stroke-width="3"/>
-                  <circle cx="50" cy="50" r="34" fill="#1e6b3a"/>
-                  <path id="prSealArc" d="M 50,50 m -41,0 a 41,41 0 1,1 82,0 a 41,41 0 1,1 -82,0" fill="none"/>
-                  <text font-size="8.2" font-weight="700" fill="#1e6b3a" letter-spacing="1.5"><textPath href="#prSealArc" startOffset="0%">ARSWINETECH PRO ★ VERIFIED &amp; REGISTERED ★</textPath></text>
-                  <g transform="translate(32,38) scale(0.56)" fill="#fff"><ellipse cx="29" cy="27" rx="17" ry="11"/><circle cx="46" cy="21" r="8.5"/><path d="M41 14l-3.5-6 5.5 2z"/><path d="M49 13l2-6 3.5 6z"/><rect x="17" y="33" width="4.4" height="9" rx="2"/><rect x="26" y="35" width="4.4" height="9" rx="2"/><rect x="35" y="34" width="4.4" height="9" rx="2"/></g>
+                <svg class="pr-seal-ring" viewBox="0 0 100 100">
+                  <circle cx="50" cy="50" r="48.5" fill="#fff" stroke="#1e6b3a" stroke-width="2.5"/>
+                  <circle cx="50" cy="50" r="31" fill="#fff" stroke="#1e6b3a" stroke-width="1.4"/>
+                  <path id="prSealArc" d="M 50,50 m -40,0 a 40,40 0 1,1 80,0 a 40,40 0 1,1 -80,0" fill="none"/>
+                  <text font-size="7.4" font-weight="700" fill="#1e6b3a" letter-spacing="1.1"><textPath href="#prSealArc" startOffset="0%">ARSWINETECH PRO ★ VERIFIED &amp; REGISTERED ★</textPath></text>
                 </svg>
+                <img class="pr-seal-logo" src="${appLogoSrc}" alt="ARSwineTech Pro" onerror="this.style.visibility='hidden'">
               </div>
             </div>
             <div class="pr-disc">This report is system-generated and does not require physical signature.</div>
