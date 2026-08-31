@@ -3160,7 +3160,14 @@ async function finishAuthenticated(email, suppliedUser = null, options = {}) {
       console.warn('[Platform Admin] Farm catalog read failed:', error);
     }
   } else {
-    window.arsServerFarms = [];
+    /* [FIX 117] members also get their farm's registration meta (owner,
+       municipality, province) so reports can auto-fill Farm Information. */
+    try {
+      const memberFarms = await ARSCloud.listFarms();
+      window.arsServerFarms = Array.isArray(memberFarms) ? memberFarms : [];
+    } catch (_) {
+      window.arsServerFarms = [];
+    }
   }
 
   if (!platformAdmin && !activeMemberships.length) {
@@ -3438,8 +3445,17 @@ async function completeOnboarding(e) {
   err.classList.remove('show');
   try {
     const id = await ARSCloud.onboard(data);
+    /* [FIX 117] keep the registration details (owner name, address,
+       municipality, province) on the local farm record so reports can
+       auto-fill Farm Information. */
+    const ownerName = ((data.first_name || '') + ' ' + (data.last_name || '')).trim();
     DB[id] = {
       name: data.farm_name,
+      owner: ownerName, owner_name: ownerName,
+      mobile: data.mobile_number || '',
+      address: data.farm_address || '', barangay: data.barangay || '',
+      municipality: data.municipality || '', province: data.province || '',
+      location: [data.municipality, data.province].filter(Boolean).join(', '),
       sows: [], piglets: [], feed: [], semen: [], transactions: [], sales: [],
       reminders: [], medicines: [], vaccinations: [], reservations: [],
       subscription: 'starter'

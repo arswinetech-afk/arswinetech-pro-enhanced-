@@ -366,7 +366,7 @@ window.ARSCloud = (() => {
 
   async function listFarms() {
     try {
-      const res = await request('/rest/v1/farms?select=id,name,logo_url&order=created_at.asc', {}, { requireAuth: true });
+      const res = await request('/rest/v1/farms?select=*&order=created_at.asc', {}, { requireAuth: true }); /* [FIX 117] full row: owner + location captured at registration */
       return Array.isArray(res) ? res : [];
     } catch (e) {
       console.warn('[ARSCloud] listFarms error:', e);

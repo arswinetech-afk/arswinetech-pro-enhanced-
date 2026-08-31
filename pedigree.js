@@ -820,6 +820,13 @@
     const farmLogo = farm.logo || farm.logo_url || document.querySelector('.sidebar .logo-img')?.src || 'assets/arswinetech-logo.png';
     const appLogoSrc = document.querySelector('.sidebar .logo-img')?.src || 'assets/arswinetech-logo.png'; /* [FIX 114] seal uses the real app logo */
     const fid = (typeof farmId !== 'undefined' && farmId) ? farmId : (farm.id || farm.farm_id || '');
+    /* [FIX 117] auto-fill owner & location from registration data — local
+       farm record first, then the verified server farm row. */
+    const sfMeta = (Array.isArray(window.arsServerFarms) ? window.arsServerFarms : []).find(x => String(x.id) === String(fid)) || {};
+    const farmOwner = farm.owner || farm.owner_name || sfMeta.owner_name || sfMeta.owner ||
+      [sfMeta.owner_first_name || sfMeta.first_name, sfMeta.owner_last_name || sfMeta.last_name].filter(Boolean).join(' ') || '';
+    const farmLoc = farm.location || farm.address || farm.municipality ||
+      [sfMeta.municipality, sfMeta.province].filter(Boolean).join(', ') || sfMeta.farm_address || sfMeta.address || '';
 
     /* Deep 4-generation tree from the subject's recorded lineage. */
     const root = buildAnimalNode(a.id || a.name, 'root', 0, 'Subject Animal', currentPedIsBatch ? {
@@ -988,7 +995,7 @@
         <div class="pr-page">
           <header class="pr-head">
             <img class="pr-logo" src="${farmLogo}" alt="logo" onerror="this.style.visibility='hidden'">
-            <div class="pr-brand"><b>ARSwineTech Pro</b><small>Digital Herdbook &amp; Swine Management System</small></div>
+            <div class="pr-brand"><b>${escP(farm.name || 'ARSwineTech Pro')}</b><small>Digital Herdbook &amp; Swine Management System · ARSwineTech Pro</small></div>
             <div class="pr-title"><h1>PEDIGREE &amp; LINEAGE REPORT</h1><small>4-GENERATION PEDIGREE DIAGRAM</small></div>
             <div class="pr-meta">
               <div><span>Report No.:</span><b>${reportNo}</b></div>
@@ -1042,7 +1049,7 @@
           <footer>
             <div class="pr-foot">
               <div class="pr-fcell pr-farm"><h4>Farm Information</h4>
-                ${prRow('Farm ID', fid || '—')}${prRow('Farm Name', farm.name || '—')}${prRow('Location', farm.location || farm.address || farm.municipality || '—')}${prRow('Owner', farm.owner || farm.owner_name || '—')}
+                ${prRow('Farm ID', fid || '—')}${prRow('Farm Name', farm.name || '—')}${prRow('Location', farmLoc || '—')}${prRow('Owner', farmOwner || '—')}
               </div>
               <div class="pr-fcell pr-cert"><h4>Certification</h4>
                 <p>This is to certify that the above information is true and correct based on the records of ARSwineTech Pro.</p>
