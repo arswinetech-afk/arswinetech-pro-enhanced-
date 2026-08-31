@@ -671,19 +671,19 @@
 
   function prUnknown(sex) { return { id: '', name: 'UNKNOWN', breed: '—', kind: sex === 'M' ? 'Boar' : 'Sow', sex, exists: false, sireNode: null, damNode: null }; }
 
-  function prBox(n, gen, key) {
+  function prBox(n, gen, key, term) { /* [FIX 119] term = branch terminates here */
     const male = n.sex === 'M', female = n.sex === 'F';
-    const tone = male ? 'M' : female ? 'F' : 'X';
     const icon = male ? '♂' : female ? '♀' : '🐖';
-    const cls = 'pr-box ' + (male ? 'pr-m' : female ? 'pr-f' : 'pr-x') + (n.exists ? '' : ' pr-unk') + ' pr-g' + gen;
+    const cls = 'pr-box ' + (male ? 'pr-m' : female ? 'pr-f' : 'pr-x') + ' pr-g' + gen;
     const photo = n.photo ? `<img class="pr-pig" src="${n.photo}" alt="">` : prPig();
+    const termLine = term ? `<i class="pr-term">Ancestry not recorded</i>` : '';
     if (gen === 0) {
-      return `<div class="${cls}" data-prk="${key}"><span class="pr-sex">${icon}</span><div class="pr-ph-wrap">${photo}</div><div class="pr-plate">${escP(n.name || n.id || '—')}<small>${escP(n.id || '')}</small></div></div>`;
+      return `<div class="${cls}" data-prk="${key}" style="width:100%;height:100%"><span class="pr-sex">${icon}</span><div class="pr-ph-wrap">${photo}</div><div class="pr-plate">${escP(n.name || n.id || '—')}<small>${escP(n.id || '')}</small>${term ? '<small class="pr-term">ANCESTRY NOT RECORDED</small>' : ''}</div></div>`;
     }
     if (gen === 4) {
-      return `<div class="${cls}" data-prk="${key}"><span class="pr-sex">${icon}</span>${photo}<div class="pr-tx"><b>${escP(n.name || 'UNKNOWN')}</b><small>${escP(n.id || '—')}</small></div></div>`;
+      return `<div class="${cls}" data-prk="${key}" style="width:100%;height:100%"><span class="pr-sex">${icon}</span>${photo}<div class="pr-tx"><b>${escP(n.name || '—')}</b><small>${escP(n.id || '—')}</small>${termLine}</div></div>`;
     }
-    return `<div class="${cls}" data-prk="${key}"><span class="pr-sex">${icon}</span>${photo}<div class="pr-tx"><b>${escP(n.name || 'UNKNOWN')}</b><small>${escP(n.id || '—')}</small><i>${escP(n.breed || '—')}</i></div></div>`;
+    return `<div class="${cls}" data-prk="${key}" style="width:100%;height:100%"><span class="pr-sex">${icon}</span>${photo}<div class="pr-tx"><b>${escP(n.name || '—')}</b><small>${escP(n.id || '—')}</small><i>${escP(n.breed || '—')}</i>${termLine}</div></div>`;
   }
 
   const prRow = (l, v) => `<div class="pr-row"><span>${l}</span><b>${escP(v === '' || v === null || v === undefined ? '—' : v)}</b></div>`;
@@ -750,7 +750,9 @@
       prRow('Semen Ref.', last ? (last.semen_ref || last.semen_lot || last.semenRef || '—') : '—');
   }
 
-  let prLastCols = null;
+  let prLastNodes = null; /* [FIX 119] laid-out records for the data-driven tree */
+  const PR_FRAC = [0.13, 0.19, 0.21, 0.22, 0.25];
+  const PR_H = [118, 42, 42, 42, 28];
   let prDrawerHit = null, prDrawerKey = ''; /* [FIX 115] ancestor photo upload from the tree drawer */
 
   function arsPedHitPhoto() {
@@ -764,29 +766,45 @@
 
   /* Elbow connectors drawn with layout offsets (scale-independent, so the
      same lines print correctly at 100% zoom). Sire edges blue, dam pink. */
-  function prDrawLines() {
-    const svg = document.getElementById('prLines');
+  /* [FIX 119] Data-driven recursive tree renderer: absolutely-positioned
+     boxes laid out from the RECORDED ancestry only (branches terminate where
+     ancestry is not recorded — no fabricated UNKNOWN boxes), with elbow
+     connectors computed from the same layout math so print stays exact. */
+  function prRenderTree() {
     const tree = document.getElementById('prTree');
-    if (!svg || !tree || !prLastCols) return;
-    let out = '';
-    const cols = prLastCols;
-    for (let g = 0; g < 4; g++) {
-      for (let i = 0; i < cols[g].length; i++) {
-        const p = tree.querySelector(`[data-prk="${g}-${i}"]`);
-        if (!p) continue;
-        [[2 * i, 'pr-line-m'], [2 * i + 1, 'pr-line-f']].forEach(([ci, cls]) => {
-          const c = tree.querySelector(`[data-prk="${g + 1}-${ci}"]`);
-          if (!c) return;
-          const x1 = p.offsetLeft + p.offsetWidth - 1, y1 = p.offsetTop + p.offsetHeight / 2;
-          const x2 = c.offsetLeft + 1, y2 = c.offsetTop + c.offsetHeight / 2;
-          const mx = Math.round((x1 + x2) / 2);
-          out += `<path d="M ${x1} ${y1} H ${mx} V ${y2} H ${x2}" class="${cls}"/>`;
-        });
-      }
-    }
-    svg.innerHTML = out;
+    const boxesEl = document.getElementById('prBoxes');
+    const svg = document.getElementById('prLines');
+    if (!tree || !boxesEl || !svg || !prLastNodes || !prLastNodes.length) return;
+    const W = tree.clientWidth, H = tree.clientHeight;
+    if (!W || !H) return;
+    const gap = 10;
+    const ws = PR_FRAC.map(f => Math.floor(W * f));
+    const xs = []; let acc = 0;
+    ws.forEach((w, g) => { xs[g] = acc; acc += w + gap; });
+    const leafRows = prLastNodes.filter(r => !r.s && !r.d).length || 1;
+    const scale = Math.min(1, H / (leafRows * 40));
+    const offY = Math.max(0, (H - leafRows * 40 * scale) / 2);
+    let boxes = '', lines = '';
+    prLastNodes.forEach(r => {
+      const h = PR_H[r.gen], w = ws[r.gen];
+      const y = offY + r.y * scale;
+      r.X = xs[r.gen]; r.BW = w; r.Y = y;
+      const term = r.gen < 4 && !(r.n.sireNode && r.n.sireNode.exists) && !(r.n.damNode && r.n.damNode.exists);
+      boxes += `<div class="pr-absbox" style="position:absolute;left:${xs[r.gen]}px;top:${(y - h / 2).toFixed(1)}px;width:${w}px;height:${h}px">${prBox(r.n, r.gen, r.key, term)}</div>`;
+    });
+    prLastNodes.forEach(r => {
+      [['s', 'pr-line-m'], ['d', 'pr-line-f']].forEach(([k, cls]) => {
+        const p = r[k];
+        if (!p) return;
+        const x1 = r.X + r.BW - 1, y1 = r.Y, x2 = xs[p.gen] + 1, y2 = p.Y;
+        const mx = Math.round((x1 + x2) / 2);
+        lines += `<path d="M ${x1} ${y1.toFixed(1)} H ${mx} V ${y2.toFixed(1)} H ${x2}" class="${cls}"/>`;
+      });
+    });
+    boxesEl.innerHTML = boxes;
+    svg.innerHTML = lines;
   }
-  window.prDrawLines = prDrawLines;
+  window.prRenderTree = prRenderTree;
 
   function prFit() {
     const z = document.getElementById('prZoom');
@@ -796,7 +814,7 @@
     z.style.width = (1120 * s) + 'px';
     z.style.height = (790 * s) + 'px';
     prFitLeft();
-    prDrawLines();
+    prRenderTree();
   }
   window.prFit = prFit;
 
@@ -843,14 +861,26 @@
     const effSex = a.sex || (currentPedIsBatch ? '' : (inList(farm.sows) ? 'F' : inList(farm.boars) ? 'M' : ''));
     if (effSex) root.sex = effSex;
 
-    const norm = (n, sex) => n || prUnknown(sex);
-    const cols = [[root]];
-    for (let g = 1; g <= 4; g++) {
-      const cur = [];
-      cols[g - 1].forEach(p => cur.push(norm(p.sireNode, 'M'), norm(p.damNode, 'F')));
-      cols.push(cur);
-    }
-    prLastCols = cols;
+    /* [FIX 119] recursive in-order layout over RECORDED ancestors only.
+       4 generations = maximum depth, never a forced grid: a branch simply
+       terminates where the sire/dam is not in the database. */
+    const prNodes = [];
+    let prSlots = 0;
+    (function walk(n, gen, key) {
+      if (!n || !n.exists) return null;
+      const s = gen < 4 ? walk(n.sireNode, gen + 1, key + 's') : null;
+      const d = gen < 4 ? walk(n.damNode, gen + 1, key + 'd') : null;
+      let y;
+      if (s && d) y = (s.y + d.y) / 2;
+      else if (s || d) y = (s || d).y;
+      else y = (prSlots++) * 40 + 20;
+      const rec = { n, gen, key, y, s, d };
+      prNodes.push(rec);
+      return rec;
+    })(root, 0, '0');
+    prLastNodes = prNodes;
+    const maxGen = prNodes.reduce((m, r) => Math.max(m, r.gen), 0);
+    const genLabel = a.generation || a.gen || (maxGen === 0 ? 'Foundation' : 'F' + maxGen);
 
     /* Inbreeding & relationship analysis. */
     const sireRef0 = root.sireNode && root.sireNode.exists ? (root.sireNode.id || root.sireNode.name) : '';
@@ -878,10 +908,10 @@
       ? window.generateCertQRCode(`ARSWINETECH PRO|PEDIGREE|${reportNo}|${verifyCode}|${a.id || a.name}|${farm.name || ''}|F=${fCoef}%`, reportNo)
       : '';
 
+    /* [FIX 119] only the generation columns that actually exist are headed. */
     const colHead = ['ANIMAL', 'PARENTS', 'GRANDPARENTS', 'GREAT-GRANDPARENTS', '4TH GENERATION'];
-    const colCls = ['c0', 'c1', 'c2', 'c3', 'c4'];
-    const treeHtml = cols.map((col, g) =>
-      `<div class="pr-col ${colCls[g]}">${col.map((n, i) => prBox(n, g, `${g}-${i}`)).join('')}</div>`).join('');
+    const headHtml = colHead.slice(0, maxGen + 1).map((h, i) =>
+      `<span style="width:${(PR_FRAC[i] * 100).toFixed(1)}%">${h}</span>`).join('');
 
     const perfTitle = currentPedIsBatch ? 'BATCH SUMMARY' : ((a.sex === 'M' || a.kind === 'Boar') ? 'BREEDING & SERVICE SUMMARY' : 'BREEDING & PERFORMANCE SUMMARY');
 
@@ -943,6 +973,8 @@
         .pr-tx b{display:block;font-size:8.4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
         .pr-tx small{display:block;font-size:7.4px;color:#41505c;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
         .pr-tx i{display:block;font-style:normal;font-size:7px;color:#77848f;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .pr-term{display:block;font-style:normal;font-size:6.2px;color:#98a2aa;letter-spacing:.45px;text-transform:uppercase;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .pr-plate .pr-term{font-weight:600;color:#98a2aa}
         .pr-sex{position:absolute;top:0px;right:3px;font-size:9px;font-weight:800}
         .pr-m .pr-sex{color:#2d6bb9}.pr-f .pr-sex{color:#d34d90}.pr-x .pr-sex{color:#8a8474}
         .pr-g4 .pr-pig{width:20px;height:16px;flex-basis:20px}
@@ -1013,7 +1045,7 @@
                 prRow('Date of Birth', (a.birth || a.dob) ? fmtDP(a.birth || a.dob) : '—') +
                 prRow('Birth Farm', a.birth_farm || a.source_farm || a.source || a.supplier || farm.name || '—') + /* [FIX 116] source farm wins; current farm only when blank */
                 prRow('Ear Tag', a.ear_tag || a.earTag || '—') + /* [FIX 116] real ear tag only — never the system ID */
-                prRow('Generation', a.generation || a.gen || '—') +
+                prRow('Generation', genLabel) + /* [FIX 119] computed from recorded ancestry depth */
                 prRow('Status', a.status || (currentPedIsBatch ? 'Piglet Batch' : 'Active')) +
                 prRow('Registration No.', regNo))}
               <div class="pr-subj ${effSex === 'M' ? 'pm' : effSex === 'F' ? 'pf' : 'px'}">
@@ -1039,10 +1071,10 @@
               </section>
             </div></aside>
             <section class="pr-tree-wrap">
-              <div class="pr-cols-head">${colHead.map((h, i) => `<span class="h${i}">${h}</span>`).join('')}</div>
+              <div class="pr-cols-head">${headHtml}</div>
               <div class="pr-tree" id="prTree">
                 <svg id="prLines"></svg>
-                ${treeHtml}
+                <div id="prBoxes" style="position:absolute;inset:0"></div>
               </div>
             </section>
           </div>
@@ -1079,7 +1111,7 @@
     prFit();
     window.removeEventListener('resize', prFit);
     window.addEventListener('resize', prFit);
-    requestAnimationFrame(() => { prDrawLines(); prFit(); });
+    requestAnimationFrame(() => { prRenderTree(); prFit(); });
   }
   window.exportPedigreeReport = exportPedigreeReport;
 
