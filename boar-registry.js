@@ -512,6 +512,12 @@
                 <div class="eyebrow" style="color:var(--teal2);font-weight:700">🐗 ACTIVE STUD BOAR · BREEDING &amp; PERFORMANCE PROFILE</div>
                 <h2>${esc(b.name)} <span class="med-chip ${statusClass(b)}">${esc(b.status || "Active")}</span></h2>
                 <p class="perf-sub">Tag ID: <b>${esc(b.id || b.name)}</b> · Breed: <b>${esc(b.breed || "—")}</b>${b.acquired ? ` · Acquired: ${esc(fmtDate(b.acquired))}` : ""}</p>
+                <!-- [FIX 115] Registered boar photo (flows into the Pedigree Report) -->
+                <div style="display:flex;align-items:center;gap:8px;margin-top:8px">
+                  ${b.photo ? `<img src="${b.photo}" alt="" style="width:52px;height:52px;border-radius:50%;object-fit:cover;border:2px solid var(--teal2)">` : `<span style="width:52px;height:52px;border-radius:50%;background:rgba(255,255,255,.07);display:inline-flex;align-items:center;justify-content:center;font-size:22px;filter:grayscale(1);opacity:.5">🐗</span>`}
+                  <button type="button" class="btn ghost small" onclick="window.arsBoarPhoto('${esc(b.id || b.name)}')">📷 ${b.photo ? "Change photo" : "Add photo"}</button>
+                  ${b.photo ? `<button type="button" class="btn ghost small delete-action" onclick="window.arsBoarPhotoRemove('${esc(b.id || b.name)}')" title="Remove photo" style="padding:6px 9px">🗑</button>` : ""}
+                </div>
               </div>
               <button type="button" class="close-reminder" onclick="document.getElementById('boarDetailModal').remove()">×</button>
             </div>

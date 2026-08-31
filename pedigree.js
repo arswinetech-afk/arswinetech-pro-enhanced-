@@ -211,6 +211,7 @@
       name: resolved.name || (hit ? (hit.name || hit.id) : String(rawRef)),
       breed: (hit && hit.breed) ? hit.breed : (resolved.breed || '—'),
       kind: isSubjectOverride ? (subjectOverride.kind || 'Piglet Batch') : (hit ? (hit.kind || (hit.sex === 'M' ? 'Boar' : (hit.sex === 'F' ? 'Sow' : 'Ancestor'))) : 'Ancestor'),
+      photo: isSubjectOverride ? (subjectOverride.photo || '') : ((hit && hit.photo) ? hit.photo : ''), /* [FIX 115] registered photo flows into the report */
       sex: isSubjectOverride ? (subjectOverride.sex || '—') : ((hit && hit.sex) ? hit.sex : (side.includes('sire') || side === 'sire' ? 'M' : 'F')),
       gen,
       relLabel,
@@ -497,8 +498,10 @@
       titleEl.innerHTML = `<b>${targetIcon} ${escP(target.name)}</b> <span class="tag" style="font-size:11px;margin-left:6px">${escP(rel)}</span>`;
     }
 
+    prDrawerHit = target.hit || null; prDrawerKey = nodeKey; /* [FIX 115] */
     if (bodyEl) {
       bodyEl.innerHTML = `
+        ${target.hit ? `<div style="margin-top:10px"><button type="button" class="btn ghost small" onclick="window.arsPedHitPhoto()">📷 ${target.hit.photo ? 'Change registered photo' : 'Add registered photo'}</button></div>` : ''}
         <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(180px, 1fr));gap:10px;margin-top:6px">
           <div><small class="muted">Breed / Classification</small><b style="display:block;font-size:13px">${escP(target.breed || '—')}</b></div>
           <div><small class="muted">Genetic Weight</small><b style="display:block;font-size:13px;color:var(--teal2)">${escP(pct)}</b></div>
@@ -659,12 +662,11 @@
 
   function prHash(s) { let h = 5381; s = String(s || ''); for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0; return h; }
 
-  /* [FIX 114] placeholder "photo" — professional herdbook-style stock images
-     (sow / boar / piglet) bundled in assets/, used when an ancestor has no
-     recorded photo of its own. */
-  function prPig(tone) {
-    const src = tone === 'M' ? 'assets/ph-boar.jpg' : tone === 'F' ? 'assets/ph-sow.jpg' : 'assets/ph-piglet.jpg';
-    return `<img class="pr-pig" src="${src}" alt="" loading="lazy">`;
+  /* [FIX 115] "shadow" placeholder — a neutral monochrome silhouette used
+     ONLY when the animal has no registered photo. Real registered photos
+     (uploaded on the sow card / boar profile) always take priority. */
+  function prPig() {
+    return `<svg class="pr-pig" viewBox="0 0 64 48" preserveAspectRatio="xMidYMid slice" aria-hidden="true"><rect width="64" height="48" fill="#edeff0"/><g fill="#aeb6bc"><path d="M13.2 25.6c-3-.7-5-2.7-4.6-5.3.1-.8 1.2-.9 1.5-.1.6 1.6 1.9 2.6 3.6 2.9z"/><ellipse cx="29.5" cy="27.5" rx="16.5" ry="10.8"/><circle cx="46" cy="21" r="8.2"/><path d="M41 14.2c-1.6-2.7-1.3-4.8.4-6.2 1 1.6 2.2 2.7 3.7 3.3z"/><path d="M49 13.2c.2-3 1.4-4.7 3.6-5.1.3 1.9 1 3.4 2 4.7z"/><path d="M52 21.6c2 .2 3.3 1 3.3 2.1s-1.3 1.9-3.3 1.7z"/><rect x="17.5" y="33" width="4.8" height="10" rx="2.3"/><rect x="26" y="35" width="4.8" height="10" rx="2.3"/><rect x="34.5" y="34" width="4.8" height="10" rx="2.3"/><rect x="41.5" y="31.5" width="4.8" height="10" rx="2.3"/></g></svg>`;
   }
 
   function prUnknown(sex) { return { id: '', name: 'UNKNOWN', breed: '—', kind: sex === 'M' ? 'Boar' : 'Sow', sex, exists: false, sireNode: null, damNode: null }; }
@@ -674,7 +676,7 @@
     const tone = male ? 'M' : female ? 'F' : 'X';
     const icon = male ? '♂' : female ? '♀' : '🐖';
     const cls = 'pr-box ' + (male ? 'pr-m' : female ? 'pr-f' : 'pr-x') + (n.exists ? '' : ' pr-unk') + ' pr-g' + gen;
-    const photo = (gen === 0 && n.photo) ? `<img class="pr-ph" src="${n.photo}" alt="">` : prPig(n.exists ? tone : 'X');
+    const photo = n.photo ? `<img class="pr-pig" src="${n.photo}" alt="">` : prPig();
     if (gen === 0) {
       return `<div class="${cls}" data-prk="${key}"><span class="pr-sex">${icon}</span><div class="pr-ph-wrap">${photo}</div><div class="pr-plate">${escP(n.name || n.id || '—')}<small>${escP(n.id || '')}</small></div></div>`;
     }
@@ -749,6 +751,16 @@
   }
 
   let prLastCols = null;
+  let prDrawerHit = null, prDrawerKey = ''; /* [FIX 115] ancestor photo upload from the tree drawer */
+
+  function arsPedHitPhoto() {
+    if (!prDrawerHit || !window.arsPickAnimalPhoto) return;
+    window.arsPickAnimalPhoto(prDrawerHit, () => {
+      save();
+      if (prDrawerKey) selectPedNode(prDrawerKey);
+    });
+  }
+  window.arsPedHitPhoto = arsPedHitPhoto;
 
   /* Elbow connectors drawn with layout offsets (scale-independent, so the
      same lines print correctly at 100% zoom). Sire edges blue, dam pink. */
@@ -992,7 +1004,7 @@
                 prRow('Status', a.status || (currentPedIsBatch ? 'Piglet Batch' : 'Active')) +
                 prRow('Registration No.', regNo))}
               <div class="pr-subj ${a.sex === 'M' ? 'pm' : a.sex === 'F' ? 'pf' : 'px'}">
-                <div class="pr-ph-wrap">${root.photo ? `<img src="${root.photo}" alt="">` : prPig(a.sex === 'M' ? 'M' : a.sex === 'F' ? 'F' : 'X')}</div>
+                <div class="pr-ph-wrap">${root.photo ? `<img src="${root.photo}" alt="">` : prPig()}</div>
                 <div class="pr-plate">${escP(a.name || a.id || '—')}<small>${escP(a.id || '')}</small></div>
               </div>
               ${prSec('INBREEDING &amp; RELATIONSHIP ANALYSIS',

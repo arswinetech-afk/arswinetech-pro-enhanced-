@@ -3549,3 +3549,91 @@ window.isSuperAdmin = isSuperAdmin;
 window.isPlatformOwnerEmail = isPlatformOwnerEmail;
 window.esc = esc;
 window.isoOff = isoOff;
+
+/* [REBUILD FIX 115] REGISTERED ANIMAL PHOTOS — upload, on-device compression,
+   removal. Photos are downscaled to ≤320px JPEG (~15–40 KB each) BEFORE they
+   are stored in the farm record, so a farm with hundreds of photographed
+   animals only adds a few megabytes — well inside the cloud quota — and the
+   same tiny data-url syncs to every device and flows into the Pedigree &
+   Lineage Report automatically. */
+function arsCompressImage(file, maxDim = 320, quality = 0.72) {
+  return new Promise((resolve, reject) => {
+    if (!file || !file.type || !file.type.startsWith('image/')) return reject(new Error('that file is not an image'));
+    if (file.size > 12 * 1024 * 1024) return reject(new Error('image is too large (max 12 MB)'));
+    const fr = new FileReader();
+    fr.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        try {
+          const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+          const w = Math.max(1, Math.round(img.width * scale));
+          const h = Math.max(1, Math.round(img.height * scale));
+          const canvas = document.createElement('canvas');
+          canvas.width = w; canvas.height = h;
+          canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+          resolve(canvas.toDataURL('image/jpeg', quality));
+        } catch (e) { reject(new Error('could not process the image')); }
+      };
+      img.onerror = () => reject(new Error('could not read the image'));
+      img.src = fr.result;
+    };
+    fr.onerror = () => reject(new Error('could not read the file'));
+    fr.readAsDataURL(file);
+  });
+}
+window.arsCompressImage = arsCompressImage;
+
+function arsPickAnimalPhoto(rec, done) {
+  if (!rec) return;
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'image/*';
+  input.onchange = async () => {
+    const file = input.files && input.files[0];
+    if (!file) return;
+    try {
+      const url = await arsCompressImage(file);
+      rec.photo = url;
+      save();
+      toast(`📷 Photo saved — compressed to ${Math.max(1, Math.round(url.length / 1024))} KB.`);
+      if (typeof done === 'function') done();
+    } catch (e) {
+      toast('Could not use that image: ' + e.message);
+    }
+  };
+  input.click();
+}
+window.arsPickAnimalPhoto = arsPickAnimalPhoto;
+
+function arsRemoveAnimalPhoto(rec, done) {
+  if (!rec) return;
+  delete rec.photo;
+  save();
+  toast('📷 Photo removed.');
+  if (typeof done === 'function') done();
+}
+window.arsRemoveAnimalPhoto = arsRemoveAnimalPhoto;
+
+function arsSowPhoto(index) {
+  const s = (F() && F().sows || [])[index];
+  if (s) arsPickAnimalPhoto(s, () => renderAll());
+}
+window.arsSowPhoto = arsSowPhoto;
+
+function arsSowPhotoRemove(index) {
+  const s = (F() && F().sows || [])[index];
+  if (s) arsRemoveAnimalPhoto(s, () => renderAll());
+}
+window.arsSowPhotoRemove = arsSowPhotoRemove;
+
+function arsBoarPhoto(id) {
+  const rec = (F() && F().boars || []).find(x => (x.id || x.name) === id);
+  if (rec) arsPickAnimalPhoto(rec, () => { if (window.openBoarDetailModal) window.openBoarDetailModal(rec); });
+}
+window.arsBoarPhoto = arsBoarPhoto;
+
+function arsBoarPhotoRemove(id) {
+  const rec = (F() && F().boars || []).find(x => (x.id || x.name) === id);
+  if (rec) arsRemoveAnimalPhoto(rec, () => { if (window.openBoarDetailModal) window.openBoarDetailModal(rec); });
+}
+window.arsBoarPhotoRemove = arsBoarPhotoRemove;

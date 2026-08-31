@@ -461,6 +461,13 @@
           </div>
         </div>
 
+        <!-- [FIX 115] Registered sow photo (flows into the Pedigree Report) -->
+        <div style="display:flex;align-items:center;gap:8px;margin-top:9px">
+          ${s.photo ? `<img src="${s.photo}" alt="" style="width:46px;height:46px;border-radius:50%;object-fit:cover;border:2px solid var(--teal2)">` : `<span style="width:46px;height:46px;border-radius:50%;background:rgba(255,255,255,.07);display:inline-flex;align-items:center;justify-content:center;font-size:20px;filter:grayscale(1);opacity:.5">🐖</span>`}
+          <button type="button" class="btn ghost small" onclick="event.stopPropagation();window.arsSowPhoto(${index})">📷 ${s.photo ? 'Change photo' : 'Add photo'}</button>
+          ${s.photo ? `<button type="button" class="btn ghost small delete-action" onclick="event.stopPropagation();window.arsSowPhotoRemove(${index})" title="Remove photo" style="padding:6px 9px">🗑</button>` : ''}
+        </div>
+
         <!-- Blinking 2nd Dose / Overdue Alert Banners -->
         ${alertFollowUps.map(a => `
           <div class="blinking-alert-banner">
