@@ -916,9 +916,9 @@
       ? window.generateCertQRCode(`ARSWINETECH PRO|PEDIGREE|${reportNo}|${verifyCode}|${a.id || a.name}|${farm.name || ''}|F=${fCoef}%`, reportNo)
       : '';
 
-    /* [FIX 119] only the generation columns that actually exist are headed. */
+    /* [FIX 120] full grid → all five generation headers always shown. */
     const colHead = ['ANIMAL', 'PARENTS', 'GRANDPARENTS', 'GREAT-GRANDPARENTS', '4TH GENERATION'];
-    const headHtml = colHead.slice(0, maxGen + 1).map((h, i) =>
+    const headHtml = colHead.map((h, i) =>
       `<span style="width:${(PR_FRAC[i] * 100).toFixed(1)}%">${h}</span>`).join('');
 
     const perfTitle = currentPedIsBatch ? 'BATCH SUMMARY' : ((a.sex === 'M' || a.kind === 'Boar') ? 'BREEDING & SERVICE SUMMARY' : 'BREEDING & PERFORMANCE SUMMARY');
