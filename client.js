@@ -1130,6 +1130,7 @@ window.ARSCloud = (() => {
     farmSyncHead,
     edgeHeadGet,
     edgeHeadPut,
+    getAccessToken: () => token, /* [FIX 127] presence auth */
     signIn,
     signUp,
     signOut,
