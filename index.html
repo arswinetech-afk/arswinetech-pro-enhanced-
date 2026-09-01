@@ -15,6 +15,7 @@
 <!-- Live Supabase Client -->
 <script src="supabase/config.js" onerror="window.__arsCloudLoadError='Could not load secure app configuration.'"></script>
 <script src="supabase/client.js" onerror="window.__arsCloudLoadError='Could not load the secure sign-in service.'"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js" onerror="window.__arsPresenceLibMissing=1"></script> <!-- [FIX 129] official realtime client for presence -->
 <script src="js/presence.js"></script> <!-- [FIX 127] realtime presence -->
 </head>
 <body>
