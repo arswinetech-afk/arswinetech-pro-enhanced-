@@ -90,7 +90,8 @@
           access_token: (window.ARSCloud && ARSCloud.getAccessToken) ? ARSCloud.getAccessToken() : ''
         }
       });
-      send({ topic: TOPIC, event: 'presence', ref: nextRef(), payload: { type: 'presence', event: 'track', payload: myMeta } });
+      /* [FIX 128] Supabase realtime wire format: payload {type:'track', payload} */
+      send({ topic: TOPIC, event: 'presence', ref: nextRef(), payload: { type: 'track', payload: myMeta } });
       if (!hb) hb = setInterval(() => send({ topic: 'phoenix', event: 'heartbeat', payload: {}, ref: nextRef() }), 25000);
     };
     ws.onmessage = ev => {
@@ -112,14 +113,15 @@
     if (!user || !cfg.url) return;
     stopped = false;
     const d = deviceInfo();
-    myMeta = { uid: user.uid || user.email, email: user.email || '', device: d.label, icon: d.icon, session_id: sessionId(), online_at: new Date().toISOString() };
+    /* [FIX 128] key presence by lowercased email — matches admin rows */
+    myMeta = { uid: String(user.uid || user.email || '').toLowerCase(), email: user.email || '', device: d.label, icon: d.icon, session_id: sessionId(), online_at: new Date().toISOString() };
     state = {};
     connect();
   }
   function stop() {
     stopped = true;
     if (retry) { clearTimeout(retry); retry = null; }
-    send({ topic: TOPIC, event: 'presence', ref: nextRef(), payload: { type: 'presence', event: 'untrack' } });
+    send({ topic: TOPIC, event: 'presence', ref: nextRef(), payload: { type: 'untrack' } });
     try { ws && ws.close(); } catch (e) {}
     cleanup(); state = {}; emit();
   }
@@ -163,6 +165,8 @@
 
   window.ARSPresence = {
     start, stop, summary, renderSlots,
-    subscribe: fn => { listeners.add(fn); return () => listeners.delete(fn); }
+    subscribe: fn => { listeners.add(fn); return () => listeners.delete(fn); },
+    /* console diagnostics: ARSPresence.debug() → socket state + live keys */
+    debug: () => ({ stopped, ws: ws ? ws.readyState : null, meta: myMeta, keys: Object.keys(state), topic: TOPIC })
   };
 })();

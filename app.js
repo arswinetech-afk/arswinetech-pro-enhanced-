@@ -2838,7 +2838,7 @@ async function adminPage() {
     <div class="panel table-wrap"><table class="table" id="table-useradmin"><thead><tr><th>User</th><th>Farm</th><th>Role</th><th>Plan / Access</th><th>Actions</th></tr></thead><tbody>
     ${us.map((u, i) => `
       <tr>
-        <td><b>${esc(u.name)}</b><br><small class="muted">${esc(u.email)}</small><div class="prs-slot" data-uid="${esc(u.id || u.email)}" style="margin-top:4px"></div></td>
+        <td><b>${esc(u.name)}</b><br><small class="muted">${esc(u.email)}</small><div class="prs-slot" data-uid="${esc(String(u.email || u.id || '').toLowerCase())}" style="margin-top:4px"></div></td>
         <td>${esc(u.farmName && u.farmName !== 'null' ? u.farmName : (u.farmId === "platform" ? "ARSwineTech Platform" : (DB[u.farmId]?.name || (u.farmId && u.farmId !== 'null' ? u.farmId : "RM's Hog Farm"))))}</td>
         <td>
           <select class="select" ${isPlatformOwnerEmail(u.email) ? "disabled title=\"Platform Owner is fixed by verified email\"" : ""} onchange="changeUser(${i},'role',this.value)">
@@ -3137,7 +3137,7 @@ async function finishAuthenticated(email, suppliedUser = null, options = {}) {
   window.arsSessionUser = user;
   STORE.setItem('ars-current-email', cleanEmail);
   /* [FIX 127] this device now appears in the admin presence list */
-  if (window.ARSPresence) window.ARSPresence.start({ uid: user.id, email: cleanEmail });
+  if (window.ARSPresence) window.ARSPresence.start({ uid: cleanEmail, email: cleanEmail }); /* [FIX 128] email key */
   const userList = users();
   let account = userList.find(u => String(u.email || '').toLowerCase() === cleanEmail);
   if (!account) {
