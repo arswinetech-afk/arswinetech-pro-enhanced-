@@ -394,9 +394,28 @@
      Displays: DOB, age (months + days), breed, dam & maternal lineage,
      sire & paternal lineage, last collection date, semen bottles produced,
      medical treatments, vaccines, barn/pen details & quick transfer. */
+  /* [REBUILD FIX 125] APOSTROPHE-SAFE BOAR MODAL ACTIONS. Tag IDs like
+     "Rm's Blake" used to break inline onclick="...('ID')" handlers with a
+     silent JS syntax error (dead buttons — only Close survived). The modal
+     now keeps the resolved record and buttons call parameter-less actions. */
+  let currentBoarDetail = null;
+  function boarDetail(action) {
+    const b = currentBoarDetail;
+    if (!b) return;
+    const key = b.id || b.name;
+    if (action === 'photo') { if (window.arsPickAnimalPhoto) window.arsPickAnimalPhoto(b, () => window.openBoarDetailModal && window.openBoarDetailModal(b)); }
+    else if (action === 'photoRemove') { if (window.arsRemoveAnimalPhoto) window.arsRemoveAnimalPhoto(b, () => window.openBoarDetailModal && window.openBoarDetailModal(b)); }
+    else if (action === 'tree') { if (window.openPedigreeTree) window.openPedigreeTree(b); }
+    else if (action === 'vax') { document.getElementById('boarDetailModal')?.remove(); if (window.openSchedModal) window.openSchedModal('boar', key, b.name); }
+    else if (action === 'edit') { document.getElementById('boarDetailModal')?.remove(); if (window.openBoarEditor) window.openBoarEditor(key); }
+    else if (action === 'move') { document.getElementById('boarDetailModal')?.remove(); if (window.openMovementWizard) window.openMovementWizard(key, 'boar'); }
+  }
+  window.boarDetail = boarDetail;
+
   function openBoarDetailModal(target) {
     if (!target && target !== 0) return;
     const b = findBoarRecord(target);
+    currentBoarDetail = b || null; /* [FIX 125] */
     if (!b) {
       if (window.toast) toast("Could not find boar record for " + String(target));
       return;
@@ -515,8 +534,8 @@
                 <!-- [FIX 115] Registered boar photo (flows into the Pedigree Report) -->
                 <div style="display:flex;align-items:center;gap:8px;margin-top:8px">
                   ${b.photo ? `<img src="${b.photo}" alt="" style="width:52px;height:52px;border-radius:50%;object-fit:cover;border:2px solid var(--teal2)">` : `<span style="width:52px;height:52px;border-radius:50%;background:rgba(255,255,255,.07);display:inline-flex;align-items:center;justify-content:center;font-size:22px;filter:grayscale(1);opacity:.5">🐗</span>`}
-                  <button type="button" class="btn ghost small" onclick="window.arsBoarPhoto('${esc(b.id || b.name)}')">📷 ${b.photo ? "Change photo" : "Add photo"}</button>
-                  ${b.photo ? `<button type="button" class="btn ghost small delete-action" onclick="window.arsBoarPhotoRemove('${esc(b.id || b.name)}')" title="Remove photo" style="padding:6px 9px">🗑</button>` : ""}
+                  <button type="button" class="btn ghost small" onclick="window.boarDetail('photo')">📷 ${b.photo ? "Change photo" : "Add photo"}</button>
+                  ${b.photo ? `<button type="button" class="btn ghost small delete-action" onclick="window.boarDetail('photoRemove')" title="Remove photo" style="padding:6px 9px">🗑</button>` : ""}
                 </div>
               </div>
               <button type="button" class="close-reminder" onclick="document.getElementById('boarDetailModal').remove()">×</button>
@@ -550,7 +569,7 @@
             <div class="boar-section">
               <div class="boar-sec-head">
                 <h3>🧬 3-Generation Pedigree &amp; Lineage</h3>
-                <button type="button" class="btn ghost small" onclick="window.openPedigreeTree && window.openPedigreeTree('${esc(b.id || b.name)}')">View Full Tree →</button>
+                <button type="button" class="btn ghost small" onclick="window.boarDetail('tree')">View Full Tree →</button>
               </div>
               <div class="boar-lineage-grid">
                 <div class="lineage-card sire">
@@ -642,7 +661,7 @@
             <div class="boar-section">
               <div class="boar-sec-head">
                 <h3>🛡 Vaccination Records (${vaccines.length})</h3>
-                <button type="button" class="btn ghost small" onclick="document.getElementById('boarDetailModal').remove();window.openSchedModal && window.openSchedModal('boar', '${esc(b.id || b.name)}', '${esc(b.name)}');">+ Schedule Vaccine</button>
+                <button type="button" class="btn ghost small" onclick="window.boarDetail('vax')">+ Schedule Vaccine</button>
               </div>
               <div class="boar-table-scroll">
                 ${vaccines.length ? `
@@ -673,8 +692,8 @@
             <!-- Action Toolbar -->
             <div class="due-actions" style="margin-top:18px;justify-content:space-between;flex-wrap:wrap;gap:8px">
               <div style="display:flex;gap:8px;flex-wrap:wrap">
-                <button type="button" class="btn" onclick="document.getElementById('boarDetailModal').remove();window.openBoarEditor && window.openBoarEditor('${esc(b.id || b.name)}')">✎ Edit Boar</button>
-                <button type="button" class="btn ghost" onclick="document.getElementById('boarDetailModal').remove();window.openMovementWizard && window.openMovementWizard('${esc(b.id || b.name)}', 'boar')">🚚 Transfer Pen</button>
+                <button type="button" class="btn" onclick="window.boarDetail('edit')">✎ Edit Boar</button>
+                <button type="button" class="btn ghost" onclick="window.boarDetail('move')">🚚 Transfer Pen</button>
               </div>
               <button type="button" class="btn ghost" onclick="document.getElementById('boarDetailModal').remove()">Close</button>
             </div>

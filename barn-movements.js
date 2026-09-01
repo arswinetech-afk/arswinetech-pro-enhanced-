@@ -479,7 +479,7 @@
         </div>
         <div class="pen-card-foot">
           ${status === 'occupied' ? `
-            <button type="button" class="btn ghost small" onclick="window.openMovementWizard('${esc(pen.occupant_id)}', '${pen.occupant_type}')">Transfer →</button>
+            <button type="button" class="btn ghost small" onclick="window.openMovementWizard('${escJS(pen.occupant_id)}', '${escJS(pen.occupant_type)}')">Transfer →</button>
             <button type="button" class="btn ghost small" onclick="window.vacatePen('${barn.id}', '${pen.id}')">Vacate</button>
             <button type="button" class="btn ghost small pen-edit-btn" onclick="window.openEditPenModal('${barn.id}', '${pen.id}')" title="Edit pen">✏️</button>
           ` : status === 'dirty' ? `

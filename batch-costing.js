@@ -252,7 +252,7 @@
     return `<div class="bc-panel">
       <div class="bc-head">
         <b style="color:var(--teal2)">📊 BATCH COST ANALYSIS — ${esc(a.batchId)}</b>
-        <button type="button" class="btn ghost small" onclick="window.ARSBatchCost.openBatchExpense('${esc(a.batchId)}')">＋ Record batch expense</button>
+        <button type="button" class="btn ghost small" onclick="window.ARSBatchCost.openBatchExpense('${escJS(a.batchId)}')">＋ Record batch expense</button>
       </div>
       <small class="muted">${a.birth ? `Born ${esc(a.birth)} · ${a.ageDays} days old · ` : ''}${a.live} live now · ${a.sold} sold/released · cost ÷ ${a.denom} saleable heads</small>
       <div class="table-wrap" style="margin-top:8px"><table class="table" style="font-size:12px">

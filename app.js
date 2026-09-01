@@ -1818,7 +1818,7 @@ function production(periodOverride) {
         </div>
         <div style="display:flex;flex-wrap:wrap;gap:8px">
           ${Object.entries(breedBreakdown).map(([br, stat]) => `
-            <button type="button" class="btn ghost small" style="background:rgba(0,0,0,0.3);border:1.5px solid ${st.breed.toLowerCase() === br.toLowerCase() ? '#f59e0b' : 'rgba(245,158,11,0.35)'};border-radius:999px;padding:5px 12px;font-size:12px;display:flex;align-items:center;gap:6px;cursor:pointer;color:var(--ink)" onclick="window.setForecastBreed('${esc(br)}')">
+            <button type="button" class="btn ghost small" style="background:rgba(0,0,0,0.3);border:1.5px solid ${st.breed.toLowerCase() === br.toLowerCase() ? '#f59e0b' : 'rgba(245,158,11,0.35)'};border-radius:999px;padding:5px 12px;font-size:12px;display:flex;align-items:center;gap:6px;cursor:pointer;color:var(--ink)" onclick="window.setForecastBreed('${escJS(br)}')">
               <b>${esc(br)}</b>: <span style="color:#f59e0b;font-weight:800">${stat.heads} head</span> <small class="muted">(♂${stat.m} · ♀${stat.f})</small>
             </button>
           `).join('')}
@@ -1898,7 +1898,7 @@ function renderForecastCardHTML(ev, farm) {
     reservationsHTML = `
       <div style="background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.25);border-radius:10px;padding:8px 12px;margin:8px 0;display:flex;justify-content:space-between;align-items:center;font-size:12px">
         <span style="color:#b45309">✓ Available for Customer Reservation</span>
-        <button type="button" class="btn small ghost" style="padding:3px 9px;font-size:11px" onclick="openReservationForBatch('${esc(ev.id)}')">＋ Reserve Now</button>
+        <button type="button" class="btn small ghost" style="padding:3px 9px;font-size:11px" onclick="openReservationForBatch('${escJS(ev.id)}')">＋ Reserve Now</button>
       </div>
     `;
   }
@@ -1960,18 +1960,18 @@ function renderForecastCardHTML(ev, farm) {
         ${isFarrowing ? `
           <button type="button" class="btn small" onclick="openLinkedPigletModal(null,'${esc(ev.sow_id||ev.title)}')">🐷 Record Farrowing</button>
           <button type="button" class="btn ghost small" onclick="openSowProfile(${ev.sowIndex})">👁️ Gestation Dossier</button>
-          <button type="button" class="btn ghost small" onclick="window.openMovementWizard && window.openMovementWizard('${esc(ev.sow_id||ev.title)}','sow')">🚚 Move Stall</button>
+          <button type="button" class="btn ghost small" onclick="window.openMovementWizard && window.openMovementWizard('${escJS(ev.sow_id||ev.title)}','sow')">🚚 Move Stall</button>
         ` : isWeaning ? `
-          <button type="button" class="btn small" onclick="openBatchHub('${esc(ev.id)}')">🍼 Record Weaning</button>
-          <button type="button" class="btn ghost small" onclick="window.openMovementWizard && window.openMovementWizard('${esc(ev.id)}','batch')">🚚 Move to Nursery</button>
-          <button type="button" class="btn ghost small" onclick="openBatchPerformance('${esc(ev.id)}')">⚖️ Scale Weigh-In</button>
+          <button type="button" class="btn small" onclick="openBatchHub('${escJS(ev.id)}')">🍼 Record Weaning</button>
+          <button type="button" class="btn ghost small" onclick="window.openMovementWizard && window.openMovementWizard('${escJS(ev.id)}','batch')">🚚 Move to Nursery</button>
+          <button type="button" class="btn ghost small" onclick="openBatchPerformance('${escJS(ev.id)}')">⚖️ Scale Weigh-In</button>
         ` : isBreeder ? `
-          <button type="button" class="btn small" onclick="openAllocation('${esc(ev.id)}','breeder')">⭐ Breeder Allocation</button>
-          <button type="button" class="btn ghost small" onclick="openBatchPerformance('${esc(ev.id)}')">⚖️ Performance &amp; Ear Notches</button>
-          <button type="button" class="btn ghost small" onclick="openBatchHub('${esc(ev.id)}')">📊 Batch Hub</button>
+          <button type="button" class="btn small" onclick="openAllocation('${escJS(ev.id)}','breeder')">⭐ Breeder Allocation</button>
+          <button type="button" class="btn ghost small" onclick="openBatchPerformance('${escJS(ev.id)}')">⚖️ Performance &amp; Ear Notches</button>
+          <button type="button" class="btn ghost small" onclick="openBatchHub('${escJS(ev.id)}')">📊 Batch Hub</button>
         ` : `
-          <button type="button" class="btn small" onclick="openFattenerCenter('${esc(ev.id)}')">📈 Fattener Center &amp; Selling</button>
-          <button type="button" class="btn ghost small" onclick="openBatchHub('${esc(ev.id)}')">Batch Details</button>
+          <button type="button" class="btn small" onclick="openFattenerCenter('${escJS(ev.id)}')">📈 Fattener Center &amp; Selling</button>
+          <button type="button" class="btn ghost small" onclick="openBatchHub('${escJS(ev.id)}')">Batch Details</button>
         `}
       </div>
     </div>
@@ -3581,6 +3581,12 @@ window.submitJoinFarm = submitJoinFarm;
 window.isSuperAdmin = isSuperAdmin;
 window.isPlatformOwnerEmail = isPlatformOwnerEmail;
 window.esc = esc;
+/* [REBUILD FIX 125] escJS — string-safe encoding for inline onclick="fn('...')"
+   handlers. Unlike esc(), it backslash-escapes \ ' " & so apostrophes in
+   user-typed IDs ("Rm's Blake") can no longer terminate the JS string and
+   silently kill the button. */
+function escJS(v) { return String(v ?? '').replace(/[\'"&]/g, ch => '\\' + ch); }
+window.escJS = escJS;
 window.isoOff = isoOff;
 
 /* [REBUILD FIX 115] REGISTERED ANIMAL PHOTOS — upload, on-device compression,

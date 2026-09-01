@@ -717,10 +717,10 @@
         <div class="care-quick-strip" style="background:rgba(0,0,0,0.25);padding:10px 14px;border-radius:12px;border:1px solid var(--line);margin-bottom:14px">
           <small class="muted" style="display:block;margin-bottom:6px;font-weight:600">⚡ ACTION REQUIRED — Tap an alert to complete in 1 tap:</small>
           <div style="display:flex;flex-wrap:wrap;gap:6px">
-            ${ironAlert ? `<button type="button" class="care-pulse-alert iron" onclick="openCareQuick('${esc(b.id)}','iron')">💉 Need Iron Injection (Day ${ageDays})</button>` : ""}
-            ${castrAlert ? `<button type="button" class="care-pulse-alert castr" onclick="openCareQuick('${esc(b.id)}','castr')">✂ Need Castration (♂ ${c.aliveM} males)</button>` : ""}
-            ${weanAlert ? `<button type="button" class="care-pulse-alert wean" onclick="openCareQuick('${esc(b.id)}','wean')">🐖 Weaning Due (${ageDays}d old)</button>` : ""}
-            ${vaxAlert ? `<button type="button" class="care-pulse-alert vacc" onclick="openCareQuick('${esc(b.id)}','vacc')">🛡 Pending Vaccine Record</button>` : ""}
+            ${ironAlert ? `<button type="button" class="care-pulse-alert iron" onclick="openCareQuick('${escJS(b.id)}','iron')">💉 Need Iron Injection (Day ${ageDays})</button>` : ""}
+            ${castrAlert ? `<button type="button" class="care-pulse-alert castr" onclick="openCareQuick('${escJS(b.id)}','castr')">✂ Need Castration (♂ ${c.aliveM} males)</button>` : ""}
+            ${weanAlert ? `<button type="button" class="care-pulse-alert wean" onclick="openCareQuick('${escJS(b.id)}','wean')">🐖 Weaning Due (${ageDays}d old)</button>` : ""}
+            ${vaxAlert ? `<button type="button" class="care-pulse-alert vacc" onclick="openCareQuick('${escJS(b.id)}','vacc')">🛡 Pending Vaccine Record</button>` : ""}
           </div>
         </div>
       ` : ""}
