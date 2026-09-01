@@ -3485,7 +3485,11 @@ async function completeOnboarding(e) {
     if (!ok) throw new Error('The new farm was created, but its membership could not be verified.');
     toast('Your secure farm workspace is ready.');
   } catch (ex) {
-    err.textContent = ex.message || 'Could not create your farm workspace. Please try again.';
+    /* [FIX 126] farmer-friendly wording for the one-time DB setup error */
+    const rawMsg = ex.message || 'Could not create your farm workspace. Please try again.';
+    err.textContent = /uuid_generate_v4/i.test(rawMsg)
+      ? 'The secure workspace needs a one-time database setup (missing uuid extension). Please contact ARSwineTech support and ask them to run supabase/fix_uuid_extension.sql once, then try again.'
+      : rawMsg;
     err.classList.add('show');
   }
 }
