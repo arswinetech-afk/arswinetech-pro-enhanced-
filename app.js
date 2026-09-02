@@ -2127,7 +2127,7 @@ function openModal(k, index = null) {
       const value = Math.round(Math.abs(delta) * price);
       const today = new Date().toISOString().slice(0, 10);
       if (delta > 0) {
-        if (confirm(`Physical count: ${type} went DOWN by ${delta} bag(s) — about ₱${value.toLocaleString()} at ₱${price.toLocaleString()}/bag.\n\nThose bags were most likely CONSUMED. Record ₱${value.toLocaleString()} as Feed Consumed (Feed / COGS expense) for this month?\n\nTap OK only if the bags were eaten/used and you have NOT already expensed them (via purchase transactions or batch allocations).\nTap Cancel if this edit is just a stock correction.`)) {
+        if (confirm(`Physical count: ${type} went DOWN by ${delta} bag(s) — about ₱${value.toLocaleString()} at ₱${price.toLocaleString()}/bag.\n\nThose bags were most likely CONSUMED. Record ₱${value.toLocaleString()} as Feed Consumed (Feed / COGS expense) for this month?\n\nTap OK only if the bags were eaten/used and you have NOT already expensed them (via purchase transactions, Feed-Orders deliveries, or batch allocations).\nTap Cancel if this edit is just a stock correction.\n\nUsing Feed Orders? Deliveries are ALREADY expensed when received — tap Cancel.`)) {
           (F().transactions = F().transactions || []).unshift({ id: 'tx-' + Date.now().toString(36) + '-feedcount', date: today, type: 'Expense', category: 'Feed', description: `Feed consumed · physical count ${type} −${delta} bag(s)`, amount: value, paid: value, created_at: new Date().toISOString() });
           save(); renderAll();
           toast('✓ Feed consumption booked to Feed / COGS.');
