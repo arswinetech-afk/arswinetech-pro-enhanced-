@@ -2446,7 +2446,8 @@
 
   function renderResellerAccountCardHTML(r, rIdx, allTxs) {
     const account = resellerAccountTotals(F(), r);
-    const rTxs = account.txs;
+    /* [FIX 133] newest pickup first — no more scrolling to see the latest */
+    const rTxs = account.txs.slice().sort((a, b) => String(b.timestamp || b.date || b.created_at || '').localeCompare(String(a.timestamp || a.date || a.created_at || '')));
     const rBilled = account.billed;
     const rDiscounts = account.discounts;
     const rPaid = account.paid;
@@ -2473,7 +2474,7 @@
           </div>
         </div>
 
-        <div class="reseller-card-body" id="resBody_${r.id}">
+        <div class="reseller-card-body collapsed" id="resBody_${r.id}" style="display:none">
           <!-- Quick Action Buttons for this Reseller -->
           <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
             <button type="button" class="btn small" onclick="openResellerPickupModal('${r.id}')">＋ Record Pickup</button>
