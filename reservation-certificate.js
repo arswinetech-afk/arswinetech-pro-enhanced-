@@ -179,8 +179,19 @@
           m = Object.assign({}, snap, Object.fromEntries(Object.entries(live).filter(([kk, v]) => v !== '' && v !== undefined && kk !== '_sel')));
         return (m.renn || m.lenn || m.teats || m.sex) ? m : null;
       }).filter(Boolean),
-      manualPigs = Array.isArray(r.notches_manual) ? r.notches_manual.filter(x => x && (x.renn || x.lenn || x.teats)) : [],
-      personal = [...selPigs, ...manualPigs],
+      manualPigs = Array.isArray(r.notches_manual) ? r.notches_manual.filter(x => x && (x.renn || x.lenn || x.teats || x.tag)) : [],
+      /* [FIX 136] per-tag individual weights & teats: map the reservation's
+         tag list onto registry rows by order, and when the reservation made
+         no explicit selection, include the batch's full registry so every
+         tag gets its own row on the certificate. */
+      rTags = String(r.summary_overrides?.tag ?? r.tag_no || '').split(/[,;/]+/).map(s => s.trim()).filter(Boolean),
+      meaningfulPig = x => x && (x.renn || x.lenn || (x.teats ?? '') !== '' || x.sex || x.tag || (x.weight ?? '') !== '' || (x.weights && Object.keys(x.weights).length)),
+      personal = (() => {
+        let list = [...selPigs, ...manualPigs];
+        if (!list.length && rosterFull.length) list = rosterFull.map(x => Object.assign({}, x));
+        if (!list.length && rTags.length) list = rTags.map(t => ({ tag: t, sex: String(r.gender || '').toLowerCase().startsWith('f') ? 'F' : (String(r.gender || '').toLowerCase().startsWith('m') ? 'M' : '') }));
+        return list.map((m, k) => { if (m && !m.tag && rTags[k]) m.tag = rTags[k]; return m; }).filter(meaningfulPig);
+      })(),
       notchWeights = x => {
         let w = [], ws = x.weights || {};
         if (ws.birth) w.push(`<b>Birth</b> ${escH(ws.birth)} kg`);
@@ -249,7 +260,7 @@
             ? `<section class="cert-card cert-wide notch-card"><h3>Ear Notch — Reserved Piglets <small class="notch-sub">Specific to this reservation · from each batch's Ear Notch Registry · RENN = right ear (litter no.) · LENN = left ear (pig no.) · teat count for females</small></h3>${multiPicks.map(g => `<div class="cert-notch-group"><div class="cert-notch-batch">${escH(g.id)}</div><div class="notch-grid">${g.pigs.map(notchChipHTML).join('')}</div></div>`).join('')}${manualPigs.length ? `<div class="cert-notch-group"><div class="cert-notch-batch">Added manually</div><div class="notch-grid">${manualPigs.map(notchChipHTML).join('')}</div></div>` : ''}</section>`
             : '')
         : (personal.length
-        ? `<section class="cert-card cert-wide notch-card"><h3>Ear Notch — Reserved Piglet${personal.length > 1 ? 's' : ''} <small class="notch-sub">Specific to this reservation · from the batch's Ear Notch Registry · RENN = right ear (litter no.) · LENN = left ear (pig no.) · teat count for females</small></h3><div class="notch-grid">${personal.map((x, idx) => `<div class="notch-chip"><b>${x.sex === 'F' ? '♀' : x.sex === 'M' ? '♂' : 'Pig'} ${idx + 1}${x.manual ? ' (manual)' : ''}</b><span>R&nbsp;${escH(x.renn) || '—'} · L&nbsp;${escH(x.lenn) || '—'}${(x.teats ?? '') !== '' ? ` · ${escH(x.teats)} teats` : ''}</span>${notchWeights(x)}</div>`).join('')}</div></section>`
+        ? `<section class="cert-card cert-wide notch-card"><h3>Per-Piglet Registry — Weights &amp; Teats by Tag <small class="notch-sub">[FIX 136] one row per tag number · live from the batch's Ear Notch Registry · weigh each piglet in Batch Performance to fill the weight columns</small></h3><table class="res-cert-lines"><thead><tr><th>Tag No.</th><th>Sex</th><th>Teats ♀</th><th>Ear notch (R · L)</th><th>Weights (kg)</th></tr></thead><tbody>${personal.map(x => `<tr><td><b>${escH(x.tag || '—')}</b></td><td>${x.sex === 'F' ? '♀ Female' : x.sex === 'M' ? '♂ Male' : '—'}</td><td>${(x.teats ?? '') !== '' ? escH(x.teats) : '—'}</td><td>${escH(x.renn || '—')} · ${escH(x.lenn || '—')}</td><td>${notchWeights(x) || '<span class="muted">not weighed yet</span>'}</td></tr>`).join('')}</tbody></table></section>`
         : ''),
             /* [REBUILD FIX 41] health card: batch vaccinations auto-fetched from the
          Vaccination Center (recorded vaccinations for this piglet batch), plus the
