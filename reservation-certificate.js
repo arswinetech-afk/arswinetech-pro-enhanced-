@@ -184,7 +184,7 @@
          tag list onto registry rows by order, and when the reservation made
          no explicit selection, include the batch's full registry so every
          tag gets its own row on the certificate. */
-      rTags = String(r.summary_overrides?.tag ?? r.tag_no || '').split(/[,;/]+/).map(s => s.trim()).filter(Boolean),
+      rTags = String(r.summary_overrides?.tag || r.tag_no || '').split(/[,;/]+/).map(s => s.trim()).filter(Boolean),
       meaningfulPig = x => x && (x.renn || x.lenn || (x.teats ?? '') !== '' || x.sex || x.tag || (x.weight ?? '') !== '' || (x.weights && Object.keys(x.weights).length)),
       personal = (() => {
         let list = [...selPigs, ...manualPigs];
