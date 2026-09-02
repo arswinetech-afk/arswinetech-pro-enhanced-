@@ -2053,6 +2053,7 @@ function openModal(k, index = null) {
   if (k === 'sows') attachSowDuplicateGuard(index);
   document.getElementById('recordForm').onsubmit = async e => {
     e.preventDefault();
+    let feedCountDelta = null; /* [FIX 131] */
     let obj = Object.fromEntries(new FormData(e.target));
     if (k === 'sows' && (sowDuplicate('id', obj.id, index) || sowDuplicate('name', obj.name, index))) {
       toast('Duplicate sow ID or name detected in this farm.');
@@ -2088,6 +2089,15 @@ function openModal(k, index = null) {
       obj._ars_cloud_local_id = existing?._ars_cloud_local_id || obj.id;
       obj.feed_revision = Date.now();
       obj.updated_at = new Date().toISOString();
+      /* [REBUILD FIX 131] physical stock count → optional consumption /
+         purchase booking. The inventory edit itself only corrects the
+         Balance Sheet asset; if the count moved because bags were eaten
+         (or an unbooked delivery arrived), the farmer may one-tap book the
+         difference into the P&L — with an explicit anti-double-count warning. */
+      const oldBags = existing ? (+existing.bags || 0) : null;
+      feedCountDelta = (oldBags !== null && obj.bags !== oldBags)
+        ? { delta: oldBags - obj.bags, price: obj.price || (+existing.price || 0), type: feedType }
+        : null;
     }
     /* [REBUILD FIX 102] sow/gilt acquisition cost → booked once under
        "Breeding Stock Purchase" (capital → Investing activities in the
@@ -2109,6 +2119,27 @@ function openModal(k, index = null) {
     save();
     closeModal();
     renderAll();
+    /* [REBUILD FIX 131] after a feed stock-count edit, offer to book the
+       difference as real consumption (or an unbooked purchase) — opt-in only,
+       so corrections and purchase-transaction workflows never double-count. */
+    if (k === 'feed' && feedCountDelta && feedCountDelta.delta !== 0) {
+      const { delta, price, type } = feedCountDelta;
+      const value = Math.round(Math.abs(delta) * price);
+      const today = new Date().toISOString().slice(0, 10);
+      if (delta > 0) {
+        if (confirm(`Physical count: ${type} went DOWN by ${delta} bag(s) — about ₱${value.toLocaleString()} at ₱${price.toLocaleString()}/bag.\n\nThose bags were most likely CONSUMED. Record ₱${value.toLocaleString()} as Feed Consumed (Feed / COGS expense) for this month?\n\nTap OK only if the bags were eaten/used and you have NOT already expensed them (via purchase transactions or batch allocations).\nTap Cancel if this edit is just a stock correction.`)) {
+          (F().transactions = F().transactions || []).unshift({ id: 'tx-' + Date.now().toString(36) + '-feedcount', date: today, type: 'Expense', category: 'Feed', description: `Feed consumed · physical count ${type} −${delta} bag(s)`, amount: value, paid: value, created_at: new Date().toISOString() });
+          save(); renderAll();
+          toast('✓ Feed consumption booked to Feed / COGS.');
+        }
+      } else {
+        if (confirm(`Physical count: ${type} went UP by ${-delta} bag(s) — about ₱${value.toLocaleString()}.\n\nRecord it as a FEED PURCHASE expense for this month?\n\nTap OK only if this delivery was never recorded as a transaction.\nTap Cancel if the purchase is already in your transactions.`)) {
+          (F().transactions = F().transactions || []).unshift({ id: 'tx-' + Date.now().toString(36) + '-feedcount', date: today, type: 'Expense', category: 'Feed', description: `Feed purchase · physical count ${type} +${-delta} bag(s)`, amount: value, paid: value, created_at: new Date().toISOString() });
+          save(); renderAll();
+          toast('✓ Feed purchase booked to Feed / COGS.');
+        }
+      }
+    }
     if (window.ARSCloud && typeof ARSCloud.verifyFarmSave === 'function') {
       const syncResult = await ARSCloud.verifyFarmSave(window.__arsActiveFarmId || farmId, `${k} record`);
       if (!syncResult || syncResult.success === false) {
