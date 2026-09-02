@@ -228,7 +228,7 @@
       /* centerpiece: the reserved piglet(s) — most important information on the page */
       heroCard = resMulti
         ? `<section class="cert-hero"><div class="csec-head">Reserved Piglets — ${resLineBatches.length} Batches on One Reservation</div><table class="res-cert-lines"><thead><tr><th>Batch</th><th>Breed</th><th>Sow / Sire</th><th>Heads</th><th>Price / head</th><th>Amount</th></tr></thead><tbody>${r.lines.map(L => { let bb = resLineBatches.find(x => x.id === L.batch_id) || {}; let m = batchMeta(bb); return `<tr><td><b>${escH(L.batch_id)}</b></td><td>${escH(L.breed || bb.breed || '—')}</td><td>${escH(m.damLineage)} / ${escH(m.sireLineage)}</td><td>${L.quantity} ${L.gender}</td><td>${peso(L.price)}</td><td>${peso(L.quantity * L.price)}</td></tr>` }).join('')}<tr class="res-cert-total"><td colspan="3"><b>Total</b></td><td><b>${r.quantity} heads</b></td><td></td><td><b>${peso(r.total)}</b></td></tr></tbody></table></section>`
-        : (b ? `<section class="cert-hero"><div class="csec-head">Reserved Piglet${r.quantity > 1 ? 's' : ''}</div><div class="hero-title"><b>${escH(b.id)}</b><span>${escH(b.breed || '—')}${r.quantity > 1 ? ' · ' + r.quantity + ' heads' : ''}</span></div><div class="hero-grid">${cellh('Sex', capG(r.gender))}${cellh('Birth Date', fmtDate(b.birth))}${cellh('Age', age)}${cellh('Weight', r.summary_overrides?.weight ?? (r.weight ? r.weight + ' kg' : 'N/A'))}${cellh('ADG', perf && perf.adg != null ? Number(perf.adg).toFixed(2) + ' kg/day' : '—')}${(r.tag_no || r.summary_overrides?.tag) ? cellh('Tag No.', r.summary_overrides?.tag ?? r.tag_no) : ''}</div><div class="hero-dam"><span>Dam: <b>${escH(damLineage)}</b></span><span>Sire: <b>${escH(sireLineage)}</b></span></div></section>` : ''),
+        : (b ? `<section class="cert-hero"><div class="csec-head">Reserved Piglet${r.quantity > 1 ? 's' : ''}</div><div class="hero-title"><b>${escH(b.id)}</b><span>${escH(b.breed || '—')}${r.quantity > 1 ? ' · ' + r.quantity + ' heads' : ''}</span></div><div class="hero-grid">${cellh('Sex', capG(r.gender))}${cellh('Birth Date', fmtDate(b.birth))}${cellh('Age', age)}${cellh(r.quantity > 1 ? 'Weight (Avg)' : 'Weight', r.summary_overrides?.weight ?? (r.weight ? r.weight + ' kg' : 'N/A'))}${cellh('ADG', perf && perf.adg != null ? Number(perf.adg).toFixed(2) + ' kg/day' : '—')}${(r.tag_no || r.summary_overrides?.tag) ? cellh('Tag No.', r.summary_overrides?.tag ?? r.tag_no) : ''}</div><div class="hero-dam"><span>Dam: <b>${escH(damLineage)}</b></span><span>Sire: <b>${escH(sireLineage)}</b></span></div></section>` : ''),
       /* lineage: dam/sire grandparents per batch (premium pedigree feel) */
       lineageCard = `<section class="cert-lineage"><div class="csec-head">Lineage Details${resMulti ? ' — ' + resLineBatches.length + ' Batches' : ''}</div>${resMulti
         ? `<div class="batch-groups">${resLineBatches.map(bb => { let m = batchMeta(bb); return `<div class="batch-group"><div class="batch-group-head"><b>${escH(bb.id)}</b>${bb.breed ? `<span> · ${escH(bb.breed)}</span>` : ''}</div><div class="batch-group-line">Dam / Sire: <b>${escH(m.damLineage)} / ${escH(m.sireLineage)}</b> · Born: <b>${fmtDate(bb.birth)}</b> · Age: <b>${m.ag}</b></div>${pedCols(m.damLineage, m.dm, m.sireLineage, m.bo)}</div>` }).join('')}</div>`
@@ -260,7 +260,7 @@
             ? `<section class="cert-card cert-wide notch-card"><h3>Ear Notch — Reserved Piglets <small class="notch-sub">Specific to this reservation · from each batch's Ear Notch Registry · RENN = right ear (litter no.) · LENN = left ear (pig no.) · teat count for females</small></h3>${multiPicks.map(g => `<div class="cert-notch-group"><div class="cert-notch-batch">${escH(g.id)}</div><div class="notch-grid">${g.pigs.map(notchChipHTML).join('')}</div></div>`).join('')}${manualPigs.length ? `<div class="cert-notch-group"><div class="cert-notch-batch">Added manually</div><div class="notch-grid">${manualPigs.map(notchChipHTML).join('')}</div></div>` : ''}</section>`
             : '')
         : (personal.length
-        ? `<section class="cert-card cert-wide notch-card"><h3>Per-Piglet Registry — Weights &amp; Teats by Tag <small class="notch-sub">[FIX 136] one row per tag number · live from the batch's Ear Notch Registry · weigh each piglet in Batch Performance to fill the weight columns</small></h3><table class="res-cert-lines"><thead><tr><th>Tag No.</th><th>Sex</th><th>Teats ♀</th><th>Ear notch (R · L)</th><th>Weights (kg)</th></tr></thead><tbody>${personal.map(x => `<tr><td><b>${escH(x.tag || '—')}</b></td><td>${x.sex === 'F' ? '♀ Female' : x.sex === 'M' ? '♂ Male' : '—'}</td><td>${(x.teats ?? '') !== '' ? escH(x.teats) : '—'}</td><td>${escH(x.renn || '—')} · ${escH(x.lenn || '—')}</td><td>${notchWeights(x) || '<span class="muted">not weighed yet</span>'}</td></tr>`).join('')}</tbody></table></section>`
+        ? `<section class="cert-card cert-wide notch-card"><h3>Per-Piglet Registry — Weights &amp; Teats by Tag <small class="notch-sub">One row per tag number · individual weights and teats recorded for this reservation</small></h3><table class="res-cert-lines"><thead><tr><th>Tag No.</th><th>Sex</th><th>Teats ♀</th><th>Ear notch (R · L)</th><th>Weights (kg)</th></tr></thead><tbody>${personal.map(x => `<tr><td><b>${escH(x.tag || '—')}</b></td><td>${x.sex === 'F' ? '♀ Female' : x.sex === 'M' ? '♂ Male' : '—'}</td><td>${(x.teats ?? '') !== '' ? escH(x.teats) : '—'}</td><td>${escH(x.renn || '—')} · ${escH(x.lenn || '—')}</td><td>${notchWeights(x) || '<span class="muted">not weighed yet</span>'}</td></tr>`).join('')}</tbody></table></section>`
         : ''),
             /* [REBUILD FIX 41] health card: batch vaccinations auto-fetched from the
          Vaccination Center (recorded vaccinations for this piglet batch), plus the
@@ -560,9 +560,7 @@
       img.onload = () => {
         const canvas = document.createElement('canvas');
         canvas.width = width * 2;
-        canvas.height = height * 2;
-        const ctx = canvas.getContext('2d');
-        ctx.scale(2, 2);
+ale(2, 2);
         ctx.fillStyle = '#ffffff';
         ctx.fillRect(0, 0, width, height);
         ctx.drawImage(img, 0, 0);
@@ -595,4 +593,4 @@
   window.editCertificate = editCertificate;
   window.downloadElementPNG = downloadElementPNG;
   window.downloadReservationPNG = downloadReservationPNG;
-})()
+})();
