@@ -272,6 +272,8 @@
     ].filter(x => x[1] > 0);
   }
 
+  let finLast = null; /* [FIX 130] data snapshot for the professional print document */
+
   function pieChart(summary) {
     const data = expenseBreakdown(summary);
     const total = data.reduce((sum, x) => sum + x[1], 0) || 1;
@@ -340,6 +342,7 @@
     const panel = document.createElement('section');
     panel.id = 'financialStatementPanel';
     panel.className = 'financial-statement-panel';
+    finLast = { farm, summary, cash, balance, monthRows, current, previous, momTable }; /* [FIX 130] */
     panel.innerHTML = `<div class="finance-report-head"><div><div class="eyebrow">INDUSTRIAL HOG FARM FINANCIAL STATEMENTS</div><h2>Financial statement center</h2><p class="muted">${escF(farm.name || 'Active farm')} · ${monthLabel(current.key)} reporting view · recorded values only</p></div><button type="button" class="btn" onclick="printFinancialStatement()">🖨 Print / Save PDF</button></div><div class="finance-data-guide panel"><b>How this report collects data</b><span><strong>Automatic:</strong> feed deliveries → Feed / COGS; mortality entries → biological mortality loss; reservation/POS/semen receipts → income when the feature creates a transaction.</span><span><strong>Manual:</strong> utilities, labor, debt/interest, capital purchases, loans, equity contributions, and owner draws must be recorded as transactions with a clear type and category.</span><span><strong>Reporting scope:</strong> Profit &amp; Loss and Cash Flows cover the <b>current month</b> (${monthLabel(current.key)}); the Balance Sheet is an all-time snapshot. Feed / COGS includes every Feed expense transaction <b>plus</b> Feed-Orders deliveries that were never booked as transactions.</span><span><strong>Feed costing:</strong> ${summary.feedAccountingMode === 'allocated_cogs' ? 'Feed / COGS uses actual feed allocations multiplied by weighted-average delivery cost (allocations cover ≥50% of this period’s deliveries).' : 'Feed purchases are expensed as delivered; actual-consumption COGS applies once you allocate most of the period’s feed to batches.'}</span></div><div class="finance-kpi-grid"><div class="panel metric"><small>Gross sales / earned revenue</small><b>${money(summary.grossSales)}</b><span>earned operating sales</span></div><div class="panel metric"><small>Actual collected</small><b>${money(summary.collected)}</b><span>cash against earned sales</span></div><div class="panel metric"><small>Net cash movement</small><b class="${cash.netChange < 0 ? 'bad' : ''}">${money(cash.netChange)}</b><span>operating + investing + financing</span></div><div class="panel metric"><small>Mortality loss</small><b class="${summary.mortality.loss > 0 ? 'bad' : ''}">${money(summary.mortality.loss)}</b><span>${summary.mortality.heads} head recorded</span></div><div class="panel metric"><small>Receivables</small><b>${money(summary.receivables)}</b><span>uncollected sales + open reservation &amp; reseller balances</span></div></div><div class="finance-chart-grid"><div class="panel finance-chart-card"><div class="finance-card-head"><div><h3>Monthly operating trend</h3><p class="muted">Revenue, expenses, and cash movement</p></div></div>${barChart(monthRows)}</div><div class="panel finance-chart-card"><div class="finance-card-head"><div><h3>Expense mix</h3><p class="muted">Click a category to highlight matching transactions below.</p></div></div>${pieChart(summary)}</div></div><div class="finance-statements-grid"><div class="panel finance-statement-card"><h3>Income Statement · Profit &amp; Loss <small class="muted" style="font-size:11px">· ${monthLabel(current.key)}</small></h3>${statementRows([['Operating revenue', summary.grossSales],['Feed / COGS', -summary.feed],['Gross profit', summary.grossSales - summary.feed, 'total'],['Piglet / weaner purchases', -summary.pigletPurch],['Veterinary / Medicine', -summary.vet],['Utilities', -summary.utilities],['Labor', -summary.labor],['Mortality loss · non-cash biological adjustment', -summary.mortalityExpense],['Debt interest', -summary.interest],['Other operating expenses', -summary.other],['Net operating profit', summary.grossSales - summary.operatingExpenses, 'grand']])}</div><div class="panel finance-statement-card"><h3>Statement of Cash Flows <small class="muted" style="font-size:11px">· ${monthLabel(current.key)}</small></h3><div class="finance-subhead">Operating activities</div>${statementRows([['Cash received from operations', cash.operatingIn],['Cash paid for operations', -cash.operatingOut],['Net operating cash flow', cash.operating, 'total']])}<div class="finance-subhead">Investing activities</div>${statementRows([['Asset/equipment sales', cash.investingIn],['Breeding stock / facility / equipment purchases', -cash.investingOut],['Net investing cash flow', cash.investing, 'total']])}<div class="finance-subhead">Financing activities</div>${statementRows([['Loans / revolving credit received', cash.loanIn],['Equity contributions', cash.equityIn],['Principal / debt repayments', -cash.principalOut],['Equity draws / dividends', -cash.equityOut],['Net financing cash flow', cash.financing, 'total'],['Net change in cash', cash.netChange, 'grand']])}<p class="finance-note">Mortality loss is shown in Profit &amp; Loss but excluded from cash outflows unless an actual cash transaction was recorded.</p></div><div class="panel finance-statement-card"><h3>Balance Sheet · Recorded Snapshot <small class="muted" style="font-size:11px">· all-time</small></h3><div class="finance-subhead">Assets</div>${statementRows([['Cash and cash equivalents', balance.assets.cash],['Accounts receivable & open customer balances', balance.assets.receivables],['Feed inventory', balance.assets.feed],['Semen inventory', balance.assets.semen],['Biological assets · recorded book values', balance.assets.biological],['Total assets', balance.totalAssets, 'grand']])}<div class="finance-subhead">Liabilities &amp; equity</div>${statementRows([['Accounts payable', balance.liabilities.accountsPayable],['Customer deposits held', balance.liabilities.customerDeposits],['Recorded debt balance proxy', balance.liabilities.debt],['Total liabilities', balance.totalLiabilities, 'total'],['Owner equity / balancing figure', balance.equity, 'grand']])}<p class="finance-note">Opening cash is not stored yet, so cash assumes a zero opening balance and equals the modeled net cash change. Biological assets include only explicit book value, purchase price, or unit value fields; no market valuation is invented.</p></div></div><div class="panel finance-mom-card"><div class="finance-card-head"><div><h3>MoM strategic value tracking</h3><p class="muted">${monthLabel(previous.key)} versus ${monthLabel(current.key)} · 20% movements are flagged for review</p></div></div><div class="table-wrap"><table class="table finance-mom-table"><thead><tr><th>Metric</th><th>Previous</th><th>Current</th><th>Change</th></tr></thead><tbody>${momTable}</tbody></table></div><div class="finance-mom-notes"><span>⚠ Early defect detection: feed, utilities, and veterinary spikes are flagged.</span><span>💧 Liquidity: monitor net cash movement before grow-out cash bottlenecks.</span><span>🌾 Input volatility: feed cost is tracked as the primary operating cost.</span></div></div>`;
     host.prepend(panel);
   }
@@ -352,12 +355,112 @@
     setTimeout(() => { if (panel.dataset.highlightCategory === category) delete panel.dataset.highlightCategory; }, 3500);
   }
 
+  /* [REBUILD FIX 130] PROFESSIONAL FINANCIAL STATEMENT DOCUMENT.
+     The old print path dumped the on-screen dashboard (dev-facing guide
+     paragraph, overlapping chart labels, uneven cards). Owners, lenders and
+     investors judge credibility by document presentation, so the PDF is now a
+     proper ledger-style report: branded letterhead, executive summary with an
+     auto-written insight line, three clean statements, MoM tracking, fixed
+     charts, methodology appendix, and a QR-verified footer. */
   function printFinancialStatement() {
-    const panel = document.getElementById('financialStatementPanel');
-    if (!panel) return;
+    const d = finLast;
+    if (!d) { toast('Open the Financial Statement Center first.'); return; }
     const printWindow = window.open('', '_blank');
     if (!printWindow) { toast('Please allow pop-ups to print the financial statement.'); return; }
-    printWindow.document.write(`<!doctype html><html><head><title>Financial Statements - ARSwineTech Pro</title><style>body{font-family:Arial,sans-serif;color:#172327;margin:24px}h2,h3{margin:0 0 8px}.muted,.finance-note{color:#637174;font-size:11px}.finance-report-head{display:flex;justify-content:space-between;border-bottom:2px solid #1aa89f;padding-bottom:12px;margin-bottom:14px}.finance-kpi-grid,.finance-chart-grid,.finance-statements-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:12px 0}.finance-kpi-grid{grid-template-columns:repeat(4,1fr)}.panel{border:1px solid #cdd9da;border-radius:8px;padding:12px}.metric{display:grid;gap:3px}.metric b{font-size:18px;color:#067f77}.finance-statement-row{display:flex;justify-content:space-between;border-bottom:1px solid #e6eded;padding:5px 0;font-size:12px}.finance-statement-row.total{font-weight:700;border-top:1px solid #789;margin-top:3px}.finance-statement-row.grand{font-size:14px;font-weight:800;border-top:2px solid #067f77;margin-top:6px}.finance-subhead{font-size:11px;text-transform:uppercase;color:#067f77;font-weight:800;margin-top:12px}.finance-pie-wrap{display:flex;gap:15px;align-items:center}.finance-pie{width:120px;text-align:center}.finance-pie svg{width:110px;height:110px;transform:rotate(-90deg)}.finance-pie strong{display:block}.finance-legend-item{display:flex;gap:6px;border:0;background:none;padding:3px;font-size:10px;width:100%;justify-content:space-between}.finance-legend-item i{width:10px;height:10px;border-radius:50%}.finance-chart svg{width:100%;height:160px}.finance-mom-table{width:100%;border-collapse:collapse;font-size:11px}.finance-mom-table th,.finance-mom-table td{padding:5px;border-bottom:1px solid #dfe8e8;text-align:left}.finance-mom-notes{display:flex;gap:15px;font-size:10px;color:#59696c;margin-top:10px}.bad{color:#c63345!important}@media print{.panel{break-inside:avoid}.finance-chart-card{break-inside:avoid}.finance-statements-grid{grid-template-columns:repeat(3,1fr)}}</style></head><body>${panel.innerHTML}</body></html>`);
+    const { farm, summary, cash, balance, monthRows, current, previous, momTable } = d;
+    const now = new Date();
+    const genDate = now.toLocaleDateString('en-PH', { day: '2-digit', month: 'short', year: 'numeric' });
+    const reportNo = 'ARS-FIN-' + String(current.key).replace(/[^0-9a-z]/gi, '').toUpperCase() + '-' + String(Math.abs((farm.name || '').length * 7919 + summary.grossSales) % 100000).padStart(5, '0');
+    const logo = (document.querySelector('.sidebar .logo-img') || {}).src || 'assets/arswinetech-logo.png';
+    const netOp = summary.grossSales - summary.operatingExpenses;
+    const collectRate = summary.grossSales > 0 ? Math.round((summary.collected / summary.grossSales) * 100) : null;
+    const expTotal = summary.operatingExpenses || 0;
+    const feedShare = expTotal > 0 ? Math.round((summary.feed / expTotal) * 100) : 0;
+    const insight = 'For ' + monthLabel(current.key) + ', ' + escF(farm.name || 'the farm') + ' earned <b>' + money(summary.grossSales) + '</b>' + (collectRate !== null ? ' and collected <b>' + money(summary.collected) + '</b> (' + collectRate + '% collection rate)' : '') + '. Net operating result: <b class="' + (netOp < 0 ? 'bad' : '') + '">' + money(netOp) + '</b>. Largest cost drivers: Feed / COGS ' + money(summary.feed) + ' (' + feedShare + '% of operating expenses)' + (summary.mortality.loss > 0 ? ' and mortality loss ' + money(summary.mortality.loss) + ' (' + summary.mortality.heads + ' head)' : '') + '. Outstanding receivables: ' + money(summary.receivables) + '.';
+    const qr = window.generateCertQRCode ? window.generateCertQRCode('ARSWINETECH PRO|FINANCIAL STATEMENTS|' + reportNo + '|' + (farm.name || '') + '|' + current.key, reportNo) : '';
+
+    /* charts, rebuilt for print: spaced labels, calm palette, static legend */
+    const max = Math.max(1, ...monthRows.flatMap(x => [x.revenue, x.expenses, Math.abs(x.cash)]));
+    const W = 680, H = 200, L = 40, B = 24, CH = 145, gW = (W - L - 8) / Math.max(1, monthRows.length);
+    const every = gW < 46 ? 2 : 1;
+    const bars = monthRows.map((row, i) => {
+      const x = L + i * gW;
+      const vals = [[row.revenue, '#1e6b3a', 'Revenue'], [row.expenses, '#b3455b', 'Expenses'], [Math.max(0, row.cash), '#3f7fbf', 'Net cash']];
+      const rects = vals.map((v, j) => {
+        const h = Math.max(1, (v[0] / max) * CH);
+        return '<rect x="' + (x + 4 + j * Math.min(14, gW / 4)).toFixed(1) + '" y="' + (H - B - h).toFixed(1) + '" width="' + Math.min(11, gW / 5).toFixed(1) + '" height="' + h.toFixed(1) + '" fill="' + v[1] + '"><title>' + monthLabel(row.key) + ' ' + v[2] + ': ' + money(v[0]) + '</title></rect>';
+      }).join('');
+      const label = i % every === 0 ? '<text x="' + (x + gW / 2).toFixed(1) + '" y="' + (H - 7) + '" text-anchor="middle" font-size="8" fill="#68757a">' + escF(monthLabel(row.key).slice(0, 3)) + '</text>' : '';
+      return rects + label;
+    }).join('');
+    const pieData = expenseBreakdown(summary);
+    const pieTotal = pieData.reduce((s, x) => s + x[1], 0) || 1;
+    let off = 0;
+    const pieSegs = pieData.map(([label, value, color]) => {
+      const pct = (value / pieTotal) * 100;
+      const c = '<circle cx="50" cy="50" r="38" fill="none" stroke="' + color + '" stroke-width="20" pathLength="100" stroke-dasharray="' + pct.toFixed(2) + ' ' + (100 - pct).toFixed(2) + '" stroke-dashoffset="' + (-off).toFixed(2) + '"/>';
+      off += pct;
+      return c;
+    }).join('');
+    const pieLegend = pieData.map(([label, value, color]) => '<div class="lg"><i style="background:' + color + '"></i><span>' + escF(label) + '</span><b>' + money(value) + '</b></div>').join('');
+
+    const stmt = (title, rows) => '<section class="fs-sec"><h3>' + title + '</h3>' + statementRows(rows) + '</section>';
+
+    const body =
+      '<header class="fs-head">' +
+        '<img src="' + logo + '" alt="logo" onerror="this.style.visibility=\'hidden\'">' +
+        '<div class="fs-brand"><b>' + escF(farm.name || 'ARSwineTech Pro') + '</b><small>Industrial Hog Farm Financial Statements</small></div>' +
+        '<div class="fs-title"><h1>FINANCIAL STATEMENTS</h1><small>' + escF(monthLabel(current.key)) + ' reporting period &middot; recorded values only</small></div>' +
+        '<div class="fs-meta"><div><span>Report No.:</span><b>' + reportNo + '</b></div><div><span>Generated:</span><b>' + genDate + '</b></div><div><span>Prepared by:</span><b>ARSwineTech Pro</b></div></div>' +
+      '</header>' +
+      '<section class="fs-exec"><h3>Executive Summary</h3><p>' + insight + '</p>' +
+        '<div class="fs-kpis">' +
+          '<div><small>Gross revenue</small><b>' + money(summary.grossSales) + '</b></div>' +
+          '<div><small>Cash collected</small><b>' + money(summary.collected) + '</b></div>' +
+          '<div><small>Net operating profit</small><b class="' + (netOp < 0 ? 'bad' : '') + '">' + money(netOp) + '</b></div>' +
+          '<div><small>Net cash movement</small><b class="' + (cash.netChange < 0 ? 'bad' : '') + '">' + money(cash.netChange) + '</b></div>' +
+          '<div><small>Mortality loss</small><b class="' + (summary.mortality.loss > 0 ? 'bad' : '') + '">' + money(summary.mortality.loss) + '</b><em>' + summary.mortality.heads + ' head</em></div>' +
+        '</div>' +
+      '</section>' +
+      '<div class="fs-cols">' +
+        stmt('Income Statement &middot; Profit &amp; Loss &mdash; ' + escF(monthLabel(current.key)), [['Operating revenue', summary.grossSales], ['Feed / COGS', -summary.feed], ['Gross profit', summary.grossSales - summary.feed, 'total'], ['Piglet / weaner purchases', -summary.pigletPurch], ['Veterinary / Medicine', -summary.vet], ['Utilities', -summary.utilities], ['Labor', -summary.labor], ['Mortality loss (non-cash biological adjustment)', -summary.mortalityExpense], ['Debt interest', -summary.interest], ['Other operating expenses', -summary.other], ['Net operating profit', netOp, 'grand']]) +
+        stmt('Statement of Cash Flows &mdash; ' + escF(monthLabel(current.key)), [['Cash received from operations', cash.operatingIn], ['Cash paid for operations', -cash.operatingOut], ['Net operating cash flow', cash.operating, 'total'], ['Asset / equipment sales', cash.investingIn], ['Breeding stock & equipment purchases', -cash.investingOut], ['Net investing cash flow', cash.investing, 'total'], ['Loans / credit received', cash.loanIn], ['Equity contributions', cash.equityIn], ['Principal / debt repayments', -cash.principalOut], ['Equity draws / dividends', -cash.equityOut], ['Net financing cash flow', cash.financing, 'total'], ['Net change in cash', cash.netChange, 'grand']]) +
+        stmt('Balance Sheet &middot; Recorded Snapshot (all-time)', [['Cash and cash equivalents', balance.assets.cash], ['Accounts receivable & open balances', balance.assets.receivables], ['Feed inventory', balance.assets.feed], ['Semen inventory', balance.assets.semen], ['Biological assets (book value)', balance.assets.biological], ['Total assets', balance.totalAssets, 'grand'], ['Accounts payable', balance.liabilities.accountsPayable], ['Customer deposits held', balance.liabilities.customerDeposits], ['Recorded debt balance', balance.liabilities.debt], ['Total liabilities', balance.totalLiabilities, 'total'], ['Owner equity / balancing figure', balance.equity, 'grand']]) +
+      '</div>' +
+      '<section class="fs-sec"><h3>Month-over-Month Movement Tracking &mdash; ' + escF(monthLabel(previous.key)) + ' vs ' + escF(monthLabel(current.key)) + '</h3>' +
+        '<table class="fs-mom"><thead><tr><th>Metric</th><th>Previous</th><th>Current</th><th>Change</th></tr></thead><tbody>' + momTable + '</tbody></table>' +
+        '<p class="fs-small">Movements above 20% are flagged for review. Feed, utilities and veterinary spikes surface early defects; net cash is watched ahead of grow-out bottlenecks; feed cost is tracked as the primary input-volatility driver.</p>' +
+      '</section>' +
+      '<div class="fs-cols two">' +
+        '<section class="fs-sec"><h3>Monthly Operating Trend</h3><div class="fs-legend"><span><i style="background:#1e6b3a"></i>Revenue</span><span><i style="background:#b3455b"></i>Expenses</span><span><i style="background:#3f7fbf"></i>Net cash</span></div><svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%;height:auto">' + bars + '</svg></section>' +
+        '<section class="fs-sec"><h3>Expense Mix</h3><div class="fs-piewrap"><svg viewBox="0 0 100 100" style="width:110px;height:110px;transform:rotate(-90deg)">' + pieSegs + '</svg><div class="fs-pielegend">' + (pieLegend || '<div class="lg"><span>No categorized expenses yet.</span></div>') + '</div></div></section>' +
+      '</div>' +
+      '<section class="fs-app"><h3>Appendix A &mdash; Basis of Preparation</h3>' +
+        '<p>Automatic postings: feed deliveries &rarr; Feed / COGS; mortality entries &rarr; biological mortality loss; reservation / POS / semen receipts &rarr; income when the source feature creates a transaction. Manual postings: utilities, labor, debt/interest, capital purchases, loans, equity contributions and owner draws. Profit &amp; Loss and Cash Flows cover ' + escF(monthLabel(current.key)) + '; the Balance Sheet is an all-time recorded snapshot. ' + (summary.feedAccountingMode === 'allocated_cogs' ? 'Feed / COGS uses actual allocations multiplied by weighted-average delivery cost.' : 'Feed purchases are expensed as delivered; actual-consumption COGS applies once most of the period&#39;s feed is allocated to batches.') + ' Mortality loss appears in Profit &amp; Loss but is excluded from cash outflows unless an actual cash transaction was recorded. No market valuation is invented.</p>' +
+      '</section>' +
+      '<footer class="fs-foot"><div class="fs-qr">' + qr + '</div><div><b>' + escF(farm.name || '') + '</b> &middot; Report ' + reportNo + '<br><span>System-generated by ARSwineTech Pro on ' + genDate + ' from recorded values only. Not an audited financial statement.</span></div></footer>';
+
+    printWindow.document.write('<!doctype html><html><head><title>Financial Statements - ' + escF(farm.name || '') + '</title><style>' +
+      '@page{size:A4;margin:12mm}body{font-family:Arial,Helvetica,sans-serif;color:#182430;margin:0;font-size:11px}' +
+      'h1{font-size:17px;letter-spacing:1.5px;margin:0}h3{font-size:10px;text-transform:uppercase;letter-spacing:.8px;color:#1e6b3a;border-bottom:1.5px solid #1e6b3a;padding-bottom:3px;margin:0 0 6px}' +
+      '.fs-head{display:flex;align-items:center;gap:10px;border-bottom:3px solid #1e6b3a;padding-bottom:8px;margin-bottom:10px}' +
+      '.fs-head img{width:40px;height:40px;object-fit:contain}.fs-brand b{font-size:15px;color:#1e6b3a;display:block}.fs-brand small{color:#5c6a76;font-size:8.5px}' +
+      '.fs-title{flex:1;text-align:center}.fs-title small{display:block;font-size:9px;color:#5c6a76;margin-top:2px}' +
+      '.fs-meta{border:1px solid #b9c4b9;padding:5px 8px;font-size:8.5px;min-width:150px}.fs-meta div{display:flex;justify-content:space-between;gap:8px;padding:1px 0}' +
+      '.fs-exec p{margin:4px 0 8px;font-size:10.5px;line-height:1.5}' +
+      '.fs-kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:6px}.fs-kpis div{border:1px solid #cfd8cf;padding:6px;text-align:center}.fs-kpis small{display:block;color:#5c6a76;font-size:8px;text-transform:uppercase;letter-spacing:.4px}.fs-kpis b{font-size:12.5px}.fs-kpis em{display:block;font-style:normal;font-size:8px;color:#5c6a76}' +
+      '.fs-cols{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:10px 0}.fs-cols.two{grid-template-columns:1.4fr 1fr}' +
+      '.fs-sec{border:1px solid #cfd8cf;padding:8px;break-inside:avoid}' +
+      '.finance-statement-row{display:flex;justify-content:space-between;gap:8px;border-bottom:1px solid #eef1ee;padding:3px 0;font-size:9.5px}' +
+      '.finance-statement-row.total{font-weight:700;border-top:1px solid #89a}.finance-statement-row.grand{font-weight:800;border-top:2px solid #1e6b3a;font-size:10.5px}' +
+      '.fs-mom{width:100%;border-collapse:collapse;font-size:9.5px}.fs-mom th,.fs-mom td{border-bottom:1px solid #dfe8e8;padding:4px 5px;text-align:left}.fs-mom td:last-child,.fs-mom th:last-child{text-align:right}' +
+      '.fs-small{font-size:8.5px;color:#5c6a76;margin:5px 0 0}' +
+      '.fs-legend{display:flex;gap:12px;font-size:8.5px;margin-bottom:4px}.fs-legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:3px}' +
+      '.fs-piewrap{display:flex;gap:10px;align-items:center}.fs-pielegend{flex:1}.lg{display:flex;align-items:center;gap:5px;font-size:8.5px;padding:2px 0}.lg i{width:9px;height:9px;border-radius:50%}.lg b{margin-left:auto}' +
+      '.fs-app p{font-size:8.5px;color:#41505c;line-height:1.5;margin:4px 0 0}' +
+      '.fs-foot{display:flex;gap:10px;align-items:center;border-top:2.5px solid #1e6b3a;margin-top:12px;padding-top:8px}.fs-foot span{color:#5c6a76;font-size:8.5px}.fs-qr{width:58px;height:58px;flex:0 0 58px}.fs-qr svg,.fs-qr img{width:58px!important;height:58px!important}' +
+      '.bad{color:#c63345!important}' +
+      '</style></head><body>' + body + '</body></html>');
     printWindow.document.close();
     printWindow.focus();
     setTimeout(() => printWindow.print(), 350);
