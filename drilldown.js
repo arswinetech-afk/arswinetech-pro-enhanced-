@@ -885,6 +885,7 @@
           ${kind === 'semen' ? `<button type="button" class="btn ghost" onclick="window.openSemenResellerHub && window.openSemenResellerHub()" style="background:#0ea5e9;color:#fff;font-weight:800;margin-right:6px">👥 Resellers</button>` : ''}
           <button class="btn" onclick="drillQuickAdd('${kind}')">${['sows','dueweek'].includes(kind)?'+ Add Sow':kind==='feed'?'+ Add Feed':kind==='boars'?'+ Add Boar':'Quick action'}</button>
           ${kind==='feed' && window.feedOrdersBtn ? feedOrdersBtn() : ''}
+          ${kind==='feed' && window.feedMovementsBtn ? feedMovementsBtn() : ''}
           <button class="close-reminder" onclick="closeDrilldown()">×</button>
         </div>
       </div>

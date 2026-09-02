@@ -366,9 +366,55 @@
     }
     const consumed = {};
     cell.querySelectorAll('[data-fgc]').forEach(inp => { consumed[inp.getAttribute('data-fgc')] = Math.max(0, num(inp.value, 0)); });
+
+    /* [REBUILD FIX 135] MODEL A — AUTO-DEDUCT INVENTORY FROM CONSUMPTION DELTAS.
+       Only the four piglet stages (Pre Starter/Starter/Grower/Finisher) move
+       stock; Gestating/Lactating stay manual. The delta (new − old) per stage
+       is applied once to the Feed Inventory row and appended to an append-only
+       movement ledger stored INSIDE feedPlan (so it syncs with the same
+       verified path). The P&L deliberately stays purchase/delivery-expensed —
+       batch costing, KPIs and suggested prices already read these same
+       consumed values, so production cost and pricing update automatically
+       with zero double-counting. Existing consumed values are the baseline:
+       nothing retroactive is ever deducted. */
+    const f = F();
+    const prevCons = ((p.batches || {})[batchId] || {}).consumed || {};
     p.batches = p.batches || {};
     p.batches[batchId] = { consumed, updated: new Date().toISOString() };
+    p.movements = Array.isArray(p.movements) ? p.movements : [];
+    const fmId = () => 'fm-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 6);
+    const shortages = [];
+    const moved = [];
+    STAGES.forEach(([key, label]) => {
+      const before = Math.max(0, num(prevCons[key], 0));
+      const after = Math.max(0, num(consumed[key], 0));
+      const delta = after - before;
+      if (!delta) return;
+      const row = (f.feed || []).find(x => String(x.type || '').toLowerCase() === label.toLowerCase());
+      if (!row) { moved.push(label + ' (no inventory row)'); return; }
+      const price = +row.price || 0;
+      row.bags = Math.round(((+row.bags || 0) - delta) * 100) / 100;
+      row.feed_revision = Date.now();
+      row.updated_at = new Date().toISOString();
+      p.movements.unshift({ id: fmId(), ts: new Date().toISOString(), batch_id: batchId, stage: label, delta: -delta, bags_after: row.bags, price, value: Math.round(Math.abs(delta) * price), kind: 'consumption' });
+      moved.push(label + ' ' + (delta > 0 ? '−' : '+') + Math.abs(delta));
+      if (row.bags < 0) shortages.push({ row, label, need: -row.bags, price });
+    });
+    /* Negative-stock guard: offer to log the missing delivery (adds stock AND
+       books the purchase expense, exactly like a normal delivery). */
+    shortages.forEach(sh => {
+      const add = Math.ceil(sh.need);
+      if (confirm('⚠ ' + sh.label + ' stock is now NEGATIVE (' + sh.row.bags + ' bags) after this consumption update.\n\nThis usually means a delivery was never recorded.\n\nRecord an unrecorded delivery of ' + add + ' bag(s) at ₱' + sh.price.toLocaleString() + '/bag now? (adds stock and books the Feed purchase expense)')) {
+        sh.row.bags = Math.round((sh.row.bags + add) * 100) / 100;
+        sh.row.feed_revision = Date.now();
+        (f.transactions = f.transactions || []).unshift({ id: 'tx-' + Date.now().toString(36) + '-unrec', date: new Date().toISOString().slice(0, 10), type: 'Expense', category: 'Feed', description: 'Feed delivery (unrecorded; logged via ' + batchId + ' consumption) — ' + sh.label + ' +' + add + ' bag(s)', amount: Math.round(add * sh.price), paid: Math.round(add * sh.price), created_at: new Date().toISOString() });
+        p.movements.unshift({ id: fmId(), ts: new Date().toISOString(), batch_id: batchId, stage: sh.label, delta: add, bags_after: sh.row.bags, price: sh.price, value: Math.round(add * sh.price), kind: 'delivery_unrecorded' });
+      } else {
+        toast('⚠ ' + sh.label + ' stock is negative (' + sh.row.bags + ' bags). Reconcile later with a physical count or record the missing delivery.');
+      }
+    });
     F().feedPlan = p;
+    if (moved.length) toast('✓ Consumption saved · inventory auto-updated: ' + moved.join(', '));
 
     /* Consumption is farm operating data, not merely a visual setting. Save it
        locally first, then await the same remote preflight used by reservations,
@@ -517,4 +563,18 @@
 
   window.filterStagePlanner = filterStagePlanner;
   window.openFeedStagePlanner = openFeedStagePlanner;
+
+  /* [REBUILD FIX 135] Feed Movement Ledger UI — audit trail of every
+     auto-deduction, correction and unrecorded-delivery entry. */
+  window.feedMovementsBtn = () => `<button type="button" class="btn ghost" onclick="window.openFeedMovementsModal()" title="Audit trail of consumption auto-deductions">📒 Movements</button>`;
+  window.openFeedMovementsModal = function () {
+    const p = F().feedPlan || {};
+    const movs = (p.movements || []).slice(0, 150);
+    document.getElementById('feedMovementsModal')?.remove();
+    document.body.insertAdjacentHTML('beforeend', `<div class="due-modal-bg" id="feedMovementsModal"><div class="due-modal" style="text-align:left;max-width:640px"><div class="modal-top"><div><div class="eyebrow">📒 FEED MOVEMENT LEDGER</div><h2>Inventory auto-deduct audit trail</h2><small class="muted">Consumption deltas &amp; unrecorded deliveries — newest first</small></div><button class="close-reminder" onclick="document.getElementById('feedMovementsModal').remove()">×</button></div>` +
+      (movs.length ? `<div class="table-wrap"><table class="table" style="font-size:12px"><thead><tr><th>When</th><th>Batch</th><th>Stage</th><th>Bags</th><th>Value</th><th>Kind</th></tr></thead><tbody>` +
+      movs.map(m => `<tr><td>${esc(new Date(m.ts).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }))}</td><td>${esc(m.batch_id || '')}</td><td>${esc(m.stage || '')}</td><td><b>${m.delta > 0 ? '+' : ''}${m.delta}</b> <small class="muted">(${m.bags_after} left)</small></td><td>${typeof peso === 'function' ? peso(m.value || 0) : '₱' + (m.value || 0)}</td><td><small class="muted">${esc(String(m.kind || '').replace(/_/g, ' '))}</small></td></tr>`).join('') +
+      `</tbody></table></div>` : `<div class="empty" style="padding:22px">No movements yet — update a batch's consumed bags and the ledger starts here.</div>`) +
+      `<p class="muted" style="font-size:11px;margin-top:10px">Model A accounting: inventory auto-deducts on consumption deltas; the P&amp;L stays purchase/delivery-expensed, so nothing is ever double-counted. Only Pre Starter / Starter / Grower / Finisher move stock.</p></div></div>`);
+  };
 })();
