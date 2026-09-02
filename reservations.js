@@ -2009,6 +2009,7 @@
           ${options.map(o => `<option value="${o}" ${o === sel ? 'selected' : ''}>${finMonthLabel(o)}</option>`).join('')}
         </select>
       </div>
+      <small class="muted" style="display:block;margin:0 0 8px">[FIX 134] The Sales &amp; Collections figures below cover only reservations <b>created</b> in ${finMonthLabel(sel)} — e.g. an Aug 29 reservation (₱60,000) is reviewed under <b>August 2026</b>, not September. Switch months with the selector; the top cards are all-time.</small>
       <div class="finrev-sec" style="color:#64e5c0">Sales</div>
       <div class="finrev-row"><span>Total Reservations</span><b>${M.count}</b></div>
       <div class="finrev-row"><span>Total Sales Value</span><b>${finMoney(M.salesValue)}</b></div>
