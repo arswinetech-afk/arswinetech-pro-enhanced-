@@ -3786,3 +3786,6 @@ function saveFarmProfile(e) {
   toast('✓ Farm profile saved — reports now show your owner name and location.');
 }
 window.saveFarmProfile = saveFarmProfile;
+
+/* [FIX 146b] release stamp printed on thermal slips for diagnostics */
+window.ARS_RELEASE = 'v186 (2026-09-03)';

@@ -183,6 +183,7 @@
     add('Signature: ________________');
     add('');
     add(`Printed ${new Date().toLocaleString([])}`, { c: 1 });
+    add('System: ' + (window.ARS_RELEASE || 'ARSwineTech Pro'), { c: 1 });
     window.btPrintTextLines(L, 'Work order ' + w.id);
   };
 })();
