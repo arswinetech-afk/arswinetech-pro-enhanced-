@@ -5,9 +5,12 @@
      the same day-diff helper as app.js (round, local midnight). */
   const realDays = date => date ? Math.max(0, (typeof days === 'function' ? days(date) : Math.floor((new Date() - new Date(String(date).slice(0, 10) + 'T00:00:00')) / 86400000))) : 0;
   const datePlus = (date, n) => {
-    let d = new Date(date + 'T00:00:00');
+    /* [FIX 139] serialize with LOCAL date parts — toISOString() rendered in
+       UTC and shifted every milestone date (Day-16 check, farrowing due)
+       one day early for UTC+ farmers. */
+    let d = new Date(String(date).slice(0, 10) + 'T00:00:00');
     d.setDate(d.getDate() + n);
-    return d.toISOString().slice(0, 10)
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
   };
   const farrowingDue = s => {
     if (!s?.insemination) return 'Due date: not recorded';

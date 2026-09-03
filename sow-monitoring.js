@@ -55,7 +55,7 @@
     let day21Count = 0;
     let dueWeekCount = 0;
 
-    const todayDate = new Date(new Date().toISOString().slice(0, 10) + 'T00:00:00');
+    const todayDate = new Date(dstr(new Date()) + 'T00:00:00'); /* [FIX 139] local wall-clock, not UTC */
     activeSows.forEach(s => {
       if (s.farrowingDate || s.lactationStart) {
         lactatingCount++;
@@ -218,9 +218,18 @@
   /* ── 2. POST-AI INSEMINATION & HEAT MONITORING MODAL ── */
   function openPostAIMonitoringModal() {
     document.querySelectorAll('#postAIMonitorModal').forEach(el => el.remove());
+  /* [FIX 139] if the modal is left open across midnight or the phone sleeps,
+     re-render on return-to-foreground so day counts never look a day late. */
+  if (!openPostAIMonitoringModal._wired) {
+    openPostAIMonitoringModal._wired = true;
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible' && document.getElementById('postAIMonitorModal')) openPostAIMonitoringModal();
+    });
+  }
+
     const f = (typeof F === 'function' && F()) ? F() : {};
     const activeSows = (f.sows || []).filter(s => (typeof isActiveSow === 'function' ? isActiveSow(s) : !s.culled));
-    const todayDate = new Date(new Date().toISOString().slice(0, 10) + 'T00:00:00');
+    const todayDate = new Date(dstr(new Date()) + 'T00:00:00'); /* [FIX 139] local wall-clock, not UTC */
 
     const monitoredSows = [];
     activeSows.forEach((sow, idx) => {
@@ -543,7 +552,7 @@
     const totalFeedBags = (f.feed || []).reduce((a, b) => a + Math.max(0, +b.bags || 0), 0);
     const vaxOverdue = (window.vaxOverdueCount ? window.vaxOverdueCount() : 0);
 
-    const todayDate = new Date(new Date().toISOString().slice(0, 10) + 'T00:00:00');
+    const todayDate = new Date(dstr(new Date()) + 'T00:00:00'); /* [FIX 139] local wall-clock, not UTC */
     let postAICount = 0;
     activeSows.forEach(s => {
       if (!s.insemination) return;
