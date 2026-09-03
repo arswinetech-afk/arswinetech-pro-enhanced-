@@ -6035,3 +6035,12 @@ html, body, .shell, .main {
 @keyframes arsTrot{0%,100%{transform:translateY(0)}35%{transform:translateY(-1.2px)}70%{transform:translateY(0)}}
 @keyframes arsGrain{0%,100%{opacity:.35;transform:translateY(0)}50%{opacity:1;transform:translateY(-1.2px)}}
 @media (prefers-reduced-motion:reduce){.ars-ic *{animation:none!important}}
+
+/* [REBUILD FIX 143] realistic emblem icons — CSS-only micro-motion on top of
+   the generated artwork (gentle breathing scale, staggered per card). */
+.ars-ic-img{width:46px;height:46px;object-fit:cover;border-radius:11px;display:block;box-shadow:0 3px 10px rgba(0,0,0,.35), inset 0 0 0 1px rgba(145,207,202,.12);animation:arsImgBreathe 4.8s ease-in-out infinite}
+.ars-ic-img.ars-d1{animation-delay:.6s}.ars-ic-img.ars-d2{animation-delay:1.2s}
+.ars-ic-img.ars-d3{animation-delay:1.8s}.ars-ic-img.ars-d4{animation-delay:2.4s}
+.ars-ic-img.ars-d5{animation-delay:3s}
+@keyframes arsImgBreathe{0%,100%{transform:scale(1)}50%{transform:scale(1.04)}}
+@media (prefers-reduced-motion:reduce){.ars-ic-img{animation:none!important}}
