@@ -177,7 +177,15 @@
     add(sep);
     add('TASK:', { b: 1 });
     wrap(w.title).forEach(t => add(t));
-    if (w.details) { add(''); wrap('Notes: ' + w.details).forEach(t => add(t)); }
+    if (w.details) {
+      /* [FIX 146] every instruction line prints as a [ ] checkbox so the
+         staff on duty can tick items off on the paper copy. */
+      add('');
+      add('INSTRUCTIONS - check when done:', { b: 1 });
+      String(w.details).split(/\n+/).map(s => s.trim()).filter(Boolean).forEach(line => {
+        wrap('[ ] ' + line).forEach((t, i) => add(i === 0 ? t : '    ' + t));
+      });
+    }
     add(sep);
     add('Started: ______  Done: ______');
     add('Signature: ________________');
