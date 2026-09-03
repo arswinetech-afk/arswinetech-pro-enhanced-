@@ -6044,3 +6044,9 @@ html, body, .shell, .main {
 .ars-ic-img.ars-d5{animation-delay:3s}
 @keyframes arsImgBreathe{0%,100%{transform:scale(1)}50%{transform:scale(1.04)}}
 @media (prefers-reduced-motion:reduce){.ars-ic-img{animation:none!important}}
+
+/* [REBUILD FIX 144] KPI honesty tiers */
+.pc-kpi-card.good b{color:#62df99}
+.pc-kpi-card.fair b{color:#ffc968}
+.pc-kpi-card.bad b{color:#ff8b95}
+.pc-reality{border:1px solid rgba(240,182,72,.35);background:linear-gradient(145deg,rgba(40,32,14,.35),rgba(10,25,29,.98))}

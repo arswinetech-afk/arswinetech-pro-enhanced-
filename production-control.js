@@ -1207,13 +1207,13 @@
       <div class="pc-notice ${qualityTone}"><b>Data quality: ${esc(qualityText)}</b><span>${q.legacy_derived ? `${q.legacy_derived} KPI events currently come from legacy records; new entries are recorded canonically.` : 'Canonical events are active for new records.'}</span><button type="button" class="btn ghost small" onclick="window.openDataQualityReport()">Review quality</button></div>
       <div class="pc-kpi-grid">
         ${kpiCard('Farrowing rate', formatRate(k.farrowing_rate), `${k.farrowings} farrowings / ${k.services} services`, k.farrowing_rate === null ? 'warn' : '')}
-        ${kpiCard('Pre-weaning mortality', formatRate(k.preweaning_mortality_rate), `${formatNumber(k.preweaning_mortality, 0)} pre-weaning deaths / ${formatNumber(k.born, 0)} born`, k.preweaning_mortality_rate !== null && k.preweaning_mortality_rate > .1 ? 'warn' : '')}
+        ${kpiCard('Pre-weaning mortality', formatRate(k.preweaning_mortality_rate), `${formatNumber(k.preweaning_mortality, 0)} pre-weaning deaths / ${formatNumber(k.born, 0)} born`, ((r => r == null ? 'warn' : r <= .05 ? 'good' : r <= .10 ? 'fair' : 'bad')(k.preweaning_mortality_rate)))}
         ${kpiCard('Average born / farrowing', formatNumber(k.average_born_per_farrowing), `${formatNumber(k.born, 0)} born across ${k.farrowings} farrowings`)}
         ${kpiCard('Pigs weaned / sow / year', formatNumber(k.pigs_weaned_per_sow_per_year), `${formatNumber(k.weaned, 0)} weaned · ${k.active_sows} active sows`)}
         ${kpiCard('Feed delivered', `${formatNumber(k.feed_delivered_kg)} kg`, `${formatMoney(k.feed_purchase_cost)} purchase cost`)}
         ${kpiCard('Feed allocated / COGS', `${formatNumber(k.feed_allocated_kg)} kg`, `${formatMoney(k.feed_cogs)} actual allocated cost`, k.feed_allocated_kg ? '' : 'warn')}
         ${kpiCard('Feed cost / kg', k.feed_cost_per_allocated_kg == null ? '—' : formatMoney(k.feed_cost_per_allocated_kg), k.feed_cost_per_allocated_kg == null ? 'Allocate actual consumption to measure' : 'weighted average cost basis')}
-        ${kpiCard('Mortality rate', formatRate(k.mortality_rate), `${formatNumber(k.mortality, 0)} mortality events/heads`, k.mortality_rate > .1 ? 'warn' : '')}
+        ${kpiCard('Mortality rate', formatRate(k.mortality_rate), `${formatNumber(k.mortality, 0)} mortality events/heads`, ((r => r == null ? 'warn' : r <= .05 ? 'good' : r <= .10 ? 'fair' : 'bad')(k.mortality_rate)))}
       </div>
       <div class="pc-two-col">
         <div class="panel pc-section"><div class="pc-section-head"><div><h3>Feed cost allocation ledger</h3><p class="muted">Purchased feed is not treated as consumed COGS until allocated to a group or batch.</p></div><button type="button" class="btn" onclick="window.openFeedAllocationModal()">＋ Allocate feed usage</button></div><div class="pc-summary-strip"><span>Delivered <b>${formatNumber(feed.deliveredKg)} kg</b></span><span>Allocated <b>${formatNumber(feed.allocatedKg)} kg</b></span><span>Unallocated <b>${formatNumber(feed.unallocatedKg)} kg</b></span><span>Projected next 30d <b>${formatNumber(feed.projected.kg)} kg</b></span></div><div class="table-wrap"><table class="table pc-table"><thead><tr><th>Feed type</th><th>Delivered</th><th>Allocated</th><th>Allocated cost</th><th>Unallocated</th><th>Review</th></tr></thead><tbody>${feedRows || '<tr><td colspan="6" class="empty">No feed delivery/allocation events in this period.</td></tr>'}</tbody></table></div>${feed.warnings.map(w => `<div class="pc-warning">⚠ ${esc(w)}</div>`).join('')}</div>
@@ -1293,6 +1293,26 @@
     const varianceText = reconciliation.variance === null ? 'snapshot pending' : String(reconciliation.variance);
     const periodSelect = `<select class="select" onchange="window.setProductionKpiPeriod(this.value)"><option value="30" ${daysBack === 30 ? 'selected' : ''}>Last 30 days</option><option value="90" ${daysBack === 90 ? 'selected' : ''}>Last 90 days</option><option value="365" ${daysBack === 365 ? 'selected' : ''}>Last 12 months</option></select>`;
 
+    /* [REBUILD FIX 144] KPI HONESTY PASS — mortality priced, margin/collections/
+       feed-share graded on PH-commercial tiers so production KPIs can't hide
+       financial reality. Nulls stay honest ("not recorded"), never flattering 0. */
+    const tier = (v, good, fair, lowerBetter) => v == null ? '' : (lowerBetter ? (v <= good ? 'good' : v <= fair ? 'fair' : 'bad') : (v >= good ? 'good' : v >= fair ? 'fair' : 'bad'));
+    const fin = (() => { try { return window.ARSFinance && window.ARSFinance.summary(f); } catch (e) { return null; } })();
+    const rcMortHeads = k.mortality != null ? k.mortality : (fin ? fin.mortality.heads : null);
+    const rcMortLoss = fin ? fin.mortality.loss : null;
+    const rcPerHead = (rcMortHeads > 0 && rcMortLoss != null) ? Math.round(rcMortLoss / rcMortHeads) : null;
+    const rcMargin = (fin && fin.grossSales > 0) ? (fin.grossSales - fin.operatingExpenses) / fin.grossSales : null;
+    const rcCollect = (fin && fin.grossSales > 0) ? fin.collected / fin.grossSales : null;
+    const rcFeedShare = (fin && fin.grossSales > 0) ? fin.feed / fin.grossSales : null;
+    const dash = '— not recorded';
+    const realityStrip = `<div class="panel pc-reality"><div class="pc-section-head"><div><h3>🪞 Reality Check — the numbers that pay the bills</h3><p class="muted">Mortality priced in pesos, margin and collections graded vs PH-commercial tiers. Production KPIs above can no longer hide these.</p></div></div><div class="pc-kpi-grid">` +
+      kpiCard('Mortality loss (₱)', rcMortLoss != null ? formatMoney(rcMortLoss) : dash, (rcMortHeads != null ? rcMortHeads + ' heads' : 'heads —') + (rcPerHead != null ? ' · ' + formatMoney(rcPerHead) + ' / head' : ' · price your losses'), tier(k.mortality_rate, .05, .10, true) || (rcMortLoss > 0 ? 'bad' : '')) +
+      kpiCard('Pre-weaning mortality', k.preweaning_mortality_rate == null ? dash : formatRate(k.preweaning_mortality_rate), 'tiers: ≤5% good · ≤10% fair · >10% poor', tier(k.preweaning_mortality_rate, .05, .10, true)) +
+      kpiCard('Net operating margin', rcMargin == null ? dash : (rcMargin * 100).toFixed(1) + '%', 'target ≥ 15% · 0–15% fair · negative poor', tier(rcMargin, .15, 0, false)) +
+      kpiCard('Collection rate', rcCollect == null ? dash : (rcCollect * 100).toFixed(0) + '%', 'target ≥ 90% · ≥70% fair', tier(rcCollect, .9, .7, false)) +
+      kpiCard('Feed share of sales', rcFeedShare == null ? dash : (rcFeedShare * 100).toFixed(0) + '%', 'keep ≤ 60% · ≤80% fair', tier(rcFeedShare, .6, .8, true)) +
+      `</div></div>`;
+
     const cmpRows = comparison.rows.map(row => {
       const lb = LOWER_BETTER.has(row.key);
       return `<tr><td><b>${esc(row.label)}</b></td><td>${fmtByUnit(row.current13, row.unit)}</td><td class="muted">${fmtByUnit(row.previous13, row.unit)}</td><td>${trendSpan(row.change13 ? row.change13.change : null, lb)}</td><td>${fmtByUnit(row.current52, row.unit)}</td><td>${trendSpan(row.change52 ? row.change52.change : null, lb)}</td></tr>`;
@@ -1313,15 +1333,17 @@
     return `<section id="kpiCenter" class="production-control-center">
       <div class="pc-header panel"><div><div class="eyebrow">KPI CENTER · ${APP_VERSION}</div><h2>Farm performance command deck</h2><p class="muted">Farrowing, mortality, growth efficiency, benchmark scoring and the sow league — computed live from your recorded production events.</p></div><div class="pc-header-actions">${periodSelect}<button type="button" class="btn ghost" onclick="window.openKpiDefinitions()">ⓘ Definitions</button><button type="button" class="btn ghost" onclick="window.openDataQualityReport()">⚠ Data quality</button><button type="button" class="btn ghost" onclick="go('production')">◷ Production Forecast</button></div></div>
 
+      ${realityStrip}
+
       <div class="pc-kpi-grid">
         ${kpiCard('Farrowing rate', formatRate(k.farrowing_rate), `${k.farrowings} farrowings / ${k.services} services`, k.farrowing_rate === null ? 'warn' : '')}
-        ${kpiCard('Pre-weaning mortality', formatRate(k.preweaning_mortality_rate), `${formatNumber(k.preweaning_mortality, 0)} pre-weaning deaths / ${formatNumber(k.born, 0)} born`, k.preweaning_mortality_rate !== null && k.preweaning_mortality_rate > .1 ? 'warn' : '')}
+        ${kpiCard('Pre-weaning mortality', formatRate(k.preweaning_mortality_rate), `${formatNumber(k.preweaning_mortality, 0)} pre-weaning deaths / ${formatNumber(k.born, 0)} born`, ((r => r == null ? 'warn' : r <= .05 ? 'good' : r <= .10 ? 'fair' : 'bad')(k.preweaning_mortality_rate)))}
         ${kpiCard('Average born / farrowing', formatNumber(k.average_born_per_farrowing), `${formatNumber(k.born, 0)} born across ${k.farrowings} farrowings`)}
         ${kpiCard('Pigs weaned / sow / year', formatNumber(k.pigs_weaned_per_sow_per_year), `${formatNumber(k.weaned, 0)} weaned · ${k.active_sows} active sows`)}
         ${kpiCard('Feed delivered', `${formatNumber(k.feed_delivered_kg)} kg`, `${formatMoney(k.feed_purchase_cost)} purchase cost`)}
         ${kpiCard('Feed allocated / COGS', `${formatNumber(k.feed_allocated_kg)} kg`, `${formatMoney(k.feed_cogs)} actual allocated cost`, k.feed_allocated_kg ? '' : 'warn')}
         ${kpiCard('Feed cost / kg', k.feed_cost_per_allocated_kg == null ? '—' : formatMoney(k.feed_cost_per_allocated_kg), k.feed_cost_per_allocated_kg == null ? 'Allocate actual consumption to measure' : 'weighted average cost basis')}
-        ${kpiCard('Mortality rate', formatRate(k.mortality_rate), `${formatNumber(k.mortality, 0)} mortality events/heads`, k.mortality_rate > .1 ? 'warn' : '')}
+        ${kpiCard('Mortality rate', formatRate(k.mortality_rate), `${formatNumber(k.mortality, 0)} mortality events/heads`, ((r => r == null ? 'warn' : r <= .05 ? 'good' : r <= .10 ? 'fair' : 'bad')(k.mortality_rate)))}
       </div>
 
       <div class="panel pc-section pc-intelligence"><div class="pc-section-head"><div><h3>Growth efficiency &amp; population reconciliation</h3><p class="muted">13-week scope · measured weight gain, feed conversion and headcount math.</p></div><button type="button" class="btn ghost" onclick="window.openPopulationReconciliation()">＋ Headcount snapshot</button></div><div class="pc-intel-kpis">${kpiCard('Ending piglet headcount', formatNumber(reconciliation.observedEnding, 0), reconciliation.startingSource.replace(/_/g, ' '))}${kpiCard('Weight gain', growth.total_gain_kg == null ? '—' : `${Number(growth.total_gain_kg).toFixed(1)} kg`, growth.total_gain_kg == null ? 'Requires measured start/current weight' : 'measured gain across tracked batches')}${kpiCard('FCR', growth.fcr == null ? '—' : Number(growth.fcr).toFixed(2), growth.fcr == null ? 'Requires feed and measured weight gain' : 'kg feed ÷ kg weight gain')}${kpiCard('ADG', growth.adg_kg_per_day == null ? '—' : `${Number(growth.adg_kg_per_day).toFixed(3)} kg/day`, growth.adg_kg_per_day == null ? 'Requires dated weights' : 'weight gain ÷ days')}${kpiCard('Feed cost efficiency', growth.feed_cost_efficiency == null ? '—' : formatMoney(growth.feed_cost_efficiency), growth.feed_cost_efficiency == null ? 'Requires feed cost and weight gain' : 'PHP per kg gain')}${kpiCard('Production index', index.score === null ? 'Not benchmarked' : `${index.score.toFixed(1)} / 100`, index.score === null ? 'Import a benchmark profile' : `${Math.round(index.coverage * 100)}% weighted coverage`, index.score === null ? 'warn' : '')}</div><div class="pc-recon-line"><span><b>Starting</b> ${formatNumber(reconciliation.starting, 0)}</span><span>＋ <b>Entries</b> ${formatNumber(reconciliation.entries, 0)}</span><span>− <b>Mortality</b> ${formatNumber(reconciliation.mortality, 0)}</span><span>− <b>Transfers</b> ${formatNumber(reconciliation.transfers, 0)}</span><span>− <b>Sales</b> ${formatNumber(reconciliation.sales, 0)}</span><span>＝ <b>Expected ending</b> ${formatNumber(reconciliation.expectedEnding, 0)}</span><span class="${reconciliation.variance === null ? 'pc-recon-pending' : (reconciliation.variance === 0 ? 'pc-good' : 'pc-bad')}">Variance: ${varianceText}</span></div></div>
