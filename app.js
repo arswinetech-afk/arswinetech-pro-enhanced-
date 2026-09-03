@@ -2429,8 +2429,9 @@ function dashboard() {
     if (!dashEl) return;
 
     dashEl.innerHTML = `
+      ${window.arsWODashboard ? window.arsWODashboard(f) : ''}
       <div class="dash-hero">
-        <div class="panel health-card">
+        <div class="panel health-card health-slim">
           <div class="score-ring interactive-ring" onclick="openFarmSummaryModal()" title="Click to view full Farm Biosecurity & Operations Summary" style="background: conic-gradient(var(--teal) 0 ${healthScore * 3.6}deg, #17383a ${healthScore * 3.6}deg)">
             <div class="ring-glow-pulse"></div>
             <div class="score-inner"><strong id="dashHealthScoreNum">${healthScore}</strong><small>/100</small></div>

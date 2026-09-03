@@ -1028,6 +1028,43 @@
     }
   }
 
+  /* [REBUILD FIX 145] GENERIC 58mm ESC/POS LINE PRINTER — reused by the
+     Work Order module (and any future module) so staff can get a small
+     printed copy at the start of duty. Lines: [{t, c(center), b(bold)}]. */
+  function escPosBytesFromLines(lines) {
+    let enc = new TextEncoder(), parts = [
+      new Uint8Array([0x1B, 0x40]), new Uint8Array([0x1B, 0x74, 0x00]), new Uint8Array([0x1B, 0x32])
+    ];
+    lines.forEach(l => {
+      parts.push(new Uint8Array([0x1B, 0x61, l.c ? 1 : 0]));
+      parts.push(new Uint8Array([0x1B, 0x45, l.b ? 1 : 0]));
+      parts.push(enc.encode(l.t + "\n"));
+    });
+    parts.push(new Uint8Array([0x1B, 0x64, 0x04]));
+    parts.push(new Uint8Array([0x1D, 0x56, 0x42, 0x00]));
+    parts.push(enc.encode("\n\n\n\n"));
+    let n = parts.reduce((a, p) => a + p.length, 0), out = new Uint8Array(n), o = 0;
+    parts.forEach(p => { out.set(p, o); o += p.length; });
+    return out;
+  }
+  async function btPrintTextLines(lines, label) {
+    if (!btChar) {
+      if (window.toast) toast("⚠ No Bluetooth printer connected — opening scanner…");
+      btScanPrinter();
+      return false;
+    }
+    try {
+      const bytes = escPosBytesFromLines(lines);
+      await sendEscPosBytes(bytes);
+      if (window.toast) toast(`✔ ${label || 'Document'} printed on ${btDev?.name || 'printer'}.`);
+      return true;
+    } catch (e) {
+      if (window.toast) toast("⚠ Print failed: " + ((e && e.message) || e));
+      return false;
+    }
+  }
+  window.btPrintTextLines = btPrintTextLines;
+
   /* ── 58mm ESC/POS STATEMENT GENERATOR (32 Columns) ── */
   function statementTextLines(customerName, lastPaidAmount, lastPaidNote) {
     const W = 32, farm = F(),
