@@ -78,7 +78,7 @@
           return `<div class="wo-row">
             <div class="wo-row-top"><span class="wo-pri" style="border-color:${PRI[w.priority][1]}55;background:${PRI[w.priority][1]}18;color:${PRI[w.priority][1]}">${PRI[w.priority][0]}</span><b>${esc(w.title)}</b><small class="muted">${esc(w.id)}</small></div>
             <div class="wo-row-meta"><span>👤 ${esc(w.assignee || 'Unassigned')}</span><span>📍 ${esc(w.location || '—')}</span><span class="${late ? 'wo-bad' : ''}">🗓 ${fmtDue(w.due)}</span><span>Status: <b>${ST[w.status]}</b></span></div>
-            ${w.details ? `<small class="muted" style="display:block">${esc(w.details)}</small>` : ''}
+            ${w.details ? `<div style="margin:4px 0 0">${String(w.details).split(/\n+/).map(s => s.trim()).filter(Boolean).map(l => `<small class="muted" style="display:block">☐ ${esc(l)}</small>`).join('')}</div>` : ''}
             <div class="wo-actions">
               ${w.status === 'open' ? `<button class="btn ghost small" onclick="woSetStatus('${w.id}','in_progress')">▶ Start</button>` : ''}
               ${w.status === 'in_progress' ? `<button class="btn ghost small" onclick="woSetStatus('${w.id}','pending_review')">📋 To review</button>` : ''}
@@ -108,7 +108,7 @@
           <div class="field"><label>Due date &amp; time</label><input name="due" type="datetime-local" value="${w?.due ? w.due.slice(0, 16) : ''}"></div>
           <div class="field"><label>Assignee</label><input name="assignee" value="${esc(w?.assignee || '')}" placeholder="Staff name"></div>
           <div class="field"><label>Location</label><input name="location" value="${esc(w?.location || '')}" placeholder="Barn / pen / area"></div>
-          <div class="field full"><label>Details / instructions</label><textarea name="details">${esc(w?.details || '')}</textarea></div>
+          <div class="field full"><label>Details / instructions <small class="muted">(one per line — each line prints as a [ ] checkbox the staff ticks when done)</small></label><textarea name="details">${esc(w?.details || '')}</textarea></div>
           <div class="field full"><label style="display:flex;gap:8px;align-items:center"><input type="checkbox" name="print_bt" ${w ? '' : 'checked'} style="width:auto"> 🖨 Print a small copy via Bluetooth POS (for the staff on duty)</label></div>
         </div>
         <div class="due-actions"><button type="button" class="btn ghost" onclick="document.getElementById('woFormModal').remove()">Cancel</button><button class="btn">💾 Save work order</button></div>
