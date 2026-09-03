@@ -79,8 +79,11 @@
     if (openCount > activeSows.length * 0.3) healthScore -= 4;
     healthScore = Math.max(70, Math.min(100, healthScore));
 
-    const scoreRating = healthScore >= 90 ? 'EXCELLENT' : healthScore >= 80 ? 'GOOD' : 'NEEDS ATTENTION';
-    const scoreColor = healthScore >= 90 ? '#57d48d' : healthScore >= 80 ? '#f0b64b' : '#ff5c68';
+    /* [FIX 141] composite Farm Health Index (biosecurity 50 / mortality 30 / profit 20) */
+    const HX = window.arsFarmHealthIndex ? window.arsFarmHealthIndex(f, healthScore) : { index: healthScore, bio: healthScore, mort: null, prof: null, mortalityHeads60: 0 };
+    const idxScore = HX.index;
+    const scoreRating = idxScore >= 90 ? 'EXCELLENT' : idxScore >= 80 ? 'GOOD' : idxScore >= 60 ? 'FAIR' : 'NEEDS ATTENTION';
+    const scoreColor = idxScore >= 90 ? '#57d48d' : idxScore >= 80 ? '#f0b64b' : idxScore >= 60 ? '#fb923c' : '#ff5c68';
 
     const modalHtml = `
       <div class="due-modal-bg open" id="farmSummaryModal" onclick="if(event.target===this)this.remove()" style="z-index:999999!important">
@@ -97,17 +100,18 @@
           <!-- Score Header & KPI Strip -->
           <div style="display:grid;grid-template-columns:130px 1fr;gap:16px;align-items:center;background:linear-gradient(135deg,rgba(19,185,173,0.12),rgba(7,94,99,0.22));border:1.2px solid rgba(19,185,173,0.3);border-radius:14px;padding:16px;margin-bottom:18px">
             <div style="text-align:center">
-              <div class="score-ring interactive-ring" style="width:86px;height:86px;min-width:86px;margin:0 auto;background:conic-gradient(var(--teal) 0 ${healthScore * 3.6}deg, #17383a ${healthScore * 3.6}deg)">
+              <div class="score-ring interactive-ring" style="width:86px;height:86px;min-width:86px;margin:0 auto;background:conic-gradient(var(--teal) 0 ${idxScore * 3.6}deg, #17383a ${idxScore * 3.6}deg)">
                 <div class="ring-glow-pulse"></div>
                 <div class="score-inner">
-                  <strong style="font-size:26px">${healthScore}</strong>
+                  <strong style="font-size:26px">${idxScore}</strong>
                   <small style="font-size:10px">/100</small>
                 </div>
               </div>
               <div style="font-size:11px;font-weight:800;color:${scoreColor};margin-top:6px;letter-spacing:0.05em">${scoreRating}</div>
+              <div style="font-size:9.5px;color:var(--muted);margin-top:4px">🛡 Bio ${HX.bio} · 🩸 Mortality ${HX.mort ?? '—'} (${HX.mortalityHeads60} deaths · 60d) · ₱ Profit ${HX.prof ?? '—'}</div>
             </div>
             <div>
-              <h3 style="margin:0 0 6px;font-size:16px;color:#fff">Herd Biosecurity &amp; Operations Index</h3>
+              <h3 style="margin:0 0 6px;font-size:16px;color:#fff">Farm Health Index (Biosecurity · Mortality · Profit)</h3>
               <p style="margin:0 0 10px;font-size:12px;color:#c0dedc;line-height:1.4">
                 Your farm maintains active bio-exclusion standards, proactive 16d/21d heat detection schedules, and synchronized vaccination programs.
               </p>

@@ -2347,11 +2347,47 @@ function dashboard() {
     const vaxOverdue = (window.vaxOverdueCount ? vaxOverdueCount() : 0);
 
     // Compute dynamic health score
-    let healthScore = 96;
-    if (vaxOverdue > 0) healthScore -= Math.min(15, vaxOverdue * 5);
-    if (dueList.some(s => days(s.insemination) > 114)) healthScore -= 4;
-    if (totalFeedBags <= 0) healthScore -= 10;
-    healthScore = Math.max(70, Math.min(100, healthScore));
+
+  /* [REBUILD FIX 141] FARM HEALTH INDEX — the old ring measured compliance
+     only (vaccines/feed/gestation), so a farm bleeding money and pigs could
+     still read "Excellent 96". The index now blends three dimensions:
+       50% biosecurity & care compliance (the old score)
+       30% mortality control   (60-day death rate: 0% → 100, ≥15% → 0)
+       20% profitability       (current-month net margin: 25% → 100, 0 → 50, −25% → 0)
+     so heavy mortality or a falling net profit visibly pulls the ring down. */
+  function arsFarmHealthIndex(f, bioBase) {
+    f = f || (typeof F === 'function' ? F() : {}) || {};
+    const cut = Date.now() - 60 * 864e5;
+    let heads = 0;
+    (f.pigletLedger || []).forEach(x => {
+      if (!x || x.type !== 'mortality' || ['undone', 'deleted'].includes(x.status)) return;
+      const t = new Date(x.created_at || x.date || 0).getTime();
+      if (isFinite(t) && t >= cut) heads += +x.quantity || 0;
+    });
+    const herd = (f.piglets || []).reduce((a, b) => a + (+b.males || 0) + (+b.females || 0), 0) +
+      (f.sows || []).filter(s => !s.culled).length;
+    const rate = heads / Math.max(1, herd + heads);
+    const mort = Math.max(0, Math.round(100 - (rate / 0.15) * 100));
+    let prof = 70;
+    try {
+      const s = window.ARSFinance && window.ARSFinance.summary(f);
+      if (s && s.grossSales > 0) {
+        const margin = (s.grossSales - s.operatingExpenses) / s.grossSales;
+        prof = Math.max(0, Math.min(100, Math.round(50 + margin * 200)));
+      } else if (s) prof = 40;
+    } catch (e) {}
+    const index = Math.max(0, Math.min(100, Math.round(0.5 * bioBase + 0.3 * mort + 0.2 * prof)));
+    return { bio: bioBase, mort, prof, index, mortalityHeads60: heads, mortalityRate: +rate.toFixed(4) };
+  }
+  window.arsFarmHealthIndex = arsFarmHealthIndex;
+
+    let bioScore = 100; /* [FIX 141] biosecurity component of the health index */
+    if (vaxOverdue > 0) bioScore -= Math.min(15, vaxOverdue * 5);
+    if (dueList.some(s => days(s.insemination) > 114)) bioScore -= 4;
+    if (totalFeedBags <= 0) bioScore -= 10;
+    bioScore = Math.max(70, Math.min(100, bioScore));
+    const H = window.arsFarmHealthIndex(f, bioScore);
+    const healthScore = H.index;
 
     const attention = [
       ['🐖', 'Sows Due This Week', dueCount, 'openDueWatchlist()'],
@@ -2368,7 +2404,7 @@ function dashboard() {
     const fatPct = totalHerd > 0 ? ((fatteners / totalHerd) * 100).toFixed(1) : '0';
 
     // Post-AI 16th/21st day monitoring counts
-    const todayDate = new Date(new Date().toISOString().slice(0, 10) + 'T00:00:00');
+    const todayDate = new Date(localToday() + 'T00:00:00'); /* [FIX 139b] local wall-clock */
     let postAICount = 0;
     activeSows.forEach(s => {
       if (!s.insemination) return;
@@ -2388,8 +2424,9 @@ function dashboard() {
             <div class="score-inner"><strong id="dashHealthScoreNum">${healthScore}</strong><small>/100</small></div>
           </div>
           <div class="health-copy">
-            <h2>${healthScore >= 90 ? 'Excellent' : healthScore >= 80 ? 'Good' : 'Needs Attention'}</h2>
-            <p>Herd biosecurity & health status for <b>${esc(f.name || "RM's Hog Farm")}</b>.</p>
+            <h2>${healthScore >= 90 ? 'Excellent' : healthScore >= 80 ? 'Good' : healthScore >= 60 ? 'Fair' : 'Needs Attention'}</h2>
+            <p>Farm health index for <b>${esc(f.name || "RM's Hog Farm")}</b> — 50% biosecurity · 30% mortality · 20% profit.</p>
+            <p class="muted" style="font-size:10.5px;margin-top:4px">🛡 Biosecurity ${H.bio} · 🩸 Mortality ${H.mort} (${H.mortalityHeads60} deaths · 60d) · ₱ Profit ${H.prof}</p>
             <button class="btn ghost" onclick="openFarmSummaryModal()">View breakdown →</button>
           </div>
           <div class="checklist">

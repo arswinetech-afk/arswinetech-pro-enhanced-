@@ -731,6 +731,7 @@
           <small>🎂 Birthday &amp; Age</small>
           <b>${ageDetailed.summary}</b>
           <span>DOB: ${b.birth ? fmtDate(b.birth) : "—"} (${ageDays}d old)</span>
+          <span style="display:block;margin-top:3px">🍼 Weaned: ${b.weanedAt || b.weaning_date ? fmtDate(b.weanedAt || b.weaning_date) : "not weaned yet"}</span> <!-- [FIX 140] -->
         </div>
         <div class="boar-stat-card">
           <small>🐖 Living Herd</small>
