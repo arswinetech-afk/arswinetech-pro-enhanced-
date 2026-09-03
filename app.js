@@ -3788,4 +3788,4 @@ function saveFarmProfile(e) {
 window.saveFarmProfile = saveFarmProfile;
 
 /* [FIX 146b] release stamp printed on thermal slips for diagnostics */
-window.ARS_RELEASE = 'v187 (2026-09-03)';
+window.ARS_RELEASE = 'v188 (2026-09-04)';

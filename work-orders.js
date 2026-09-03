@@ -182,8 +182,11 @@
          staff on duty can tick items off on the paper copy. */
       add('');
       add('INSTRUCTIONS - check when done:', { b: 1 });
+      /* [FIX 148] continuation lines are indented 4, so they must wrap at
+         W-4 or the 32-col printer hard-wraps mid-word (the "ma / y" tears). */
+      const wrapAt = (t, w) => { let out = [], cur = ''; String(t).split(/\s+/).forEach(x => { if (x.length > w) { if (cur.trim()) out.push(cur.trim()); cur = ''; for (let i2 = 0; i2 < x.length; i2 += w) out.push(x.slice(i2, i2 + w)); return; } if ((cur + ' ' + x).trim().length > w) { if (cur.trim()) out.push(cur.trim()); cur = x; } else cur = cur ? cur + ' ' + x : x; }); if (cur.trim()) out.push(cur.trim()); return out; };
       String(w.details).split(/\n+/).map(s => s.trim()).filter(Boolean).forEach(line => {
-        wrap('[ ] ' + line).forEach((t, i) => add(i === 0 ? t : '    ' + t));
+        wrapAt(line, W - 4).forEach((t, i) => add(i === 0 ? '[ ] ' + t : '    ' + t));
       });
     }
     add(sep);
