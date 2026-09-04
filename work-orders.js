@@ -205,9 +205,9 @@
     add('System: ' + (window.ARS_RELEASE || 'ARSwineTech Pro'), { c: 1 });
     window.btPrintTextLines(L, 'Work order ' + w.id);
   };
-})();
 
-/* ═══ [REBUILD FIX 156/157] STAFF PERFORMANCE CENTER ═══════════════════════
+
+  /* ═══ [REBUILD FIX 156/157] STAFF PERFORMANCE CENTER ═══════════════════════
    Anti-gaming model (Asana Workload + Linear points + GitHub heatmap):
    points = (effort tier + priority bonus) × quality multipliers.
    20 easy tasks (20 pts) loses to 5 expert-criticals (35 pts). Quality comes
@@ -339,3 +339,4 @@
     L.push({ t: ctr('Printed ' + new Date().toLocaleDateString()), c: 1 });
     window.btPrintTextLines(L, 'MVP slip');
   };
+})();
