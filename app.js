@@ -2400,6 +2400,7 @@ function dashboard() {
     bioScore = Math.max(70, Math.min(100, bioScore));
     const H = window.arsFarmHealthIndex(f, bioScore);
     const healthScore = H.index;
+    if (!window.__arsComLast || Date.now() - window.__arsComLast > 60000) { window.__arsComLast = Date.now(); window.arsRefreshCommerce && window.arsRefreshCommerce(); }
 
     const attention = [
       ['🐖', 'Sows Due This Week', dueCount, 'openDueWatchlist()'],
@@ -2793,6 +2794,29 @@ function subscriptionPage() {
   }
   window.pendingPayments = pendingPayments;
 
+  /* [FIX 154] pull commerce rows for the active farm and merge locally. */
+  window.arsRefreshCommerce = async function (fidArg) {
+    const fid = fidArg || window.__arsActiveFarmId || (typeof farmId !== 'undefined' ? farmId : null);
+    const f = fid && (typeof DB !== 'undefined') ? DB[fid] : null;
+    if (!fid || !f || !window.ARSCloud || !ARSCloud.listCommerceRows) return;
+    try {
+      const rows = await ARSCloud.listCommerceRows(fid);
+      let changed = false;
+      (rows || []).forEach(rw => {
+        const p = rw && rw.payload; if (!p || !p.id) return;
+        if (rw.entity_type === 'sub_meta') {
+          if (!f.subMeta || JSON.stringify(f.subMeta[0] || {}) !== JSON.stringify(p)) { f.subMeta = [p]; f.subscription = p; changed = true; }
+        } else if (rw.entity_type === 'sub_order') {
+          f.subOrders = f.subOrders || [];
+          const i = f.subOrders.findIndex(x => x.id === p.id);
+          if (i >= 0) { if (JSON.stringify(f.subOrders[i]) !== JSON.stringify(p)) { f.subOrders[i] = p; changed = true; } }
+          else { f.subOrders.unshift(p); changed = true; }
+        }
+      });
+      if (changed && typeof renderAll === 'function') setTimeout(() => { try { renderAll(); } catch (e) {} }, 0);
+    } catch (e) {}
+  };
+
   window.subOrderCalc = function () {
     const m = document.getElementById('subOrderModal');
     if (!m) return;
@@ -2838,6 +2862,7 @@ function subscriptionPage() {
     const order = { id: 'PAY-' + Date.now().toString(36).toUpperCase(), plan, period, amount: SUB_PRICE(plan, period), ref, mobile, status: 'pending', created_at: new Date().toISOString() };
     (f.subOrders = f.subOrders || []).unshift(order);
     save();
+    try { if (window.ARSCloud && ARSCloud.upsertCommerceRows) ARSCloud.upsertCommerceRows(window.__arsActiveFarmId || farmId, [Object.assign({ _et: 'sub_order' }, order)]).catch(() => {}); } catch (e) {}
     document.getElementById('subOrderModal')?.remove();
     toast(`✔ Payment ${order.id} submitted (${f.name || 'this farm'}) — pending admin verification.`);
   };
@@ -2876,9 +2901,10 @@ function subscriptionPage() {
     if (!f || !o) return;
     const days = o.period === 'yearly' ? 365 : 30; const nowD = new Date();
     f.subscription = { plan: o.plan, period: o.period, started_at: nowD.toISOString(), expires_at: new Date(nowD.getTime() + days * 864e5).toISOString() };
-    f.subMeta = [{ id: 'current', ...f.subscription }]; /* [FIX 153] synced mirror */
+    f.subMeta = [{ id: 'current', ...f.subscription }]; /* synced mirror */
     o.status = 'approved'; o.approved_at = nowD.toISOString();
     save();
+    try { if (window.ARSCloud && ARSCloud.upsertCommerceRows) ARSCloud.upsertCommerceRows(fid, [Object.assign({ _et: 'sub_order' }, o), Object.assign({ _et: 'sub_meta' }, f.subMeta[0])]).catch(() => {}); } catch (e) {}
     try {
       const us = users(); const u = us.find(x => x.farmId === fid);
       if (u) { u.plan = o.plan; saveUsers(us); if (window.ARSCloud && ARSCloud.updateMemberAccess) ARSCloud.updateMemberAccess(fid, u.user_id || u.id || u.email, u.role, o.plan, u.access).catch(() => {}); }
@@ -2892,6 +2918,7 @@ function subscriptionPage() {
     if (!f || !o) return;
     o.status = 'rejected';
     save();
+    try { if (window.ARSCloud && ARSCloud.upsertCommerceRows) ARSCloud.upsertCommerceRows(fid, [Object.assign({ _et: 'sub_order' }, o)]).catch(() => {}); } catch (e) {}
     toast('Payment rejected.');
     window.openPaymentApprovals();
   };
@@ -3998,4 +4025,4 @@ function saveFarmProfile(e) {
 window.saveFarmProfile = saveFarmProfile;
 
 /* [FIX 146b] release stamp printed on thermal slips for diagnostics */
-window.ARS_RELEASE = 'v193 (2026-09-04)';
+window.ARS_RELEASE = 'v194 (2026-09-04)';

@@ -63,10 +63,7 @@ window.ARSCloud = (() => {
     integrationEvents: 'integration_event',
     populationSnapshots: 'population_snapshot',
     benchmarkProfiles: 'benchmark_profile',
-    feedDuplicateRecovery: 'feed_duplicate_recovery',
-    /* [FIX 153] subscription commerce syncs cross-device via app_records */
-    subOrders: 'sub_order',
-    subMeta: 'sub_meta'
+    feedDuplicateRecovery: 'feed_duplicate_recovery'
   };
 
   const typeToKey = Object.fromEntries(Object.entries(entityMap).map(([key, type]) => [type, key]));
@@ -1137,6 +1134,18 @@ window.ARSCloud = (() => {
     listSubOrdersAll: async () => {
       try {
         const res = await request('/rest/v1/app_records?select=farm_id,payload&entity_type=eq.sub_order&order=updated_at.desc&limit=200', {}, { requireAuth: true });
+        return Array.isArray(res) ? res : [];
+      } catch (e) { return []; }
+    },
+    /* [FIX 154] commerce rows use EXPLICIT targeted writes — never the array
+       sync pipeline — so a cloud pull can never wipe a pending local order. */
+    upsertCommerceRows: async (farmId, rows) => {
+      const body = (rows || []).map(r => ({ farm_id: farmId, entity_type: r._et, local_id: r.id, payload: r, updated_at: new Date().toISOString() }));
+      await request('/rest/v1/app_records?on_conflict=farm_id,entity_type,local_id', { method: 'POST', headers: { Prefer: 'resolution=merge-duplicates,return=minimal' }, body: JSON.stringify(body) }, { requireAuth: true });
+    },
+    listCommerceRows: async (farmId) => {
+      try {
+        const res = await request(`/rest/v1/app_records?select=entity_type,payload&farm_id=eq.${encodeURIComponent(farmId)}&entity_type=in.(sub_order,sub_meta)&limit=200`, {}, { requireAuth: true });
         return Array.isArray(res) ? res : [];
       } catch (e) { return []; }
     },
