@@ -2782,7 +2782,21 @@ function subscriptionPage() {
    with one tap in User Access, which activates the term automatically.
    Phase 2 (true auto-verify) plugs a PayMongo/GCash webhook into this same
    subOrders queue. Change the GCash number below to your own. */
-  window.ARS_GCASH_NUMBER = '09054155516';
+  window.ARS_GCASH_NUMBER = '09302392076'; /* [FIX 155] active working GCash number */
+  window.ARS_GCASH_NAME = 'PA**A J** P.';
+  /* [FIX 155] one-tap helpers: open the GCash app via Android intent (falls
+     back to Play Store), or copy number+amount so pasting is instant. */
+  window.arsOpenGcash = function () {
+    window.location.href = 'intent://#Intent;scheme=gcash;package=com.mynt.gcash;S.browser_fallback_url=https://play.google.com/store/apps/details?id=com.mynt.gcash;end';
+    if (window.toast) toast('📲 Opening GCash — use Send Money with the copied number & amount.');
+  };
+  window.arsCopyGcash = function () {
+    const amt = (document.getElementById('subOrderAmount')?.textContent || '').trim();
+    const text = 'GCash: ' + window.ARS_GCASH_NUMBER + ' (' + window.ARS_GCASH_NAME + ') · Amount: ' + amt;
+    const done = () => { if (window.toast) toast('📋 Copied — paste in GCash Send Money.'); };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done).catch(() => prompt('Copy manually:', text));
+    else prompt('Copy manually:', text);
+  };
   const SUB_PRICE = (plan, period) => plan === 'full' ? (period === 'yearly' ? 12990 : 1299) : (period === 'yearly' ? 4990 : 499);
 
   function pendingPayments() {
@@ -2838,7 +2852,11 @@ function subscriptionPage() {
           <div class="field"><label>Term</label><select name="period" onchange="subOrderCalc()"><option value="monthly">Monthly (30 days)</option><option value="yearly">Yearly (365 days)</option></select></div>
           <div class="field full"><label>Amount to send</label><b id="subOrderAmount" style="font-size:20px;color:#57d48d">₱1,299</b></div>
           <div class="field full" style="background:rgba(87,212,141,.08);border:1px dashed rgba(87,212,141,.4);border-radius:10px;padding:10px">
-            <small style="color:#c9f5ef;line-height:1.5">1️⃣ Open GCash → Send Money → to <b>${window.ARS_GCASH_NUMBER}</b> (ARSwineTech).<br>2️⃣ Enter the exact amount below.<br>3️⃣ Paste the <b>reference number</b> from your GCash receipt.</small>
+            <small style="color:#c9f5ef;line-height:1.5">1️⃣ Tap <b>📲 Open GCash</b> (or GCash → Send Money).<br>2️⃣ Send to <b>${window.ARS_GCASH_NUMBER}</b> · ${window.ARS_GCASH_NAME} · ARSwineTech.<br>3️⃣ Use the exact amount below, then paste the <b>reference number</b>.</small>
+            <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+              <button type="button" class="btn ghost small" onclick="window.arsOpenGcash()">📲 Open GCash app</button>
+              <button type="button" class="btn ghost small" onclick="window.arsCopyGcash()">📋 Copy number &amp; amount</button>
+            </div>
           </div>
           <div class="field"><label>GCash reference no. *</label><input name="ref" required inputmode="numeric" minlength="10" placeholder="e.g. 701234567890"></div>
           <div class="field"><label>Your GCash mobile no. *</label><input name="mobile" required inputmode="numeric" minlength="11" placeholder="09XXXXXXXXX"></div>
@@ -4025,4 +4043,4 @@ function saveFarmProfile(e) {
 window.saveFarmProfile = saveFarmProfile;
 
 /* [FIX 146b] release stamp printed on thermal slips for diagnostics */
-window.ARS_RELEASE = 'v194 (2026-09-04)';
+window.ARS_RELEASE = 'v195 (2026-09-04)';
