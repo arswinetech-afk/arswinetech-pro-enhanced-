@@ -2793,6 +2793,15 @@ function subscriptionPage() {
   }
   window.pendingPayments = pendingPayments;
 
+  window.subOrderCalc = function () {
+    const m = document.getElementById('subOrderModal');
+    if (!m) return;
+    const plan = m.querySelector('[name="plan"]')?.value || 'full';
+    const period = m.querySelector('[name="period"]')?.value || 'monthly';
+    const el = document.getElementById('subOrderAmount');
+    if (el) el.textContent = '₱' + SUB_PRICE(plan, period).toLocaleString('en-PH');
+  };
+
   window.openSubscribeModal = function () {
     const f = (typeof F === 'function' && F()) ? F() : null;
     if (!f) return;
@@ -2812,6 +2821,7 @@ function subscriptionPage() {
         </div>
         <div class="due-actions"><button type="button" class="btn ghost" onclick="document.getElementById('subOrderModal').remove()">Cancel</button><button class="btn">✔ I paid — submit for verification</button></div>
       </form></div>`);
+    window.subOrderCalc();
   };
 
   window.submitSubOrder = function (ev) {
@@ -2821,13 +2831,15 @@ function subscriptionPage() {
     const plan = d.get('plan'), period = d.get('period');
     const ref = String(d.get('ref') || '').replace(/\D/g, '');
     const mobile = String(d.get('mobile') || '').trim();
-    if (ref.length < 10) { toast('⚠ Enter the full GCash reference number.'); return; }
+    if (!ref || ref.length < 10) { toast('⚠ Enter the full GCash reference number (10+ digits).'); return; }
+    if (!mobile || mobile.length < 11) { toast('⚠ Enter your 11-digit GCash mobile number.'); return; }
     const dup = Object.values(DB || {}).some(fm => (fm.subOrders || []).some(o => o.ref === ref && o.status !== 'rejected'));
     if (dup) { toast('⚠ That reference number was already submitted.'); return; }
-    (f.subOrders = f.subOrders || []).unshift({ id: 'PAY-' + Date.now().toString(36).toUpperCase(), plan, period, amount: SUB_PRICE(plan, period), ref, mobile, status: 'pending', created_at: new Date().toISOString() });
+    const order = { id: 'PAY-' + Date.now().toString(36).toUpperCase(), plan, period, amount: SUB_PRICE(plan, period), ref, mobile, status: 'pending', created_at: new Date().toISOString() };
+    (f.subOrders = f.subOrders || []).unshift(order);
     save();
     document.getElementById('subOrderModal')?.remove();
-    toast('✔ Payment submitted — the administrator will verify your GCash reference shortly.');
+    toast(`✔ Payment ${order.id} submitted (${f.name || 'this farm'}) — pending admin verification.`);
   };
 
   window.openPaymentApprovals = function () {
@@ -2836,11 +2848,13 @@ function subscriptionPage() {
     document.body.insertAdjacentHTML('beforeend', `<div class="due-modal-bg open" id="payApproveModal" style="z-index:9999999!important" onclick="if(event.target===this)this.remove()">
       <div class="reminder-modal" style="max-width:640px;width:96%;text-align:left">
         <div class="modal-top"><div><div class="eyebrow" style="color:#f0b64b;letter-spacing:.12em;font-weight:800">💳 GCASH PAYMENT APPROVALS</div><h2>Pending verifications</h2><small class="muted">Cross-check the reference in your GCash merchant history, then approve.</small></div><button class="close-reminder" onclick="document.getElementById('payApproveModal').remove()">×</button></div>
+        <small class="muted" style="display:block;margin-bottom:10px">${list.length} pending · ${Object.values((typeof DB !== 'undefined' && DB) || {}).reduce((a, fm) => a + ((fm && fm.subOrders) || []).length, 0)} total order(s) stored on this device</small>
         ${list.length ? list.map(x => `<div class="wo-row">
           <div class="wo-row-top"><b>${esc(x.fname)}</b><small class="muted">${esc(x.o.id)}</small><span class="wo-pri" style="border-color:#57d48d55;background:#57d48d18;color:#57d48d">${String(x.o.plan).toUpperCase()} · ${x.o.period}</span></div>
           <div class="wo-row-meta"><span>💰 ${esc(typeof peso === 'function' ? peso(x.o.amount) : ('₱' + x.o.amount))}</span><span>🔖 ref ${esc(x.o.ref)}</span><span>📱 ${esc(x.o.mobile)}</span><span>🗓 ${new Date(x.o.created_at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span></div>
           <div class="wo-actions"><button class="btn small" onclick="approvePayment('${x.fid}','${x.o.id}')">✔ Approve & activate</button><button class="btn ghost small delete-action" onclick="rejectPayment('${x.fid}','${x.o.id}')">✕ Reject</button></div>
         </div>`).join('') : '<div class="empty" style="padding:20px">No pending payments. New GCash submissions appear here instantly.</div>'}
+        ${(() => { const hist = Object.entries((typeof DB !== 'undefined' && DB) || {}).flatMap(([fid, fm]) => ((fm && fm.subOrders) || []).filter(o => o.status !== 'pending').map(o => `<small class="muted" style="display:block;margin-top:4px">${o.status === 'approved' ? '✔' : '✕'} ${esc((fm && fm.name) || fid)} · ${esc(o.id)} · ${esc(o.plan)} ${esc(o.period)} · ref ${esc(o.ref)}</small>`)); return hist.length ? '<div style="margin-top:12px;border-top:1px dashed var(--line);padding-top:8px"><small class="muted"><b>History</b></small>' + hist.join('') + '</div>' : ''; })()}
       </div></div>`);
   };
 
@@ -3969,4 +3983,4 @@ function saveFarmProfile(e) {
 window.saveFarmProfile = saveFarmProfile;
 
 /* [FIX 146b] release stamp printed on thermal slips for diagnostics */
-window.ARS_RELEASE = 'v191 (2026-09-04)';
+window.ARS_RELEASE = 'v192 (2026-09-04)';
