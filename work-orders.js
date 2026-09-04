@@ -82,6 +82,7 @@
             ${w.details ? `<div style="margin:4px 0 0">${String(w.details).split(/\n+/).map(s => s.trim()).filter(Boolean).map(l => `<small class="muted" style="display:block">☐ ${esc(l)}</small>`).join('')}</div>` : ''}
             <div class="wo-actions">
               ${w.status === 'open' ? `<button class="btn ghost small" onclick="woSetStatus('${w.id}','in_progress')">▶ Start</button>` : ''}
+              ${['in_progress', 'pending_review', 'closed'].includes(w.status) ? `<button class="btn ghost small" onclick="woReview('${w.id}')" title="End-of-shift check: tick what was done correctly">🔍 Review</button>` : ''}
               ${w.status === 'in_progress' ? `<button class="btn ghost small" onclick="woSetStatus('${w.id}','pending_review')">📋 To review</button>` : ''}
               ${w.status !== 'blocked' && w.status !== 'closed' ? `<button class="btn ghost small" onclick="woSetStatus('${w.id}','blocked')">⛔ Block</button>` : ''}
               ${w.status === 'blocked' ? `<button class="btn ghost small" onclick="woSetStatus('${w.id}','in_progress')">▶ Unblock</button>` : ''}
@@ -229,6 +230,11 @@
     if (wd.status !== 'closed') return { base, total: 0, mult: 0, flags: ['open'] };
     let mult = 1; const flags = [];
     if (wd.verified) flags.push('verified'); else { mult *= 0.8; flags.push('unverified'); }
+    if (wd.review && wd.review.total > 0) {
+      const q = Math.max(0.5, wd.review.done / wd.review.total);
+      mult *= q;
+      if (q < 1) flags.push('partial ' + Math.round(q * 100) + '%');
+    }
     if (wd.on_time === false) { mult *= 0.6; flags.push('late'); } else flags.push('on-time');
     if (wd.was_reopened) { mult *= 0.5; flags.push('reopened'); }
     return { base, mult, total: Math.round(base * mult * 10) / 10, flags };
@@ -300,7 +306,7 @@
         ${drill ? `<div class="dash-section-title" style="margin:14px 0 6px">PROFILE · ${esc(drill.name)}</div>
         <div class="wo-row"><small class="muted">8-week contribution heatmap (darker = more points that day)</small><div style="max-width:340px;margin:8px 0">${heatCells(drill)}</div>
         <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn ghost small" onclick="printMvpSlip('${esc(drill.name).replace(/'/g, "\\'")}')">🖨 Print MVP slip (BLE)</button></div></div>` : ''}
-        <div style="margin-top:12px"><button class="btn ghost small" onclick="printMvpSlip()">🖨 Print Monthly MVP slip</button></div>
+        <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn ghost small" onclick="printMvpSlip()">🖨 Print Monthly MVP slip</button><button class="btn ghost small" onclick="printRulesSlip()">📜 Print Staff Points Guide (BLE)</button></div>
       </div></div>`);
   };
 
@@ -312,6 +318,68 @@
     if (typeof renderAll === 'function') renderAll();
     window.openWOList();
     toast('🛡 Verified — full points credited.');
+  };
+
+  /* [FIX 159] END-OF-SHIFT REVIEW — mirrors the owner's real process: staff
+     reports back, owner ticks what was done correctly; unchecked items give
+     proportional (partial) credit instead of all-or-nothing. */
+  window.woReview = function (id) {
+    const f = F0(); const wd = wos(f).find(x => x.id === id);
+    if (!wd) return;
+    const lines = String(wd.details || '').split(/\n+/).map(s => s.trim()).filter(Boolean);
+    if (!lines.length) { toast('⚠ This work order has no checklist items to review.'); return; }
+    const doneSet = new Set(wd.review && Array.isArray(wd.review.doneLines) ? wd.review.doneLines : lines.map((_, i) => i));
+    document.getElementById('woReviewModal')?.remove();
+    document.body.insertAdjacentHTML('beforeend', `<div class="due-modal-bg open" id="woReviewModal" style="z-index:99999999!important" onclick="if(event.target===this)this.remove()">
+      <form class="reminder-modal" style="max-width:560px;width:96%;text-align:left" onsubmit="woReviewSave(event,'${wd.id}')">
+        <div class="modal-top"><div><div class="eyebrow" style="color:#ffd98a;letter-spacing:.12em;font-weight:800">🔍 END-OF-SHIFT REVIEW</div><h2>${esc(wd.title)}</h2><small class="muted">${esc(wd.assignee || 'Unassigned')} · untick items NOT done correctly — points become proportional</small></div><button type="button" class="close-reminder" onclick="document.getElementById('woReviewModal').remove()">×</button></div>
+        <div style="margin:6px 0"><button type="button" class="btn ghost small" onclick="document.querySelectorAll('#woReviewModal input[name=rv]').forEach(c=>c.checked=true)">✔ All done correctly</button></div>
+        ${lines.map((l, i) => `<label style="display:flex;gap:8px;align-items:flex-start;padding:6px 4px;border-bottom:1px solid var(--line);font-size:12.5px;color:#d7e6e4"><input type="checkbox" name="rv" value="${i}" ${doneSet.has(i) ? 'checked' : ''} style="width:auto;margin-top:2px"> ${esc(l)}</label>`).join('')}
+        <div class="due-actions"><button type="button" class="btn ghost" onclick="document.getElementById('woReviewModal').remove()">Cancel</button><button class="btn">💾 Save review &amp; verify</button></div>
+      </form></div>`);
+  };
+
+  window.woReviewSave = function (ev, id) {
+    ev.preventDefault();
+    const f = F0(); const wd = wos(f).find(x => x.id === id);
+    if (!wd) return;
+    const boxes = [...ev.target.querySelectorAll('input[name=rv]')];
+    const doneLines = boxes.filter(c => c.checked).map(c => +c.value);
+    wd.review = { done: doneLines.length, total: boxes.length, doneLines, at: new Date().toISOString() };
+    wd.verified = true;
+    if (wd.status === 'pending_review') {
+      wd.status = 'closed';
+      wd.closed_at = wd.closed_at || new Date().toISOString();
+      wd.on_time = !(wd.due && new Date(wd.closed_at).getTime() > new Date(wd.due).getTime());
+    }
+    if (typeof save === 'function') save();
+    if (typeof renderAll === 'function') renderAll();
+    document.getElementById('woReviewModal')?.remove();
+    const q = Math.round(Math.max(0.5, doneLines.length / Math.max(1, boxes.length)) * 100);
+    toast(`🔍 Review saved — ${doneLines.length}/${boxes.length} items · ${q}% quality credit.`);
+    window.openWOList();
+  };
+
+  /* Printable Taglish guide so every staff sees the rules on paper. */
+  window.printRulesSlip = function () {
+    const f = F0();
+    if (!window.btPrintTextLines) { toast('⚠ Bluetooth printing unavailable.'); return; }
+    const W = 32, sep = '-'.repeat(W);
+    const clean = t => String(t).replace(/[·₱×↩]/g, m => ({ '·': '-', '₱': 'P', '×': 'x', '↩': '<-' }[m])).replace(/[^\x20-\x7E]/g, '');
+    const ctr = t => { t = clean(t); return t.length >= W ? t : ' '.repeat(Math.max(0, (W - t.length) >> 1)) + t; };
+    const wrap = t => { let out = [], cur = ''; String(t).split(/\s+/).forEach(x => { if ((cur + ' ' + x).trim().length > W) { if (cur.trim()) out.push(cur.trim()); cur = x; } else cur = cur ? cur + ' ' + x : x; }); if (cur.trim()) out.push(cur.trim()); return out; };
+    const L = [];
+    L.push({ t: ctr('STAFF POINTS GUIDE'), b: 1, c: 1 });
+    L.push({ t: ctr(f.name || 'ARSwineTech'), c: 1 });
+    L.push({ t: sep });
+    wrap('Paano nakakuha ng points? Bawat work order may bigat: Madali=1, Medyo=2, Mabigat=3, Expert=5. Critical +2, High +1.').forEach(t => L.push({ t: clean(t) }));
+    wrap('Tama lahat ng checklist sa dulo ng shift = BUONG points.').forEach(t => L.push({ t: clean(t), b: true }));
+    wrap('May naiwang kulang = proportional lang ang points ng task na yun (hal. 3/5 items = 60%).').forEach(t => L.push({ t: clean(t) }));
+    wrap('Huli sa due = 60% lang. Binuksan uli dahil mali = 50%.').forEach(t => L.push({ t: clean(t) }));
+    wrap('Hindi bilang ng task ang mahalaga - BIGAT + TAMA + TAMANG ORAS.').forEach(t => L.push({ t: clean(t), b: 1 }));
+    L.push({ t: sep });
+    wrap('Check ang lista bago mag-sign off. Tanungin si Boss kung may unclear. Good luck!').forEach(t => L.push({ t: clean(t) }));
+    window.btPrintTextLines(L, 'Staff guide');
   };
 
   window.printMvpSlip = function (name) {
