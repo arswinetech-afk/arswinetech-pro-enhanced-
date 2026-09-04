@@ -2744,6 +2744,14 @@ function applyAccess() {
 }
 
 function subscriptionPage() {
+  /* [FIX 150] live subscription status with countdown */
+  const fSub0 = (typeof F === 'function' && F()) ? F().subscription : null;
+  const subIsObj = fSub0 && typeof fSub0 === 'object' && fSub0.expires_at;
+  const subMsLeft = subIsObj ? new Date(fSub0.expires_at).getTime() - Date.now() : null;
+  const subActive = subIsObj && subMsLeft > 0;
+  const subExpired = subIsObj && subMsLeft <= 0;
+  const subDays = subActive ? Math.max(1, Math.ceil(subMsLeft / 864e5)) : 0;
+  const PRICE = { starter: ['₱499 / month', '₱4,990 / year'], full: ['₱1,299 / month', '₱12,990 / year'] };
   let current = planForCurrentFarm(),
     plans = [
       ['starter', 'Starter', '₱499 / month', ['Dashboard and herd records', 'Sows, piglets and feed', 'Reminders and local offline data']],
@@ -2751,7 +2759,7 @@ function subscriptionPage() {
       ['platform', 'Platform Admin', 'Private', ['All Full Access features', 'User and farm administration', 'Available only to ARSwineTech']]
     ];
   const fp = (typeof F === 'function' && F()) ? F() : {}; /* [FIX 118] farm profile values */
-  document.getElementById('subscription').innerHTML = `<div class="panel subscription-hero"><div><div class="eyebrow">YOUR FARM PLAN</div><h2>${current==='platform'?'Platform Administration':current==='full'?'Full Access':'Starter'}${current==='platform'?'':' subscription'}</h2><p class="muted">${current==='platform'?'Verified platform owner access is active across all registered farms and application features.':'Upgrade when you are ready to unlock your farm’s complete operational toolkit.'}</p></div><span class="tag">${current==='full'?'ACTIVE · FULL ACCESS':current==='platform'?'PLATFORM ADMIN':'ACTIVE · STARTER'}</span></div><div class="section subscription-plans">${plans.map(p=>`<div class="panel plan-card ${p[0]==='full'?'featured':''}"><div class="plan-label">${p[0]==='full'?'MOST COMPLETE':'ARSWINETECH PRO'}</div><h2>${p[1]}</h2><div class="price">${p[2]}</div><ul>${p[3].map(x=>`<li>${x}</li>`).join('')}</ul>${p[0]==='platform'?'<button class="btn ghost" disabled>Administrator only</button>':p[0]===current?'<button class="btn ghost" disabled>Current plan</button>':`<button class="btn" onclick="choosePlan('${p[0]}')">${p[0]==='full'?'Upgrade to Full Access':'Select Starter'}</button>`}</div>`).join('')}</div><p class="muted" style="font-size:12px;margin-top:16px">Prototype checkout: selecting a plan updates access immediately. Production checkout should connect to Google Play Billing, Apple In-App Purchase, or a PCI-compliant payment provider and validate the subscription on the server.</p>
+  document.getElementById('subscription').innerHTML = `<div class="panel subscription-hero"><div><div class="eyebrow">YOUR FARM PLAN</div><h2>${current==='platform'?'Platform Administration':current==='full'?'Full Access':'Starter'}${current==='platform'?'':' subscription'}</h2><p class="muted">${current==='platform'?'Verified platform owner access is active across all registered farms and application features.':'Upgrade when you are ready to unlock your farm’s complete operational toolkit.'}</p></div><span class="tag">${current==='platform'?'PLATFORM ADMIN': subActive ? `ACTIVE · ${String(fSub0.plan).toUpperCase()} · ${fSub0.period} · ${subDays}d left` : subExpired ? 'EXPIRED — VIEW-ONLY · please renew' : (current==='full'?'ACTIVE · FULL ACCESS':'ACTIVE · STARTER')}</span></div><div class="section subscription-plans">${plans.map(p=>`<div class="panel plan-card ${p[0]==='full'?'featured':''}"><div class="plan-label">${p[0]==='full'?'MOST COMPLETE':'ARSWINETECH PRO'}</div><h2>${p[1]}</h2><div class="price">${PRICE[p[0]] ? PRICE[p[0]][0] : p[2]}</div>${PRICE[p[0]] ? `<small class="muted" style="display:block;margin:-4px 0 8px">Yearly: ${PRICE[p[0]][1]} (2 months free)</small>` : ''}<ul>${p[3].map(x=>`<li>${x}</li>`).join('')}</ul>${p[0]==='platform'?'<button class="btn ghost" disabled>Administrator only</button>':p[0]===current?'<button class="btn ghost" disabled>Current plan</button>':`<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" onclick="choosePlan('${p[0]}','monthly')">${PRICE[p[0]][0]}</button><button class="btn ghost" onclick="choosePlan('${p[0]}','yearly')">${PRICE[p[0]][1]} · save 2 months</button></div>`}</div>`).join('')}</div><p class="muted" style="font-size:12px;margin-top:16px">Prototype checkout: selecting a plan updates access immediately. Production checkout should connect to Google Play Billing, Apple In-App Purchase, or a PCI-compliant payment provider and validate the subscription on the server.</p>
   <div class="panel" style="margin-top:18px;padding:16px">
     <div class="eyebrow">FARM PROFILE</div>
     <h2 style="margin:6px 0 4px">🏠 Registration details</h2>
@@ -2768,9 +2776,14 @@ function subscriptionPage() {
   </div>`
 }
 
-function choosePlan(plan) {
+function choosePlan(plan, period) {
+  /* [FIX 150] subscriptions now carry a term: monthly (30d) or yearly (365d).
+     Access auto-expires; renewal is via the admin (Facebook page). */
   if (isSuperAdmin()) return;
-  F().subscription = plan;
+  period = period === 'yearly' ? 'yearly' : 'monthly';
+  const days = period === 'yearly' ? 365 : 30;
+  const nowD = new Date(), exp = new Date(nowD.getTime() + days * 864e5);
+  F().subscription = { plan, period, started_at: nowD.toISOString(), expires_at: exp.toISOString() };
   let list = users(),
     u = list.find(x => x.email.toLowerCase() === currentEmail());
   if (u) u.plan = plan;
@@ -2778,7 +2791,7 @@ function choosePlan(plan) {
   save();
   applyAccess();
   subscriptionPage();
-  toast(plan === 'full' ? 'Full Access activated' : 'Starter plan selected')
+  toast(`${plan === 'full' ? 'Full Access' : 'Starter'} activated — ${period} term · expires ${exp.toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' })}. Thank you!`);
 }
 
 async function adminPage() {
@@ -2994,7 +3007,17 @@ async function changeUser(i, key, value) {
   saveUsers(us);
 
   if (key === "plan" && DB[u.farmId]) {
-    DB[u.farmId].subscription = value;
+    /* [FIX 150] owner-controlled subscription term */
+    if (value === 'starter' || value === 'full') {
+      const term = prompt('Subscription term for this farm:\n1 = Monthly (30 days)\n2 = Yearly (365 days)\n3 = No expiry (grandfathered)', '1');
+      const days = term === '2' ? 365 : term === '3' ? 0 : 30;
+      const nowD = new Date();
+      DB[u.farmId].subscription = days
+        ? { plan: value, period: days === 365 ? 'yearly' : 'monthly', started_at: nowD.toISOString(), expires_at: new Date(nowD.getTime() + days * 864e5).toISOString() }
+        : value;
+    } else {
+      DB[u.farmId].subscription = value; /* trial / platform: no expiry */
+    }
     save();
   }
 
@@ -3045,7 +3068,20 @@ window.saveUserAccessRow = saveUserAccessRow;
     return daysLeft > 0 ? { mode: 'trial', daysLeft } : { mode: 'expired', daysLeft: 0 };
   }
   window.arsTrialState = arsTrialState;
-  window.arsTrialLocked = () => arsTrialState().mode === 'expired';
+  /* [FIX 150] subscription-aware access state: paid sub > trial > legacy plan */
+  function arsAccessState() {
+    const f = (typeof F === 'function' && F()) ? F() : null;
+    const sub = f && f.subscription;
+    if (sub && typeof sub === 'object' && sub.expires_at) {
+      const left = new Date(sub.expires_at).getTime() - Date.now();
+      if (left > 0) return { mode: 'subscribed', plan: sub.plan, period: sub.period, daysLeft: Math.max(1, Math.ceil(left / 864e5)) };
+      return { mode: 'sub_expired' };
+    }
+    const t = arsTrialState();
+    return t.mode === 'paid' ? { mode: 'paid' } : t;
+  }
+  window.arsAccessState = arsAccessState;
+  window.arsTrialLocked = () => ['expired', 'sub_expired'].includes(arsAccessState().mode);
   /* view-only enforcement: no navigation, no edits, data still visible */
   document.addEventListener('click', function (ev) {
     if (!window.arsTrialLocked || !window.arsTrialLocked()) return;
@@ -3056,10 +3092,13 @@ window.saveUserAccessRow = saveUserAccessRow;
     if (window.toast) toast('⛔ Trial expired — view-only mode. Use "Contact Admin to Subscribe" on the dashboard.');
   }, true);
   function arsTrialBanner() {
-    const st = arsTrialState();
+    const st = arsAccessState();
     if (st.mode === 'paid') return '';
+    if (st.mode === 'subscribed') return st.daysLeft <= 7
+      ? `<div class="ars-trial-banner">⏳ <b>${st.plan === 'full' ? 'Full Access' : 'Starter'} expires in ${st.daysLeft} day${st.daysLeft === 1 ? '' : 's'}.</b> Renew to keep every feature. <button type="button" class="btn ghost small" onclick="window.open(window.ARS_FB_SUBSCRIBE)">💬 Renew via Facebook</button></div>`
+      : `<div class="ars-trial-banner">✅ <b>${st.plan === 'full' ? 'Full Access' : 'Starter'} · ${st.period}</b> · ${st.daysLeft} days left in your subscription. <button type="button" class="btn ghost small" onclick="window.open(window.ARS_FB_SUBSCRIBE)">💬 Questions? Message us</button></div>`;
     if (st.mode === 'trial') return `<div class="ars-trial-banner">🎁 <b>Free trial active: ${st.daysLeft} day${st.daysLeft === 1 ? '' : 's'} left</b> · full access to every feature. <button type="button" class="btn ghost small" onclick="window.open(window.ARS_FB_SUBSCRIBE)">💬 Subscribe via Facebook</button></div>`;
-    return `<div class="ars-trial-banner expired">⛔ <b>Your 15-day trial has ended.</b> Your farm &amp; data are safe — now view-only. <button type="button" class="btn small" onclick="window.open(window.ARS_FB_SUBSCRIBE)">💬 Contact Admin to Subscribe</button></div>`;
+    return `<div class="ars-trial-banner expired">⛔ <b>${st.mode === 'sub_expired' ? 'Your subscription has expired.' : 'Your 15-day trial has ended.'}</b> Your farm &amp; data are safe — now view-only. <button type="button" class="btn small" onclick="window.open(window.ARS_FB_SUBSCRIBE)">💬 Contact Admin to Subscribe / Renew</button></div>`;
   }
 
   function go(page) {
@@ -3837,4 +3876,4 @@ function saveFarmProfile(e) {
 window.saveFarmProfile = saveFarmProfile;
 
 /* [FIX 146b] release stamp printed on thermal slips for diagnostics */
-window.ARS_RELEASE = 'v189 (2026-09-04)';
+window.ARS_RELEASE = 'v190 (2026-09-04)';
