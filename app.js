@@ -2429,6 +2429,7 @@ function dashboard() {
     if (!dashEl) return;
 
     dashEl.innerHTML = `
+      ${arsTrialBanner()}
       ${window.arsWODashboard ? window.arsWODashboard(f) : ''}
       <div class="dash-hero">
         <div class="panel health-card health-slim">
@@ -2928,6 +2929,7 @@ async function adminPage() {
         </td>
         <td>
           <select class="select" ${isPlatformOwnerEmail(u.email) ? "disabled" : ""} onchange="changeUser(${i},'plan',this.value)">
+            <option value="trial" ${u.plan === "trial" ? "selected" : ""}>15-DAY TRIAL</option>
             <option value="starter" ${u.plan === "starter" ? "selected" : ""}>Starter</option>
             <option value="full" ${u.plan === "full" ? "selected" : ""}>Full Access</option>
             <option value="platform" ${u.plan === "platform" || isPlatformOwnerEmail(u.email) ? "selected" : ""}>Platform</option>
@@ -3025,7 +3027,46 @@ async function saveUserAccessRow(i) {
 window.saveUserAccessRow = saveUserAccessRow;
 
 
-function go(page) {
+/* [REBUILD FIX 149] AUTOMATIC 15-DAY TRIAL — applies ONLY to users who
+   registered and created their own farm. Invited users (invitation code)
+   carry real plans and are never touched. The platform owner controls
+   everything from User Access → Plan/Access (15-DAY TRIAL / Starter /
+   Full Access / Platform). */
+  window.ARS_FB_SUBSCRIBE = 'https://www.facebook.com/share/19T9F1xKgv/';
+  function arsTrialState() {
+    const f = (typeof F === 'function' && F()) ? F() : null;
+    const mem = window.arsActiveMembership || (window.arsMemberships || [])[0] || null;
+    const plan = mem && mem.plan ? String(mem.plan) : '';
+    if (plan === 'full' || plan === 'platform') return { mode: 'paid', plan };
+    if (plan === 'starter' && !(f && f.trial_started_at)) return { mode: 'paid', plan };
+    const start = f && f.trial_started_at ? new Date(f.trial_started_at) : (mem && mem.created_at ? new Date(mem.created_at) : null);
+    if (!start || isNaN(start)) return { mode: 'paid', plan };
+    const daysLeft = 15 - Math.floor((Date.now() - start.getTime()) / 864e5);
+    return daysLeft > 0 ? { mode: 'trial', daysLeft } : { mode: 'expired', daysLeft: 0 };
+  }
+  window.arsTrialState = arsTrialState;
+  window.arsTrialLocked = () => arsTrialState().mode === 'expired';
+  /* view-only enforcement: no navigation, no edits, data still visible */
+  document.addEventListener('click', function (ev) {
+    if (!window.arsTrialLocked || !window.arsTrialLocked()) return;
+    if (ev.target.closest('.ars-trial-banner, .logout-btn, .theme-toggle, .icon-btn')) return;
+    const t = ev.target.closest('button, a, select, input, .interactive-card, [onclick]');
+    if (!t) return;
+    ev.preventDefault(); ev.stopPropagation();
+    if (window.toast) toast('⛔ Trial expired — view-only mode. Use "Contact Admin to Subscribe" on the dashboard.');
+  }, true);
+  function arsTrialBanner() {
+    const st = arsTrialState();
+    if (st.mode === 'paid') return '';
+    if (st.mode === 'trial') return `<div class="ars-trial-banner">🎁 <b>Free trial active: ${st.daysLeft} day${st.daysLeft === 1 ? '' : 's'} left</b> · full access to every feature. <button type="button" class="btn ghost small" onclick="window.open(window.ARS_FB_SUBSCRIBE)">💬 Subscribe via Facebook</button></div>`;
+    return `<div class="ars-trial-banner expired">⛔ <b>Your 15-day trial has ended.</b> Your farm &amp; data are safe — now view-only. <button type="button" class="btn small" onclick="window.open(window.ARS_FB_SUBSCRIBE)">💬 Contact Admin to Subscribe</button></div>`;
+  }
+
+  function go(page) {
+    if (window.arsTrialLocked && window.arsTrialLocked() && page !== 'dashboard') {
+      if (window.toast) toast('⛔ Trial expired — your farm is view-only. Contact the admin to subscribe.');
+      page = 'dashboard';
+    }
   document.querySelectorAll('#reservationDetail,#batchHub,#drillModal,#dueReminderModal,#reservationModal,#allocationModal,#releaseModal,.due-modal-bg,.drill-bg').forEach(x => x.remove());
   document.body.classList.remove('app-modal-open');
   document.body.style.pointerEvents = '';
@@ -3551,6 +3592,8 @@ async function completeOnboarding(e) {
     const ownerName = ((data.first_name || '') + ' ' + (data.last_name || '')).trim();
     DB[id] = {
       name: data.farm_name,
+      /* [FIX 149] automatic 15-day full-access trial for self-created farms */
+      trial_started_at: new Date().toISOString(),
       owner: ownerName, owner_name: ownerName,
       mobile: data.mobile_number || '',
       address: data.farm_address || '', barangay: data.barangay || '',
@@ -3562,6 +3605,12 @@ async function completeOnboarding(e) {
     };
     farmId = id;
     window.farmId = id;
+    /* [FIX 149] ask the server to label this membership as trial; if RLS
+       blocks self plan-changes, supabase/trial_on_signup.sql trigger covers it. */
+    try {
+      const uu = await ARSCloud.getCurrentUser();
+      await ARSCloud.updateMemberAccess(id, uu.id || uu.email, 'owner', 'trial', true);
+    } catch (e) { /* trial still enforced client-side via trial_started_at */ }
     STORE.setItem('arswine-active-farm', id);
     // The RPC already created the membership. Re-read it and load the empty
     // cloud baseline; do not push the local onboarding object back to cloud.
@@ -3788,4 +3837,4 @@ function saveFarmProfile(e) {
 window.saveFarmProfile = saveFarmProfile;
 
 /* [FIX 146b] release stamp printed on thermal slips for diagnostics */
-window.ARS_RELEASE = 'v188 (2026-09-04)';
+window.ARS_RELEASE = 'v189 (2026-09-04)';

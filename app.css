@@ -6073,3 +6073,7 @@ html, body, .shell, .main {
 .health-slim .score-ring{min-width:86px;width:86px;height:86px}
 .health-slim .score-inner strong{font-size:24px}
 @media(max-width:900px){.wo-grid{grid-template-columns:repeat(2,1fr)}}
+
+/* [REBUILD FIX 149] trial banners */
+.ars-trial-banner{display:flex;gap:8px;align-items:center;flex-wrap:wrap;background:linear-gradient(135deg,rgba(19,185,172,.16),rgba(7,152,143,.10));border:1px solid rgba(46,211,197,.35);color:#c9f5ef;border-radius:12px;padding:10px 12px;margin:0 0 12px;font-size:12.5px}
+.ars-trial-banner.expired{background:linear-gradient(135deg,rgba(255,92,104,.14),rgba(120,20,30,.12));border-color:rgba(255,92,104,.4);color:#ffd7db}
