@@ -66,8 +66,20 @@
   };
 
   /* ── full list modal ─────────────────────────────────────────────────── */
-  window.openWOList = function () {
+  window.openWOList = async function () {
     const f = F0();
+    /* [FIX 160] merge work orders from the cloud so all devices share them */
+    try {
+      const fid = window.__arsActiveFarmId || (typeof farmId !== 'undefined' ? farmId : null);
+      if (fid && window.ARSCloud && ARSCloud.listWorkOrders) {
+        const rows = await ARSCloud.listWorkOrders(fid);
+        (rows || []).forEach(rw => {
+          const p = rw && rw.payload; if (!p || !p.id) return;
+          const i = wos(f).findIndex(x => x.id === p.id);
+          if (i >= 0) wos(f)[i] = p; else wos(f).push(p);
+        });
+      }
+    } catch (e) {}
     const list = wos(f).slice().sort((a, b) => (a.status === 'closed') - (b.status === 'closed') || String(a.due || '9999').localeCompare(String(b.due || '9999')));
     document.getElementById('woListModal')?.remove();
     document.body.insertAdjacentHTML('beforeend', `<div class="due-modal-bg open" id="woListModal" onclick="if(event.target===this)this.remove()" style="z-index:999999!important">
@@ -79,7 +91,7 @@
           return `<div class="wo-row">
             <div class="wo-row-top"><span class="wo-pri" style="border-color:${PRI[w.priority][1]}55;background:${PRI[w.priority][1]}18;color:${PRI[w.priority][1]}">${PRI[w.priority][0]}</span><b>${esc(w.title)}</b><small class="muted">${esc(w.id)}</small></div>
             <div class="wo-row-meta"><span>👤 ${esc(w.assignee || 'Unassigned')}</span><span>📍 ${esc(w.location || '—')}</span><span class="${late ? 'wo-bad' : ''}">🗓 ${fmtDue(w.due)}</span><span>Status: <b>${ST[w.status]}</b></span></div>
-            ${w.details ? `<div style="margin:4px 0 0">${String(w.details).split(/\n+/).map(s => s.trim()).filter(Boolean).map(l => `<small class="muted" style="display:block">☐ ${esc(l)}</small>`).join('')}</div>` : ''}
+            ${w.details ? (() => { const ls = String(w.details).split(/\n+/).map(s => s.trim()).filter(Boolean); const dn = w.done_lines || []; return `<div style="margin:6px 0 0"><small class="muted" style="font-size:10px">${dn.length}/${ls.length} done · tap boxes as you finish each item</small>${ls.map((l, i) => `<label style="display:flex;gap:8px;align-items:flex-start;padding:3px 0;font-size:12px;color:${dn.includes(i) ? '#7fbf9f' : '#c9d9d7'};${dn.includes(i) ? 'text-decoration:line-through;opacity:.8' : ''}"><input type="checkbox" ${dn.includes(i) ? 'checked' : ''} onchange="woToggleLine('${w.id}',${i},this.checked)" style="width:auto;margin-top:2px"> ${esc(l)}</label>`).join('')}</div>`; })() : ''}
             <div class="wo-actions">
               ${w.status === 'open' ? `<button class="btn ghost small" onclick="woSetStatus('${w.id}','in_progress')">▶ Start</button>` : ''}
               ${['in_progress', 'pending_review', 'closed'].includes(w.status) ? `<button class="btn ghost small" onclick="woReview('${w.id}')" title="End-of-shift check: tick what was done correctly">🔍 Review</button>` : ''}
@@ -133,6 +145,7 @@
     }
     const saved = w || list[0];
     if (typeof save === 'function') save();
+    arsWOSync([saved]);
     document.getElementById('woFormModal')?.remove();
     if (typeof renderAll === 'function') renderAll();
     toast('✔ Work order saved.');
@@ -150,6 +163,7 @@
       w.on_time = !(w.due && new Date(w.closed_at).getTime() > new Date(w.due).getTime());
     } else w.closed_at = null;
     if (typeof save === 'function') save();
+    arsWOSync([w]);
     if (typeof renderAll === 'function') renderAll();
     window.openWOList();
     toast(status === 'closed' ? '✔ Work order closed — good job.' : 'Status: ' + ST[status]);
@@ -160,6 +174,7 @@
     if (!confirm('Delete this work order permanently?')) return;
     f.workOrders = f.workOrders.filter(x => x.id !== id);
     if (typeof save === 'function') save();
+    try { const fid = window.__arsActiveFarmId || (typeof farmId !== 'undefined' ? farmId : null); if (fid && window.ARSCloud && ARSCloud.deleteCommerceRow) ARSCloud.deleteCommerceRow(fid, 'work_order', id).catch(() => {}); } catch (e) {}
     if (typeof renderAll === 'function') renderAll();
     window.openWOList();
   };
@@ -233,7 +248,15 @@
     if (wd.review && wd.review.total > 0) {
       const q = Math.max(0.5, wd.review.done / wd.review.total);
       mult *= q;
-      if (q < 1) flags.push('partial ' + Math.round(q * 100) + '%');
+      if (q < 1) flags.push('review ' + Math.round(q * 100) + '%');
+    } else {
+      const tl = String(wd.details || '').split(/\n+/).map(s => s.trim()).filter(Boolean).length;
+      if (tl > 0) {
+        const dn = (wd.done_lines || []).filter(i => i < tl).length;
+        const q = Math.max(0.5, dn / tl);
+        mult *= q;
+        if (q < 1) flags.push('checklist ' + Math.round(q * 100) + '%');
+      }
     }
     if (wd.on_time === false) { mult *= 0.6; flags.push('late'); } else flags.push('on-time');
     if (wd.was_reopened) { mult *= 0.5; flags.push('reopened'); }
@@ -310,11 +333,30 @@
       </div></div>`);
   };
 
+  /* [FIX 160] work orders sync cross-device via explicit targeted writes */
+  function arsWOSync(rows) {
+    try {
+      const fid = window.__arsActiveFarmId || (typeof farmId !== 'undefined' ? farmId : null);
+      if (fid && window.ARSCloud && ARSCloud.upsertCommerceRows) ARSCloud.upsertCommerceRows(fid, (rows || []).map(r => Object.assign({ _et: 'work_order' }, r))).catch(() => {});
+    } catch (e) {}
+  }
+
+  window.woToggleLine = function (id, idx, on) {
+    const f = F0(); const wd = wos(f).find(x => x.id === id);
+    if (!wd) return;
+    const s = new Set(wd.done_lines || []);
+    if (on) s.add(idx); else s.delete(idx);
+    wd.done_lines = [...s];
+    if (typeof save === 'function') save();
+    arsWOSync([wd]);
+  };
+
   window.woVerify = function (id) {
     const f = F0(); const wd = wos(f).find(x => x.id === id);
     if (!wd) return;
     wd.verified = true;
     if (typeof save === 'function') save();
+    arsWOSync([wd]);
     if (typeof renderAll === 'function') renderAll();
     window.openWOList();
     toast('🛡 Verified — full points credited.');
@@ -328,7 +370,7 @@
     if (!wd) return;
     const lines = String(wd.details || '').split(/\n+/).map(s => s.trim()).filter(Boolean);
     if (!lines.length) { toast('⚠ This work order has no checklist items to review.'); return; }
-    const doneSet = new Set(wd.review && Array.isArray(wd.review.doneLines) ? wd.review.doneLines : lines.map((_, i) => i));
+    const doneSet = new Set(Array.isArray(wd.done_lines) ? wd.done_lines : (wd.review && Array.isArray(wd.review.doneLines) ? wd.review.doneLines : lines.map((_, i) => i)));
     document.getElementById('woReviewModal')?.remove();
     document.body.insertAdjacentHTML('beforeend', `<div class="due-modal-bg open" id="woReviewModal" style="z-index:99999999!important" onclick="if(event.target===this)this.remove()">
       <form class="reminder-modal" style="max-width:560px;width:96%;text-align:left" onsubmit="woReviewSave(event,'${wd.id}')">
@@ -346,6 +388,7 @@
     const boxes = [...ev.target.querySelectorAll('input[name=rv]')];
     const doneLines = boxes.filter(c => c.checked).map(c => +c.value);
     wd.review = { done: doneLines.length, total: boxes.length, doneLines, at: new Date().toISOString() };
+    wd.done_lines = doneLines;
     wd.verified = true;
     if (wd.status === 'pending_review') {
       wd.status = 'closed';

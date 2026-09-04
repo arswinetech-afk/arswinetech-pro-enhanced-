@@ -1143,6 +1143,15 @@ window.ARSCloud = (() => {
       const body = (rows || []).map(r => ({ farm_id: farmId, entity_type: r._et, local_id: r.id, payload: r, updated_at: new Date().toISOString() }));
       await request('/rest/v1/app_records?on_conflict=farm_id,entity_type,local_id', { method: 'POST', headers: { Prefer: 'resolution=merge-duplicates,return=minimal' }, body: JSON.stringify(body) }, { requireAuth: true });
     },
+    deleteCommerceRow: async (farmId, entityType, localId) => {
+      await request(`/rest/v1/app_records?farm_id=eq.${encodeURIComponent(farmId)}&entity_type=eq.${entityType}&local_id=eq.${encodeURIComponent(localId)}`, { method: 'DELETE' }, { requireAuth: true });
+    },
+    listWorkOrders: async (farmId) => {
+      try {
+        const res = await request(`/rest/v1/app_records?select=payload&farm_id=eq.${encodeURIComponent(farmId)}&entity_type=eq.work_order&limit=500`, {}, { requireAuth: true });
+        return Array.isArray(res) ? res : [];
+      } catch (e) { return []; }
+    },
     listCommerceRows: async (farmId) => {
       try {
         const res = await request(`/rest/v1/app_records?select=entity_type,payload&farm_id=eq.${encodeURIComponent(farmId)}&entity_type=in.(sub_order,sub_meta)&limit=200`, {}, { requireAuth: true });
