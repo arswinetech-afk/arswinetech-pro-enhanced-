@@ -2842,7 +2842,20 @@ function subscriptionPage() {
     toast(`✔ Payment ${order.id} submitted (${f.name || 'this farm'}) — pending admin verification.`);
   };
 
-  window.openPaymentApprovals = function () {
+  window.openPaymentApprovals = async function () {
+    /* [FIX 153] merge pending orders from ALL farms via the cloud so the
+       owner sees buyers' submissions from any device instantly. */
+    try {
+      const rows = (window.ARSCloud && ARSCloud.listSubOrdersAll) ? await ARSCloud.listSubOrdersAll() : [];
+      (rows || []).forEach(rw => {
+        const p = rw && rw.payload; const fid = rw && rw.farm_id;
+        if (!fid || !p || !p.id) return;
+        const f = DB[fid] || (DB[fid] = { name: String(fid) });
+        f.subOrders = f.subOrders || [];
+        const i = f.subOrders.findIndex(x => x.id === p.id);
+        if (i >= 0) f.subOrders[i] = Object.assign({}, f.subOrders[i], p); else f.subOrders.unshift(p);
+      });
+    } catch (e) { console.warn('[approvals merge]', e); }
     const list = pendingPayments();
     document.getElementById('payApproveModal')?.remove();
     document.body.insertAdjacentHTML('beforeend', `<div class="due-modal-bg open" id="payApproveModal" style="z-index:9999999!important" onclick="if(event.target===this)this.remove()">
@@ -2863,6 +2876,7 @@ function subscriptionPage() {
     if (!f || !o) return;
     const days = o.period === 'yearly' ? 365 : 30; const nowD = new Date();
     f.subscription = { plan: o.plan, period: o.period, started_at: nowD.toISOString(), expires_at: new Date(nowD.getTime() + days * 864e5).toISOString() };
+    f.subMeta = [{ id: 'current', ...f.subscription }]; /* [FIX 153] synced mirror */
     o.status = 'approved'; o.approved_at = nowD.toISOString();
     save();
     try {
@@ -2890,6 +2904,7 @@ function choosePlan(plan, period) {
   const days = period === 'yearly' ? 365 : 30;
   const nowD = new Date(), exp = new Date(nowD.getTime() + days * 864e5);
   F().subscription = { plan, period, started_at: nowD.toISOString(), expires_at: exp.toISOString() };
+  F().subMeta = [{ id: 'current', ...F().subscription }]; /* [FIX 153] synced mirror */
   let list = users(),
     u = list.find(x => x.email.toLowerCase() === currentEmail());
   if (u) u.plan = plan;
@@ -3178,7 +3193,7 @@ window.saveUserAccessRow = saveUserAccessRow;
   /* [FIX 150] subscription-aware access state: paid sub > trial > legacy plan */
   function arsAccessState() {
     const f = (typeof F === 'function' && F()) ? F() : null;
-    const sub = f && f.subscription;
+    const sub = f && (f.subscription || (Array.isArray(f.subMeta) && f.subMeta[0]) || null);
     if (sub && typeof sub === 'object' && sub.expires_at) {
       const left = new Date(sub.expires_at).getTime() - Date.now();
       if (left > 0) return { mode: 'subscribed', plan: sub.plan, period: sub.period, daysLeft: Math.max(1, Math.ceil(left / 864e5)) };
@@ -3983,4 +3998,4 @@ function saveFarmProfile(e) {
 window.saveFarmProfile = saveFarmProfile;
 
 /* [FIX 146b] release stamp printed on thermal slips for diagnostics */
-window.ARS_RELEASE = 'v192 (2026-09-04)';
+window.ARS_RELEASE = 'v193 (2026-09-04)';

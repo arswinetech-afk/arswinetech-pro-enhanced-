@@ -63,7 +63,10 @@ window.ARSCloud = (() => {
     integrationEvents: 'integration_event',
     populationSnapshots: 'population_snapshot',
     benchmarkProfiles: 'benchmark_profile',
-    feedDuplicateRecovery: 'feed_duplicate_recovery'
+    feedDuplicateRecovery: 'feed_duplicate_recovery',
+    /* [FIX 153] subscription commerce syncs cross-device via app_records */
+    subOrders: 'sub_order',
+    subMeta: 'sub_meta'
   };
 
   const typeToKey = Object.fromEntries(Object.entries(entityMap).map(([key, type]) => [type, key]));
@@ -1131,6 +1134,12 @@ window.ARSCloud = (() => {
     edgeHeadGet,
     edgeHeadPut,
     getAccessToken: () => token, /* [FIX 127] presence auth */
+    listSubOrdersAll: async () => {
+      try {
+        const res = await request('/rest/v1/app_records?select=farm_id,payload&entity_type=eq.sub_order&order=updated_at.desc&limit=200', {}, { requireAuth: true });
+        return Array.isArray(res) ? res : [];
+      } catch (e) { return []; }
+    },
     signIn,
     signUp,
     signOut,
