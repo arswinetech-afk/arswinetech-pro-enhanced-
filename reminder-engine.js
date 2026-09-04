@@ -362,6 +362,8 @@
       }
 
       function injectDashboardReminders() {
+        /* [FIX 151] hardened: a bad reminder row must never break the dash */
+        try {
         let host = document.getElementById('dashboard');
         if (!host) return;
         document.getElementById('dashboardReminderWidget')?.remove();
@@ -376,8 +378,9 @@
         let box = document.createElement('div');
         box.id = 'dashboardReminderWidget';
         box.className = 'section';
-        box.innerHTML = `<div class="section-head"><div><h2>Reminder center</h2><p>Farm-only schedule · due, overdue and next 24 hours.</p></div><button class="btn ghost" onclick="go('reminders')">Manage reminders</button></div><div class="dashboard-reminders panel">${rows.map(r=>`<button class="dashboard-reminder ${statusOf(r)==='Overdue'?'overdue-blink':''}" onclick="openReminderActions('${r.id}')"><span class="tag ${classes(r.next_trigger)}">${statusOf(r)}</span><b>${r.title}</b><small>${r.reminder_type.replace('_',' ')} · ${fmtDateTime(r.next_trigger)}</small></button>`).join('')||'<div class="empty">No active reminders for this farm.</div>'}</div>`;
+        box.innerHTML = `<div class="section-head"><div><h2>Reminder center</h2><p>Farm-only schedule · due, overdue and next 24 hours.</p></div><button class="btn ghost" onclick="go('reminders')">Manage reminders</button></div><div class="dashboard-reminders panel">${rows.map(r=>`<button class="dashboard-reminder ${statusOf(r)==='Overdue'?'overdue-blink':''}" onclick="openReminderActions('${r.id}')"><span class="tag ${classes(r.next_trigger)}">${statusOf(r) || ''}</span><b>${r.title || ''}</b><small>${String(r.reminder_type || '').replace('_',' ')} · ${typeof fmtDateTime === 'function' ? fmtDateTime(r.next_trigger) : String(r.next_trigger || '')}</small></button>`).join('')||'<div class="empty">No active reminders for this farm.</div>'}</div>`;
         host.prepend(box);
+        } catch (e) { console.warn('[reminders widget]', e); }
       }
       const originalCrud = window.crudPage;
       window.crudPage = function(k) {

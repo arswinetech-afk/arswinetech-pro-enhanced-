@@ -2429,7 +2429,7 @@ function dashboard() {
     if (!dashEl) return;
 
     dashEl.innerHTML = `
-      ${arsTrialBanner()}
+      ${(() => { try { return arsTrialBanner() || ''; } catch (e) { return ''; } })()}
       ${window.arsWODashboard ? window.arsWODashboard(f) : ''}
       <div class="dash-hero">
         <div class="panel health-card health-slim">
@@ -2759,7 +2759,7 @@ function subscriptionPage() {
       ['platform', 'Platform Admin', 'Private', ['All Full Access features', 'User and farm administration', 'Available only to ARSwineTech']]
     ];
   const fp = (typeof F === 'function' && F()) ? F() : {}; /* [FIX 118] farm profile values */
-  document.getElementById('subscription').innerHTML = `<div class="panel subscription-hero"><div><div class="eyebrow">YOUR FARM PLAN</div><h2>${current==='platform'?'Platform Administration':current==='full'?'Full Access':'Starter'}${current==='platform'?'':' subscription'}</h2><p class="muted">${current==='platform'?'Verified platform owner access is active across all registered farms and application features.':'Upgrade when you are ready to unlock your farm’s complete operational toolkit.'}</p></div><span class="tag">${current==='platform'?'PLATFORM ADMIN': subActive ? `ACTIVE · ${String(fSub0.plan).toUpperCase()} · ${fSub0.period} · ${subDays}d left` : subExpired ? 'EXPIRED — VIEW-ONLY · please renew' : (current==='full'?'ACTIVE · FULL ACCESS':'ACTIVE · STARTER')}</span></div><div class="section subscription-plans">${plans.map(p=>`<div class="panel plan-card ${p[0]==='full'?'featured':''}"><div class="plan-label">${p[0]==='full'?'MOST COMPLETE':'ARSWINETECH PRO'}</div><h2>${p[1]}</h2><div class="price">${PRICE[p[0]] ? PRICE[p[0]][0] : p[2]}</div>${PRICE[p[0]] ? `<small class="muted" style="display:block;margin:-4px 0 8px">Yearly: ${PRICE[p[0]][1]} (2 months free)</small>` : ''}<ul>${p[3].map(x=>`<li>${x}</li>`).join('')}</ul>${p[0]==='platform'?'<button class="btn ghost" disabled>Administrator only</button>':p[0]===current?'<button class="btn ghost" disabled>Current plan</button>':`<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" onclick="choosePlan('${p[0]}','monthly')">${PRICE[p[0]][0]}</button><button class="btn ghost" onclick="choosePlan('${p[0]}','yearly')">${PRICE[p[0]][1]} · save 2 months</button></div>`}</div>`).join('')}</div><p class="muted" style="font-size:12px;margin-top:16px">Prototype checkout: selecting a plan updates access immediately. Production checkout should connect to Google Play Billing, Apple In-App Purchase, or a PCI-compliant payment provider and validate the subscription on the server.</p>
+  document.getElementById('subscription').innerHTML = `<div class="panel subscription-hero"><div><div class="eyebrow">YOUR FARM PLAN</div><h2>${current==='platform'?'Platform Administration':current==='full'?'Full Access':'Starter'}${current==='platform'?'':' subscription'}</h2><p class="muted">${current==='platform'?'Verified platform owner access is active across all registered farms and application features.':'Upgrade when you are ready to unlock your farm’s complete operational toolkit.'}</p></div><span class="tag">${current==='platform'?'PLATFORM ADMIN': subActive ? `ACTIVE · ${String(fSub0.plan).toUpperCase()} · ${fSub0.period} · ${subDays}d left` : subExpired ? 'EXPIRED — VIEW-ONLY · please renew' : (current==='full'?'ACTIVE · FULL ACCESS':'ACTIVE · STARTER')}</span>${current !== 'platform' ? '<button class="btn" style="margin-left:8px" onclick="openSubscribeModal()">💳 Subscribe / Renew via GCash</button>' : ''}</div><div class="section subscription-plans">${plans.map(p=>`<div class="panel plan-card ${p[0]==='full'?'featured':''}"><div class="plan-label">${p[0]==='full'?'MOST COMPLETE':'ARSWINETECH PRO'}</div><h2>${p[1]}</h2><div class="price">${PRICE[p[0]] ? PRICE[p[0]][0] : p[2]}</div>${PRICE[p[0]] ? `<small class="muted" style="display:block;margin:-4px 0 8px">Yearly: ${PRICE[p[0]][1]} (2 months free)</small>` : ''}<ul>${p[3].map(x=>`<li>${x}</li>`).join('')}</ul>${p[0]==='platform'?'<button class="btn ghost" disabled>Administrator only</button>':p[0]===current?'<button class="btn ghost" disabled>Current plan</button>':`<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" onclick="choosePlan('${p[0]}','monthly')">${PRICE[p[0]][0]}</button><button class="btn ghost" onclick="choosePlan('${p[0]}','yearly')">${PRICE[p[0]][1]} · save 2 months</button></div>`}</div>`).join('')}</div><p class="muted" style="font-size:12px;margin-top:16px">Prototype checkout: selecting a plan updates access immediately. Production checkout should connect to Google Play Billing, Apple In-App Purchase, or a PCI-compliant payment provider and validate the subscription on the server.</p>
   <div class="panel" style="margin-top:18px;padding:16px">
     <div class="eyebrow">FARM PROFILE</div>
     <h2 style="margin:6px 0 4px">🏠 Registration details</h2>
@@ -2775,6 +2775,98 @@ function subscriptionPage() {
     </form>
   </div>`
 }
+
+/* [REBUILD FIX 150+] GCASH SUBSCRIPTION FLOW (phase 1: reference verification).
+   The buyer submits the GCash reference number; the platform owner approves
+   with one tap in User Access, which activates the term automatically.
+   Phase 2 (true auto-verify) plugs a PayMongo/GCash webhook into this same
+   subOrders queue. Change the GCash number below to your own. */
+  window.ARS_GCASH_NUMBER = '09054155516';
+  const SUB_PRICE = (plan, period) => plan === 'full' ? (period === 'yearly' ? 12990 : 1299) : (period === 'yearly' ? 4990 : 499);
+
+  function pendingPayments() {
+    const out = [];
+    Object.entries((typeof DB !== 'undefined' && DB) || {}).forEach(([fid, f]) => {
+      ((f && f.subOrders) || []).forEach(o => { if (o.status === 'pending') out.push({ fid, fname: (f && f.name) || fid, o }); });
+    });
+    return out;
+  }
+  window.pendingPayments = pendingPayments;
+
+  window.openSubscribeModal = function () {
+    const f = (typeof F === 'function' && F()) ? F() : null;
+    if (!f) return;
+    document.getElementById('subOrderModal')?.remove();
+    document.body.insertAdjacentHTML('beforeend', `<div class="due-modal-bg open" id="subOrderModal" style="z-index:9999999!important" onclick="if(event.target===this)this.remove()">
+      <form class="reminder-modal" style="max-width:520px;width:96%;text-align:left" onsubmit="submitSubOrder(event)">
+        <div class="modal-top"><div><div class="eyebrow" style="color:#57d48d;letter-spacing:.12em;font-weight:800">💳 SUBSCRIBE / RENEW VIA GCASH</div><h2>Payment order</h2></div><button type="button" class="close-reminder" onclick="document.getElementById('subOrderModal').remove()">×</button></div>
+        <div class="reminder-fields">
+          <div class="field"><label>Plan</label><select name="plan" onchange="subOrderCalc()"><option value="starter">Starter</option><option value="full" selected>Full Access</option></select></div>
+          <div class="field"><label>Term</label><select name="period" onchange="subOrderCalc()"><option value="monthly">Monthly (30 days)</option><option value="yearly">Yearly (365 days)</option></select></div>
+          <div class="field full"><label>Amount to send</label><b id="subOrderAmount" style="font-size:20px;color:#57d48d">₱1,299</b></div>
+          <div class="field full" style="background:rgba(87,212,141,.08);border:1px dashed rgba(87,212,141,.4);border-radius:10px;padding:10px">
+            <small style="color:#c9f5ef;line-height:1.5">1️⃣ Open GCash → Send Money → to <b>${window.ARS_GCASH_NUMBER}</b> (ARSwineTech).<br>2️⃣ Enter the exact amount below.<br>3️⃣ Paste the <b>reference number</b> from your GCash receipt.</small>
+          </div>
+          <div class="field"><label>GCash reference no. *</label><input name="ref" required inputmode="numeric" minlength="10" placeholder="e.g. 701234567890"></div>
+          <div class="field"><label>Your GCash mobile no. *</label><input name="mobile" required inputmode="numeric" minlength="11" placeholder="09XXXXXXXXX"></div>
+        </div>
+        <div class="due-actions"><button type="button" class="btn ghost" onclick="document.getElementById('subOrderModal').remove()">Cancel</button><button class="btn">✔ I paid — submit for verification</button></div>
+      </form></div>`);
+  };
+
+  window.submitSubOrder = function (ev) {
+    ev.preventDefault();
+    const f = (typeof F === 'function' && F()) ? F() : null;
+    const d = new FormData(ev.target);
+    const plan = d.get('plan'), period = d.get('period');
+    const ref = String(d.get('ref') || '').replace(/\D/g, '');
+    const mobile = String(d.get('mobile') || '').trim();
+    if (ref.length < 10) { toast('⚠ Enter the full GCash reference number.'); return; }
+    const dup = Object.values(DB || {}).some(fm => (fm.subOrders || []).some(o => o.ref === ref && o.status !== 'rejected'));
+    if (dup) { toast('⚠ That reference number was already submitted.'); return; }
+    (f.subOrders = f.subOrders || []).unshift({ id: 'PAY-' + Date.now().toString(36).toUpperCase(), plan, period, amount: SUB_PRICE(plan, period), ref, mobile, status: 'pending', created_at: new Date().toISOString() });
+    save();
+    document.getElementById('subOrderModal')?.remove();
+    toast('✔ Payment submitted — the administrator will verify your GCash reference shortly.');
+  };
+
+  window.openPaymentApprovals = function () {
+    const list = pendingPayments();
+    document.getElementById('payApproveModal')?.remove();
+    document.body.insertAdjacentHTML('beforeend', `<div class="due-modal-bg open" id="payApproveModal" style="z-index:9999999!important" onclick="if(event.target===this)this.remove()">
+      <div class="reminder-modal" style="max-width:640px;width:96%;text-align:left">
+        <div class="modal-top"><div><div class="eyebrow" style="color:#f0b64b;letter-spacing:.12em;font-weight:800">💳 GCASH PAYMENT APPROVALS</div><h2>Pending verifications</h2><small class="muted">Cross-check the reference in your GCash merchant history, then approve.</small></div><button class="close-reminder" onclick="document.getElementById('payApproveModal').remove()">×</button></div>
+        ${list.length ? list.map(x => `<div class="wo-row">
+          <div class="wo-row-top"><b>${esc(x.fname)}</b><small class="muted">${esc(x.o.id)}</small><span class="wo-pri" style="border-color:#57d48d55;background:#57d48d18;color:#57d48d">${String(x.o.plan).toUpperCase()} · ${x.o.period}</span></div>
+          <div class="wo-row-meta"><span>💰 ${esc(typeof peso === 'function' ? peso(x.o.amount) : ('₱' + x.o.amount))}</span><span>🔖 ref ${esc(x.o.ref)}</span><span>📱 ${esc(x.o.mobile)}</span><span>🗓 ${new Date(x.o.created_at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span></div>
+          <div class="wo-actions"><button class="btn small" onclick="approvePayment('${x.fid}','${x.o.id}')">✔ Approve & activate</button><button class="btn ghost small delete-action" onclick="rejectPayment('${x.fid}','${x.o.id}')">✕ Reject</button></div>
+        </div>`).join('') : '<div class="empty" style="padding:20px">No pending payments. New GCash submissions appear here instantly.</div>'}
+      </div></div>`);
+  };
+
+  window.approvePayment = function (fid, oid) {
+    const f = DB[fid]; const o = f && (f.subOrders || []).find(x => x.id === oid);
+    if (!f || !o) return;
+    const days = o.period === 'yearly' ? 365 : 30; const nowD = new Date();
+    f.subscription = { plan: o.plan, period: o.period, started_at: nowD.toISOString(), expires_at: new Date(nowD.getTime() + days * 864e5).toISOString() };
+    o.status = 'approved'; o.approved_at = nowD.toISOString();
+    save();
+    try {
+      const us = users(); const u = us.find(x => x.farmId === fid);
+      if (u) { u.plan = o.plan; saveUsers(us); if (window.ARSCloud && ARSCloud.updateMemberAccess) ARSCloud.updateMemberAccess(fid, u.user_id || u.id || u.email, u.role, o.plan, u.access).catch(() => {}); }
+    } catch (e) {}
+    toast('✔ ' + (f.name || fid) + ' → ' + o.plan + ' (' + o.period + ') activated.');
+    window.openPaymentApprovals();
+  };
+
+  window.rejectPayment = function (fid, oid) {
+    const f = DB[fid]; const o = f && (f.subOrders || []).find(x => x.id === oid);
+    if (!f || !o) return;
+    o.status = 'rejected';
+    save();
+    toast('Payment rejected.');
+    window.openPaymentApprovals();
+  };
 
 function choosePlan(plan, period) {
   /* [FIX 150] subscriptions now carry a term: monthly (30d) or yearly (365d).
@@ -2923,7 +3015,7 @@ async function adminPage() {
   container.innerHTML = `
     <div class="panel admin-banner">♚ <div><b>ARSwineTech Platform Administration</b><br><span class="muted">Manage registered users, farm roles, access status and subscription entitlement in real-time.</span></div></div>
     <div class="toolbar">
-      <div class="toolbar-left"><input class="search" placeholder="Search registered users" oninput="filterTable('useradmin',this.value)"></div>
+      <div class="toolbar-left"><input class="search" placeholder="Search registered users" oninput="filterTable('useradmin',this.value)">${typeof isSuperAdmin === 'function' && isSuperAdmin() ? `<button class="btn ghost" style="margin-left:8px" onclick="openPaymentApprovals()">💳 GCash approvals (${pendingPayments().length})</button>` : ''}</div>
       <div class="toolbar-right" style="display:flex;gap:8px;align-items:center;">
         <button type="button" class="btn ghost" onclick="purgeTestAccountsAdmin()" title="Purge any leftover test accounts and dummy test farms">🧹 Purge Test Data</button>
         <button type="button" class="btn ghost" onclick="adminPage()" title="Refresh live cloud user list">⟳ Refresh</button>
@@ -3057,6 +3149,7 @@ window.saveUserAccessRow = saveUserAccessRow;
    Full Access / Platform). */
   window.ARS_FB_SUBSCRIBE = 'https://www.facebook.com/share/19T9F1xKgv/';
   function arsTrialState() {
+    if (typeof isSuperAdmin === 'function' && isSuperAdmin()) return { mode: 'paid', plan: 'platform' };
     const f = (typeof F === 'function' && F()) ? F() : null;
     const mem = window.arsActiveMembership || (window.arsMemberships || [])[0] || null;
     const plan = mem && mem.plan ? String(mem.plan) : '';
@@ -3876,4 +3969,4 @@ function saveFarmProfile(e) {
 window.saveFarmProfile = saveFarmProfile;
 
 /* [FIX 146b] release stamp printed on thermal slips for diagnostics */
-window.ARS_RELEASE = 'v190 (2026-09-04)';
+window.ARS_RELEASE = 'v191 (2026-09-04)';
