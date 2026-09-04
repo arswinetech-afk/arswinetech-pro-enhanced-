@@ -86,6 +86,8 @@
       <div class="reminder-modal" style="max-width:720px;width:96%;text-align:left">
         <div class="modal-top"><div><div class="eyebrow" style="color:#f0b64b;letter-spacing:.12em;font-weight:800">📋 WORK ORDER CENTER</div><h2>All work orders</h2><small class="muted">Open first, sorted by due date · tap status to move through the pipeline</small></div><button class="close-reminder" onclick="document.getElementById('woListModal').remove()">×</button></div>
         <div style="display:flex;gap:8px;margin:4px 0 12px;flex-wrap:wrap"><button class="btn" onclick="openWOForm()">＋ Create New W.O.</button><button class="btn ghost" onclick="openPerfCenter()">🏆 Staff Performance</button></div>
+        <div style="margin:0 0 8px"><input id="woSearch" class="search" style="width:100%" placeholder="🔍 Search staff / task / WO id…" oninput="window.woFilterList(this.value)"></div>
+        <div style="display:flex;gap:6px;overflow-x:auto;padding-bottom:8px">${[...new Set(wos(f).map(x => (x.assignee || '').trim()).filter(Boolean))].map(n => `<button type="button" class="wo-pri" style="white-space:nowrap;border-color:rgba(145,207,202,.3);background:rgba(145,207,202,.08);color:#c9f5ef" onclick="document.getElementById('woSearch').value='${esc(n).replace(/'/g, "\'")}';window.woFilterList('${esc(n).replace(/'/g, "\'")}')">👤 ${esc(n)}</button>`).join('')}</div>
         ${list.length ? list.map(w => {
           const late = w.status !== 'closed' && w.due && new Date(w.due).getTime() < now();
           return `<div class="wo-row">
@@ -340,6 +342,14 @@
       if (fid && window.ARSCloud && ARSCloud.upsertCommerceRows) ARSCloud.upsertCommerceRows(fid, (rows || []).map(r => Object.assign({ _et: 'work_order' }, r))).catch(() => {});
     } catch (e) {}
   }
+
+  /* [FIX 161] quick staff/task filter for the WO list */
+  window.woFilterList = function (term) {
+    const t = String(term || '').toLowerCase();
+    document.querySelectorAll('#woListModal .wo-row').forEach(row => {
+      row.style.display = !t || row.textContent.toLowerCase().includes(t) ? '' : 'none';
+    });
+  };
 
   window.woToggleLine = function (id, idx, on) {
     const f = F0(); const wd = wos(f).find(x => x.id === id);
