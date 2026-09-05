@@ -87,14 +87,14 @@
     document.body.insertAdjacentHTML('beforeend', `<div class="due-modal-bg open" id="woListModal" onclick="if(event.target===this)this.remove()" style="z-index:999999!important">
       <div class="reminder-modal" style="max-width:720px;width:96%;text-align:left">
         <div class="modal-top"><div><div class="eyebrow" style="color:#f0b64b;letter-spacing:.12em;font-weight:800">📋 WORK ORDER CENTER</div><h2>All work orders</h2><small class="muted">Open first, sorted by due date · tap status to move through the pipeline</small></div><button class="close-reminder" onclick="document.getElementById('woListModal').remove()">×</button></div>
-        <div style="display:flex;gap:8px;margin:4px 0 12px;flex-wrap:wrap"><button class="btn" onclick="openWOForm()">＋ Create New W.O.</button><button class="btn ghost" onclick="openPerfCenter()">🏆 Staff Performance</button></div>
+        <div style="display:flex;gap:8px;margin:4px 0 12px;flex-wrap:wrap"><button class="btn" onclick="openWOForm()">＋ Create New W.O.</button><button class="btn ghost" onclick="openPerfCenter()">🏆 Staff Performance</button><button class="btn ghost" onclick="openWoTemplates()">🔁 Daily Templates</button></div>
         <div style="margin:0 0 8px"><input id="woSearch" class="search" style="width:100%" placeholder="🔍 Search staff / task / WO id…" oninput="window.woFilterList(this.value)"></div>
         <div style="display:flex;gap:6px;overflow-x:auto;padding-bottom:8px">${[...new Set(wos(f).map(x => (x.assignee || '').trim()).filter(Boolean))].map(n => `<button type="button" class="wo-pri" style="white-space:nowrap;border-color:rgba(145,207,202,.3);background:rgba(145,207,202,.08);color:#c9f5ef" onclick="document.getElementById('woSearch').value='${esc(n).replace(/'/g, "\'")}';window.woFilterList('${esc(n).replace(/'/g, "\'")}')">👤 ${esc(n)}</button>`).join('')}</div>
         ${act.length ? act.map(w => {
           const late = w.status !== 'closed' && w.due && new Date(w.due).getTime() < now();
           const exp = woExpanded.has(w.id);
           return `<div class="wo-row">
-            <div class="wo-row-top"><span class="wo-pri" style="border-color:${PRI[w.priority][1]}55;background:${PRI[w.priority][1]}18;color:${PRI[w.priority][1]}">${PRI[w.priority][0]}</span><b>${esc(w.title)}</b><small class="muted">${esc(w.id)}</small></div>
+            <div class="wo-row-top"><span class="wo-pri" style="border-color:${PRI[w.priority][1]}55;background:${PRI[w.priority][1]}18;color:${PRI[w.priority][1]}">${PRI[w.priority][0]}</span>${w.template_id ? '<span class="wo-pri" style="border-color:#ffd98a55;background:#ffd98a18;color:#ffd98a">🔁 daily</span>' : ''}<b>${esc(w.title)}</b><small class="muted">${esc(w.id)}</small></div>
             <div class="wo-row-meta"><span>👤 ${esc(w.assignee || 'Unassigned')}</span><span>📍 ${esc(w.location || '—')}</span><span class="${late ? 'wo-bad' : ''}">🗓 ${fmtDue(w.due)}</span><span>Status: <b>${ST[w.status]}</b></span></div>
             <button type="button" class="btn ghost small" style="margin:6px 0 0" onclick="woExpand('${w.id}')">${exp ? '▴ Collapse' : '▾ Expand'}</button>
             <div class="wo-body" style="${exp ? '' : 'display:none'}">
@@ -132,6 +132,8 @@
           <div class="field"><label>Difficulty / effort tier</label><select name="difficulty" onchange="window.woCalcPts && window.woCalcPts()">${Object.entries(WO_TIER).map(([k, v]) => `<option value="${k}" ${w?.difficulty === k ? 'selected' : ''}>${k[0].toUpperCase() + k.slice(1)} (${v} pt${v > 1 ? 's' : ''})</option>`).join('')}</select></div>
           <div class="field"><label>Base points</label><b id="woPtsPrev" style="font-size:18px;color:#ffd98a">1</b><small class="muted" style="display:block">effort + priority bonus · multipliers apply on close</small></div>
           <div class="field"><label>Due date &amp; time</label><input name="due" type="datetime-local" value="${w?.due ? w.due.slice(0, 16) : ''}"></div>
+          <div class="field"><label>Repeat</label><select name="repeat"><option value="none">One-time</option><option value="daily" ${w?.template_id ? 'selected' : ''}>🔁 Daily (auto-created every morning)</option></select></div>
+          <div class="field"><label>Daily due time</label><input type="time" name="due_time" value="${esc(w?.due_time || '18:00')}"></div>
           <div class="field full" style="position:relative"><label>Assignee (auto-suggests from Staff Roster)</label>
             <input name="assignee_txt" value="${esc(w?.assignee || '')}" placeholder="Type staff name…" autocomplete="off" oninput="window.woSuggest(this.value)" onfocus="window.woSuggest(this.value)">
             <div id="woSuggestBox" style="display:none;position:absolute;left:0;right:0;top:100%;z-index:5;background:#0d2126;border:1px solid var(--line);border-radius:10px;max-height:190px;overflow:auto;box-shadow:0 10px 24px rgba(0,0,0,.45)"></div>
@@ -158,6 +160,16 @@
       list.unshift({ id: 'WO-' + Date.now().toString(36).toUpperCase(), title: d.get('title'), priority: d.get('priority'), assignee: assigneeVal, location: d.get('location'), details: d.get('details'), due: dueVal, difficulty: d.get('difficulty') || 'routine', status: 'open', created_at: new Date().toISOString() });
     }
     const saved = w || list[0];
+    /* [FIX 166] daily tasks become templates: a FRESH instance is auto-created
+       every morning — never reopen yesterday's closed WO. */
+    if (d.get('repeat') === 'daily') {
+      const tpls = Array.isArray(f.woTemplates) ? f.woTemplates : (f.woTemplates = []);
+      const tpl = saved.template_id ? tpls.find(t => t.id === saved.template_id) : null;
+      const rec = { id: saved.template_id || 'TPL-' + Date.now().toString(36).toUpperCase(), title: saved.title, details: saved.details, priority: saved.priority, difficulty: saved.difficulty || 'routine', assignee: saved.assignee, location: saved.location, due_time: d.get('due_time') || '18:00', active: true, last_gen: '' };
+      if (tpl) Object.assign(tpl, rec); else tpls.push(rec);
+      saved.template_id = rec.id;
+      try { const fid = window.__arsActiveFarmId || (typeof farmId !== 'undefined' ? farmId : null); if (fid && window.ARSCloud && ARSCloud.upsertCommerceRows) ARSCloud.upsertCommerceRows(fid, [Object.assign({ _et: 'wo_template' }, rec)]).catch(() => {}); } catch (e) {}
+    }
     if (typeof save === 'function') save();
     arsWOSync([saved]);
     document.getElementById('woFormModal')?.remove();
@@ -395,6 +407,62 @@
   const woExpanded = new Set();
   window.woExpand = function (id) { if (woExpanded.has(id)) woExpanded.delete(id); else woExpanded.add(id); window.openWOList(); };
 
+  /* [FIX 166] RECURRING DAILY TASKS — templates spawn a fresh WO each morning. */
+  const localTodayStr = () => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
+  window.arsGenRecurring = function () {
+    const f = F0();
+    const tpls = Array.isArray(f.woTemplates) ? f.woTemplates : [];
+    const today = localTodayStr();
+    let created = 0;
+    tpls.filter(t => t.active && t.last_gen !== today).forEach(t => {
+      const due = new Date(today + 'T' + (t.due_time || '18:00')).toISOString();
+      const wo = { id: 'WO-' + Date.now().toString(36).toUpperCase() + Math.random().toString(36).slice(2, 4).toUpperCase(), title: t.title, details: t.details, priority: t.priority, difficulty: t.difficulty || 'routine', assignee: t.assignee, location: t.location, due, status: 'open', created_at: new Date().toISOString(), template_id: t.id };
+      wos(f).unshift(wo);
+      t.last_gen = today;
+      created++;
+      arsWOSync([wo]);
+    });
+    if (created) {
+      if (typeof save === 'function') save();
+      try { const fid = window.__arsActiveFarmId || (typeof farmId !== 'undefined' ? farmId : null); if (fid && window.ARSCloud && ARSCloud.upsertCommerceRows) ARSCloud.upsertCommerceRows(fid, tpls.map(t => Object.assign({ _et: 'wo_template' }, t))).catch(() => {}); } catch (e) {}
+      if (window.toast) toast('🔁 ' + created + ' daily task' + (created > 1 ? 's' : '') + ' generated for today.');
+    }
+  };
+
+  window.openWoTemplates = function () {
+    const f = F0();
+    const tpls = Array.isArray(f.woTemplates) ? f.woTemplates : [];
+    document.getElementById('woTplModal')?.remove();
+    document.body.insertAdjacentHTML('beforeend', `<div class="due-modal-bg open" id="woTplModal" style="z-index:9999999!important" onclick="if(event.target===this)this.remove()">
+      <div class="reminder-modal" style="max-width:600px;width:96%;text-text-align:left;text-align:left">
+        <div class="modal-top"><div><div class="eyebrow" style="color:#ffd98a;letter-spacing:.12em;font-weight:800">🔁 DAILY TASK TEMPLATES</div><h2>Repeats every morning automatically</h2><small class="muted">Each day gets a FRESH work order — closed history stays clean for performance.</small></div><button class="close-reminder" onclick="document.getElementById('woTplModal').remove()">×</button></div>
+        ${tpls.map(t => `<div class="wo-row"><div class="wo-row-top"><b>${esc(t.title)}</b><span class="wo-pri" style="border-color:${t.active ? '#57d48d55' : '#94a3b855'};background:${t.active ? '#57d48d18' : 'rgba(148,163,184,.1)'};color:${t.active ? '#57d48d' : '#94a3b8'}">${t.active ? 'ACTIVE' : 'PAUSED'}</span></div>
+          <div class="wo-row-meta"><span>👤 ${esc(t.assignee || '—')}</span><span>⏰ due ${esc(t.due_time || '18:00')}</span><span>${esc((WO_TIER[t.difficulty] || 1))} pts base</span></div>
+          <div class="wo-actions"><button class="btn ghost small" onclick="woTplToggle('${t.id}')">${t.active ? '⏸ Pause' : '▶ Resume'}</button><button class="btn ghost small" onclick="woTplGenNow('${t.id}')">⚡ Create today's now</button><button class="btn ghost small delete-action" onclick="woTplDelete('${t.id}')">🗑</button></div></div>`).join('') || '<div class="empty" style="padding:16px">No templates yet — create a WO and choose 🔁 Daily.</div>'}
+      </div></div>`);
+  };
+
+  window.woTplToggle = function (id) {
+    const f = F0(); const t = (f.woTemplates || []).find(x => x.id === id); if (!t) return;
+    t.active = !t.active;
+    if (typeof save === 'function') save();
+    try { const fid = window.__arsActiveFarmId || (typeof farmId !== 'undefined' ? farmId : null); if (fid && window.ARSCloud && ARSCloud.upsertCommerceRows) ARSCloud.upsertCommerceRows(fid, [Object.assign({ _et: 'wo_template' }, t)]).catch(() => {}); } catch (e) {}
+    window.openWoTemplates();
+  };
+  window.woTplGenNow = function (id) {
+    const f = F0(); const t = (f.woTemplates || []).find(x => x.id === id); if (!t) return;
+    t.last_gen = ''; window.arsGenRecurring();
+    window.openWoTemplates();
+  };
+  window.woTplDelete = function (id) {
+    const f = F0();
+    if (!confirm('Delete this daily template? Existing work orders are kept.')) return;
+    f.woTemplates = (f.woTemplates || []).filter(x => x.id !== id);
+    if (typeof save === 'function') save();
+    try { const fid = window.__arsActiveFarmId || (typeof farmId !== 'undefined' ? farmId : null); if (fid && window.ARSCloud && ARSCloud.deleteCommerceRow) ARSCloud.deleteCommerceRow(fid, 'wo_template', id).catch(() => {}); } catch (e) {}
+    window.openWoTemplates();
+  };
+
   /* [FIX 164] live assignee autosuggest from the Staff Roster */
   window.woSuggest = function (v) {
     const box = document.getElementById('woSuggestBox');
@@ -460,7 +528,7 @@
       if (wd.verified) s.verified += 1;
       if ((WO_TIER[wd.difficulty] || 1) >= 3) s.heavy += p.total;
       const day = (wd.closed_at || '').slice(0, 10);
-      if (day) s.perDay[day] = (s.perDay[day] || 0) + p.total;
+      if (day) { s.perDay[day] = (s.perDay[day] || 0) + p.total; s.dayQ = s.dayQ || {}; const q = s.dayQ[day] || (s.dayQ[day] = { c: 0, ok: 0 }); q.c++; if (wd.on_time !== false && (wd.verified || (wd.review && wd.review.total > 0 && wd.review.done === wd.review.total))) q.ok++; }
     });
     return Object.values(map).sort((a, b) => b.pts - a.pts);
   }
@@ -472,6 +540,19 @@
     if (s.closed >= 3 && s.onTime / s.closed >= 0.9) b.push(['⏱️', 'On-Time Hero']);
     if (s.closed >= 3 && s.reopened === 0) b.push(['🛡️', 'Quality Streak']);
     if (s.pts > 0 && s.late === 0 && s.closed >= 2) b.push(['✨', 'Clean Sweep']);
+    if (s.dayQ) {
+      const today = new Date(); let streak = 0;
+      for (let i = 0; i < 60; i++) {
+        const d = new Date(today.getTime() - i * 864e5);
+        const key = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+        const q = s.dayQ[key];
+        if (q && q.c > 0 && q.ok === q.c) streak++;
+        else if (i === 0 && !q) continue; /* today not closed yet doesn't break streak */
+        else if (!q && i === 1) continue; /* yesterday may still be in progress */
+        else break;
+      }
+      if (streak >= 3) b.push(['📅', 'Consistency ' + streak + 'd']);
+    }
     return b;
   }
 

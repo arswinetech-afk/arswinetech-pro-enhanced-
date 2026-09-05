@@ -2400,7 +2400,7 @@ function dashboard() {
     bioScore = Math.max(70, Math.min(100, bioScore));
     const H = window.arsFarmHealthIndex(f, bioScore);
     const healthScore = H.index;
-    if (!window.__arsComLast || Date.now() - window.__arsComLast > 60000) { window.__arsComLast = Date.now(); window.arsRefreshCommerce && window.arsRefreshCommerce(); }
+    if (!window.__arsComLast || Date.now() - window.__arsComLast > 60000) { window.__arsComLast = Date.now(); window.arsRefreshCommerce && window.arsRefreshCommerce(); window.arsGenRecurring && window.arsGenRecurring(); }
 
     const attention = [
       ['🐖', 'Sows Due This Week', dueCount, 'openDueWatchlist()'],
@@ -4043,4 +4043,4 @@ function saveFarmProfile(e) {
 window.saveFarmProfile = saveFarmProfile;
 
 /* [FIX 146b] release stamp printed on thermal slips for diagnostics */
-window.ARS_RELEASE = 'v204 (2026-09-05)';
+window.ARS_RELEASE = 'v205 (2026-09-05)';
