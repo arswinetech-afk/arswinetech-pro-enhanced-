@@ -125,7 +125,11 @@
           <div class="field"><label>Difficulty / effort tier</label><select name="difficulty" onchange="window.woCalcPts && window.woCalcPts()">${Object.entries(WO_TIER).map(([k, v]) => `<option value="${k}" ${w?.difficulty === k ? 'selected' : ''}>${k[0].toUpperCase() + k.slice(1)} (${v} pt${v > 1 ? 's' : ''})</option>`).join('')}</select></div>
           <div class="field"><label>Base points</label><b id="woPtsPrev" style="font-size:18px;color:#ffd98a">1</b><small class="muted" style="display:block">effort + priority bonus · multipliers apply on close</small></div>
           <div class="field"><label>Due date &amp; time</label><input name="due" type="datetime-local" value="${w?.due ? w.due.slice(0, 16) : ''}"></div>
-          <div class="field"><label>Assignee</label><input name="assignee" value="${esc(w?.assignee || '')}" placeholder="Staff name"></div>
+          <div class="field full" style="position:relative"><label>Assignee (auto-suggests from Staff Roster)</label>
+            <input name="assignee_txt" value="${esc(w?.assignee || '')}" placeholder="Type staff name…" autocomplete="off" oninput="window.woSuggest(this.value)" onfocus="window.woSuggest(this.value)">
+            <div id="woSuggestBox" style="display:none;position:absolute;left:0;right:0;top:100%;z-index:5;background:#0d2126;border:1px solid var(--line);border-radius:10px;max-height:190px;overflow:auto;box-shadow:0 10px 24px rgba(0,0,0,.45)"></div>
+          </div>
+          <div class="field"><small class="muted" style="cursor:pointer;text-decoration:underline" onclick="openStaffRoster('new')">＋ Manage roster &amp; shifts</small></div>
           <div class="field"><label>Location</label><input name="location" value="${esc(w?.location || '')}" placeholder="Barn / pen / area"></div>
           <div class="field full"><label>Details / instructions <small class="muted">(one per line — each line prints as a [ ] checkbox the staff ticks when done)</small></label><textarea name="details">${esc(w?.details || '')}</textarea></div>
           <div class="field full"><label style="display:flex;gap:8px;align-items:center"><input type="checkbox" name="print_bt" ${w ? '' : 'checked'} style="width:auto"> 🖨 Print a small copy via Bluetooth POS (for the staff on duty)</label></div>
@@ -137,7 +141,7 @@
   window.saveWOForm = function (ev, editId) {
     ev.preventDefault();
     const f = F0(), d = new FormData(ev.target);
-    const assigneeVal = d.get('assignee_sel') === '__free' ? String(d.get('assignee_free') || '').trim() : (d.get('assignee_sel') || '');
+    const assigneeVal = String(d.get('assignee_txt') || '').trim();
     const list = wos(f);
     const w = editId ? list.find(x => x.id === editId) : null;
     const dueVal = d.get('due') ? new Date(d.get('due')).toISOString() : '';
@@ -377,6 +381,22 @@
           </form>
         </div>
       </div></div>`);
+  };
+
+  /* [FIX 164] live assignee autosuggest from the Staff Roster */
+  window.woSuggest = function (v) {
+    const box = document.getElementById('woSuggestBox');
+    if (!box) return;
+    const f = F0();
+    const names = [...new Set([...staffRoster(f).map(r => r.name), ...wos(f).map(x => baseName(x.assignee)).filter(Boolean)])];
+    const t = String(v || '').toLowerCase().trim();
+    const list = t ? names.filter(n => n.toLowerCase().includes(t)) : names;
+    if (!list.length) { box.style.display = 'none'; return; }
+    box.style.display = '';
+    const pick = n => { const inp = document.querySelector('#woFormModal [name=assignee_txt]'); if (inp) inp.value = n; box.style.display = 'none'; };
+    window.__woPick = pick;
+    box.innerHTML = list.slice(0, 8).map((n, i) => `<button type="button" data-i="${i}" style="display:block;width:100%;text-align:left;padding:10px 12px;background:none;border:none;border-bottom:1px solid var(--line);color:#d7e6e4;font-size:13px">${esc(n)}</button>`).join('');
+    [...box.children].forEach((btn, i) => { btn.onpointerdown = e => { e.preventDefault(); pick(list[i]); }; });
   };
 
   window.woCalcPts = function () {
