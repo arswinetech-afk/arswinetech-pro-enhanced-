@@ -137,13 +137,14 @@
   window.saveWOForm = function (ev, editId) {
     ev.preventDefault();
     const f = F0(), d = new FormData(ev.target);
+    const assigneeVal = d.get('assignee_sel') === '__free' ? String(d.get('assignee_free') || '').trim() : (d.get('assignee_sel') || '');
     const list = wos(f);
     const w = editId ? list.find(x => x.id === editId) : null;
     const dueVal = d.get('due') ? new Date(d.get('due')).toISOString() : '';
     if (w) {
-      Object.assign(w, { title: d.get('title'), priority: d.get('priority'), difficulty: d.get('difficulty') || 'routine', assignee: d.get('assignee'), location: d.get('location'), details: d.get('details'), due: dueVal });
+      Object.assign(w, { title: d.get('title'), priority: d.get('priority'), difficulty: d.get('difficulty') || 'routine', assignee: assigneeVal, location: d.get('location'), details: d.get('details'), due: dueVal });
     } else {
-      list.unshift({ id: 'WO-' + Date.now().toString(36).toUpperCase(), title: d.get('title'), priority: d.get('priority'), assignee: d.get('assignee'), location: d.get('location'), details: d.get('details'), due: dueVal, difficulty: d.get('difficulty') || 'routine', status: 'open', created_at: new Date().toISOString() });
+      list.unshift({ id: 'WO-' + Date.now().toString(36).toUpperCase(), title: d.get('title'), priority: d.get('priority'), assignee: assigneeVal, location: d.get('location'), details: d.get('details'), due: dueVal, difficulty: d.get('difficulty') || 'routine', status: 'open', created_at: new Date().toISOString() });
     }
     const saved = w || list[0];
     if (typeof save === 'function') save();
@@ -233,6 +234,100 @@
   const WO_TIER = { routine: 1, skilled: 2, heavy: 3, expert: 5 };
   window.WO_TIER = WO_TIER;
 
+  /* [FIX 162] STAFF ROSTER — a person exists ONCE with their shift(s);
+     work orders link to them, so 2 shifts or 10 extra tasks never duplicate
+     a person in the Performance Center. */
+  const SHIFT_ICON = { day: '☀️', night: '🌙', split: '🌓', flex: '🕑' };
+  const staffRoster = f => Array.isArray(f.staff) ? f.staff : (f.staff = []);
+  window.staffRoster = staffRoster;
+  function staffSync(f) {
+    try {
+      const fid = window.__arsActiveFarmId || (typeof farmId !== 'undefined' ? farmId : null);
+      if (fid && window.ARSCloud && ARSCloud.upsertCommerceRows) ARSCloud.upsertCommerceRows(fid, staffRoster(f).map(r => Object.assign({ _et: 'staff_rec' }, r))).catch(() => {});
+    } catch (e) {}
+  }
+  const baseName = s => String(s || '').replace(/\s*\(.*$/, '').trim();
+  function resolveStaff(f, name) {
+    const n = String(name || '').trim();
+    if (!n) return null;
+    const r = staffRoster(f);
+    return r.find(x => x.name === n) || r.find(x => n.startsWith(x.name + ' (') || (x.name && n.includes(x.name))) || null;
+  }
+  window.resolveStaff = resolveStaff;
+
+  window.woImportRoster = function () {
+    const f = F0();
+    const names = [...new Set(wos(f).map(x => baseName(x.assignee)).filter(Boolean))];
+    let added = 0;
+    names.forEach(nm => { if (!staffRoster(f).some(r => r.name === nm)) { staffRoster(f).push({ id: 'STF-' + Date.now().toString(36).toUpperCase() + Math.random().toString(36).slice(2, 5).toUpperCase(), name: nm, shift: 'flex', hours: '', active: true }); added++; } });
+    if (typeof save === 'function') save();
+    staffSync(f);
+    toast('👥 ' + added + ' staff imported from work orders. Edit their shifts now.');
+    window.openStaffRoster();
+  };
+
+  window.woMergeToRoster = function () {
+    const f = F0(); let n = 0;
+    wos(f).forEach(wd => { const r = resolveStaff(f, wd.assignee); if (r && wd.assignee !== r.name) { wd.assignee = r.name; n++; } });
+    if (typeof save === 'function') save();
+    arsWOSync(wos(f));
+    toast('🔀 ' + n + ' work orders re-linked to single staff profiles (duplicates merged).');
+    window.openStaffRoster();
+  };
+
+  window.saveStaffRec = function (ev, editId) {
+    ev.preventDefault();
+    const f = F0(); const d = new FormData(ev.target);
+    const name = String(d.get('name') || '').trim();
+    if (!name) { toast('⚠ Name required.'); return; }
+    const rec = editId ? staffRoster(f).find(x => x.id === editId) : null;
+    if (rec) Object.assign(rec, { name, shift: d.get('shift'), hours: String(d.get('hours') || '').trim(), active: d.get('active') === 'on' });
+    else staffRoster(f).push({ id: 'STF-' + Date.now().toString(36).toUpperCase(), name, shift: d.get('shift'), hours: String(d.get('hours') || '').trim(), active: true });
+    if (typeof save === 'function') save();
+    staffSync(f);
+    document.getElementById('staffRecModal')?.remove();
+    toast('✔ Staff saved.');
+    window.openStaffRoster();
+  };
+
+  window.openStaffRoster = async function (editId) {
+    const f = F0();
+    try {
+      const fid0 = window.__arsActiveFarmId || (typeof farmId !== 'undefined' ? farmId : null);
+      if (fid0 && window.ARSCloud && ARSCloud.listCommerceRows) {
+        const rr = await ARSCloud.listCommerceRows(fid0);
+        (rr || []).forEach(rw => { if (rw.entity_type === 'staff_rec' && rw.payload && rw.payload.id) { const i = staffRoster(f).findIndex(x => x.id === rw.payload.id); if (i >= 0) staffRoster(f)[i] = rw.payload; else staffRoster(f).push(rw.payload); } });
+      }
+    } catch (e) {}
+
+    const edit = editId ? staffRoster(f).find(x => x.id === editId) : null;
+    document.getElementById('staffRecModal')?.remove();
+    if (editId === 'new' || (!editId && false)) editId = null;
+    document.body.insertAdjacentHTML('beforeend', `<div class="due-modal-bg open" id="staffRecModal" style="z-index:99999999!important" onclick="if(event.target===this)this.remove()">
+      <div class="reminder-modal" style="max-width:640px;width:96%;text-align:left">
+        <div class="modal-top"><div><div class="eyebrow" style="color:#ffd98a;letter-spacing:.12em;font-weight:800">👥 STAFF ROSTER & SHIFTS</div><h2>One profile per person</h2><small class="muted">Shifts live here — WOs link to people, never duplicate them.</small></div><button class="close-reminder" onclick="document.getElementById('staffRecModal').remove()">×</button></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+          <button class="btn small" onclick="document.getElementById('staffFormWrap').style.display='';window.__staffEdit=null;document.getElementById('staffFormWrap').querySelector('form').reset();">＋ Add staff</button>
+          <button class="btn ghost small" onclick="woImportRoster()">⤓ Import names from WOs</button>
+          <button class="btn ghost small" onclick="woMergeToRoster()">🔀 Merge duplicate WOs</button>
+        </div>
+        ${staffRoster(f).map(r => `<div class="wo-row"><div class="wo-row-top"><b>${esc(r.name)}</b><span class="wo-pri" style="border-color:#57d48d55;background:#57d48d18;color:#57d48d">${SHIFT_ICON[r.shift] || '🕑'} ${r.shift || 'flex'}</span>${r.hours ? `<small class="muted">${esc(r.hours)}</small>` : ''}</div>
+          <div class="wo-row-meta"><span>${wos(f).filter(x => resolveStaff(f, x.assignee)?.id === r.id).length} WOs linked</span></div>
+          <div class="wo-actions"><button class="btn ghost small" onclick="openStaffRoster('${r.id}')">✎ Edit</button></div></div>`).join('') || '<div class="empty" style="padding:16px">No staff yet — add or import.</div>'}
+        <div id="staffFormWrap" style="display:${edit ? '' : 'none'};margin-top:10px;border-top:1px dashed var(--line);padding-top:10px">
+          <form onsubmit="saveStaffRec(event, ${edit ? `'${edit.id}'` : 'null'})">
+            <div class="reminder-fields">
+              <div class="field full"><label>Full name *</label><input name="name" required value="${esc(edit?.name || '')}" placeholder="e.g. John Lloyd"></div>
+              <div class="field"><label>Shift type</label><select name="shift"><option value="day" ${edit?.shift === 'day' ? 'selected' : ''}>☀️ Day shift</option><option value="night" ${edit?.shift === 'night' ? 'selected' : ''}>🌙 Night shift</option><option value="split" ${edit?.shift === 'split' ? 'selected' : ''}>🌓 Split / broken schedule</option><option value="flex" ${(!edit || edit.shift === 'flex') ? 'selected' : ''}>🕑 Flexible</option></select></div>
+              <div class="field"><label>Shift hours (free text)</label><input name="hours" value="${esc(edit?.hours || '')}" placeholder="e.g. 6am-6pm · also 9pm-2am"></div>
+              <div class="field full"><label style="display:flex;gap:8px"><input type="checkbox" name="active" ${(!edit || edit.active !== false) ? 'checked' : ''} style="width:auto"> Active</label></div>
+            </div>
+            <div class="due-actions"><button type="button" class="btn ghost" onclick="document.getElementById('staffFormWrap').style.display='none'">Cancel</button><button class="btn">💾 Save staff</button></div>
+          </form>
+        </div>
+      </div></div>`);
+  };
+
   window.woCalcPts = function () {
     const m = document.getElementById('woFormModal');
     if (!m) return;
@@ -270,8 +365,9 @@
     const cut = Date.now() - (days || 30) * 864e5;
     const map = {};
     wos(f).forEach(wd => {
-      const who = (wd.assignee || 'Unassigned').trim() || 'Unassigned';
-      const s = map[who] || (map[who] = { name: who, pts: 0, closed: 0, onTime: 0, late: 0, reopened: 0, verified: 0, heavy: 0, openPts: 0, perDay: {} });
+      const r0 = resolveStaff(f, wd.assignee);
+      const who = r0 ? r0.name : ((wd.assignee || 'Unassigned').trim() || 'Unassigned');
+      const s = map[who] || (map[who] = { name: who, shift: r0 ? r0.shift : '', hours: r0 ? r0.hours : '', pts: 0, closed: 0, onTime: 0, late: 0, reopened: 0, verified: 0, heavy: 0, openPts: 0, perDay: {} });
       const p = woPoints(wd);
       if (wd.status !== 'closed') { s.openPts += p.base; return; }
       if (wd.closed_at && new Date(wd.closed_at).getTime() < cut) return;
@@ -309,8 +405,16 @@
     return out;
   }
 
-  window.openPerfCenter = function (drillName) {
+  window.openPerfCenter = async function (drillName) {
     const f = F0();
+    try {
+      const fid0 = window.__arsActiveFarmId || (typeof farmId !== 'undefined' ? farmId : null);
+      if (fid0 && window.ARSCloud && ARSCloud.listCommerceRows) {
+        const rr = await ARSCloud.listCommerceRows(fid0);
+        (rr || []).forEach(rw => { if (rw.entity_type === 'staff_rec' && rw.payload && rw.payload.id) { const i = staffRoster(f).findIndex(x => x.id === rw.payload.id); if (i >= 0) staffRoster(f)[i] = rw.payload; else staffRoster(f).push(rw.payload); } });
+      }
+    } catch (e) {}
+
     const rows = staffPerf(f, 30);
     const maxPts = Math.max(1, ...rows.map(r => r.pts));
     const cap = 40; /* ~6-day-week healthy monthly load in points */
@@ -320,10 +424,10 @@
       <div class="reminder-modal" style="max-width:720px;width:96%;text-align:left">
         <div class="modal-top"><div><div class="eyebrow" style="color:#ffd98a;letter-spacing:.12em;font-weight:800">🏆 STAFF PERFORMANCE CENTER</div><h2>Last 30 days · effort × quality, never just counts</h2><small class="muted">pts = (effort tier + priority bonus) × verified/on-time/reopen multipliers</small></div><button class="close-reminder" onclick="document.getElementById('perfCenterModal').remove()">×</button></div>
         <div class="dash-section-title" style="margin:8px 0 6px">WORKLOAD (open assigned points · capacity ≈ ${cap})</div>
-        ${rows.map(r => { const pct = Math.min(100, Math.round(r.openPts / cap * 100)); const col = r.openPts > cap ? '#ff8b95' : r.openPts > cap * 0.6 ? '#ffc968' : '#57d48d'; return `<div style="display:flex;align-items:center;gap:8px;margin:4px 0"><small style="width:110px;color:#c9d9d7">${esc(r.name)}</small><div style="flex:1;height:10px;border-radius:6px;background:rgba(145,207,202,.10)"><div style="width:${pct}%;height:100%;border-radius:6px;background:${col}"></div></div><small style="width:52px;text-align:right;color:${col}">${r.openPts} pts</small></div>`; }).join('') || '<small class="muted">No staff with work orders yet.</small>'}
+        ${rows.map(r => { const pct = Math.min(100, Math.round(r.openPts / cap * 100)); const col = r.openPts > cap ? '#ff8b95' : r.openPts > cap * 0.6 ? '#ffc968' : '#57d48d'; return `<div style="display:flex;align-items:center;gap:8px;margin:4px 0"><small style="width:130px;color:#c9d9d7">${({day:'☀️',night:'🌙',split:'🌓',flex:'🕑'})[r.shift] || '🕑'} ${esc(r.name)}</small><div style="flex:1;height:10px;border-radius:6px;background:rgba(145,207,202,.10)"><div style="width:${pct}%;height:100%;border-radius:6px;background:${col}"></div></div><small style="width:52px;text-align:right;color:${col}">${r.openPts} pts</small></div>`; }).join('') || '<small class="muted">No staff with work orders yet.</small>'}
         <div class="dash-section-title" style="margin:14px 0 6px">LEADERBOARD · tap a card for the full profile</div>
         ${rows.map((r, i) => `<div class="wo-row" style="cursor:pointer" onclick="openPerfCenter('${esc(r.name).replace(/'/g, "\\'")}')">
-          <div class="wo-row-top"><b>#${i + 1} ${esc(r.name)}</b><span class="wo-pri" style="border-color:#ffd98a55;background:#ffd98a18;color:#ffd98a">${r.pts} pts</span></div>
+          <div class="wo-row-top"><b>#${i + 1} ${esc(r.name)}</b>${r.shift ? `<span class="wo-pri" style="border-color:#57d48d55;background:#57d48d18;color:#57d48d">${({day:'☀️',night:'🌙',split:'🌓',flex:'🕑'})[r.shift] || '🕑'} ${r.shift}</span>` : ''}<span class="wo-pri" style="border-color:#ffd98a55;background:#ffd98a18;color:#ffd98a">${r.pts} pts</span></div>
           <div class="wo-row-meta"><span>✔ ${r.closed} closed</span><span>⏱ ${r.closed ? Math.round(r.onTime / r.closed * 100) : 0}% on-time</span><span>🛡 ${r.verified} verified</span><span>↩ ${r.reopened} reopened</span><span>🏋 ${r.heavy} heavy pts</span></div>
           <div style="height:8px;border-radius:5px;background:rgba(145,207,202,.10);margin:6px 0 4px"><div style="width:${Math.round(r.pts / maxPts * 100)}%;height:100%;border-radius:5px;background:linear-gradient(90deg,#13b9ad,#57d48d)"></div></div>
           <div>${staffBadges(r).map(b => `<span class="wo-pri" style="margin-right:6px;border-color:#57d48d55;background:#57d48d18;color:#57d48d">${b[0]} ${b[1]}</span>`).join('') || '<small class="muted">No badges yet this month.</small>'}</div>
@@ -331,7 +435,7 @@
         ${drill ? `<div class="dash-section-title" style="margin:14px 0 6px">PROFILE · ${esc(drill.name)}</div>
         <div class="wo-row"><small class="muted">8-week contribution heatmap (darker = more points that day)</small><div style="max-width:340px;margin:8px 0">${heatCells(drill)}</div>
         <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn ghost small" onclick="printMvpSlip('${esc(drill.name).replace(/'/g, "\\'")}')">🖨 Print MVP slip (BLE)</button></div></div>` : ''}
-        <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn ghost small" onclick="printMvpSlip()">🖨 Print Monthly MVP slip</button><button class="btn ghost small" onclick="printRulesSlip()">📜 Print Staff Points Guide (BLE)</button></div>
+        <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn ghost small" onclick="printMvpSlip()">🖨 Print Monthly MVP slip</button><button class="btn ghost small" onclick="printRulesSlip()">📜 Print Staff Points Guide (BLE)</button><button class="btn ghost small" onclick="openStaffRoster()">👥 Staff Roster &amp; Shifts</button></div>
       </div></div>`);
   };
 

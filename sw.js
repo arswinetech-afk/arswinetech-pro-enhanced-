@@ -5,7 +5,7 @@
 //     script could run against a brand-new index.html (old JS + new DOM = boot crashes).
 //   • Icons / images / fonts      → cache-first (content rarely changes).
 //   • Bump CACHE_NAME on every release; activate() purges older caches.
-const CACHE_NAME = 'arswinetech-pro-v200-wo-staff-search-2026-09-05';
+const CACHE_NAME = 'arswinetech-pro-v201-staff-roster-shifts-2026-09-05';
 const APP_SHELL = [
   './',
   './index.html',
