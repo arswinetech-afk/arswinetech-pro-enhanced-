@@ -438,7 +438,8 @@
         <div class="modal-top"><div><div class="eyebrow" style="color:#ffd98a;letter-spacing:.12em;font-weight:800">🔁 DAILY TASK TEMPLATES</div><h2>Repeats every morning automatically</h2><small class="muted">Each day gets a FRESH work order — closed history stays clean for performance.</small></div><button class="close-reminder" onclick="document.getElementById('woTplModal').remove()">×</button></div>
         ${tpls.map(t => `<div class="wo-row"><div class="wo-row-top"><b>${esc(t.title)}</b><span class="wo-pri" style="border-color:${t.active ? '#57d48d55' : '#94a3b855'};background:${t.active ? '#57d48d18' : 'rgba(148,163,184,.1)'};color:${t.active ? '#57d48d' : '#94a3b8'}">${t.active ? 'ACTIVE' : 'PAUSED'}</span></div>
           <div class="wo-row-meta"><span>👤 ${esc(t.assignee || '—')}</span><span>⏰ due ${esc(t.due_time || '18:00')}</span><span>${esc((WO_TIER[t.difficulty] || 1))} pts base</span></div>
-          <div class="wo-actions"><button class="btn ghost small" onclick="woTplToggle('${t.id}')">${t.active ? '⏸ Pause' : '▶ Resume'}</button><button class="btn ghost small" onclick="woTplGenNow('${t.id}')">⚡ Create today's now</button><button class="btn ghost small delete-action" onclick="woTplDelete('${t.id}')">🗑</button></div></div>`).join('') || '<div class="empty" style="padding:16px">No templates yet — create a WO and choose 🔁 Daily.</div>'}
+          <div class="wo-actions"><button class="btn ghost small" onclick="woTplEdit('${t.id}')">✎ Edit / Reassign</button><button class="btn ghost small" onclick="woTplToggle('${t.id}')">${t.active ? '⏸ Pause' : '▶ Resume'}</button><button class="btn ghost small" onclick="woTplGenNow('${t.id}')">⚡ Today</button><button class="btn ghost small delete-action" onclick="woTplDelete('${t.id}')">🗑</button></div></div>`).join('') || '<div class="empty" style="padding:16px">No templates yet — create a WO and choose 🔁 Daily.</div>'}
+        ${tpls.length ? `<div style="margin-top:10px;border-top:1px dashed var(--line);padding-top:10px"><small class="muted">🔀 Weekly/monthly reshuffle: move ALL active templates from one staff to another (past work orders keep their original assignee — history & incentives stay accurate).</small><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:6px"><select id="rsFrom" class="select" style="max-width:160px">${[...new Set(tpls.map(t => t.assignee || '').filter(Boolean))].map(n => `<option>${esc(n)}</option>`).join('')}</select><span class="muted">→</span><select id="rsTo" class="select" style="max-width:160px">${staffRoster(f).map(r => `<option>${esc(r.name)}</option>`).join('')}</select><button class="btn ghost small" onclick="woTplBulkReassign()">🔀 Reassign all</button></div></div>` : ''}
       </div></div>`);
   };
 
@@ -454,6 +455,50 @@
     t.last_gen = ''; window.arsGenRecurring();
     window.openWoTemplates();
   };
+  window.woTplEdit = function (id) {
+    const f = F0(); const t = (f.woTemplates || []).find(x => x.id === id); if (!t) return;
+    document.getElementById('woTplEditModal')?.remove();
+    document.body.insertAdjacentHTML('beforeend', `<div class="due-modal-bg open" id="woTplEditModal" style="z-index:99999999!important" onclick="if(event.target===this)this.remove()">
+      <form class="reminder-modal" style="max-width:520px;width:96%;text-align:left" onsubmit="woTplEditSave(event,'${t.id}')">
+        <div class="modal-top"><div><div class="eyebrow" style="color:#ffd98a;letter-spacing:.12em;font-weight:800">✎ EDIT DAILY TEMPLATE</div><h2>${esc(t.title)}</h2><small class="muted">Changes apply to FUTURE daily instances only — history stays accurate.</small></div><button type="button" class="close-reminder" onclick="document.getElementById('woTplEditModal').remove()">×</button></div>
+        <div class="reminder-fields">
+          <div class="field full"><label>Task title</label><input name="title" required value="${esc(t.title)}"></div>
+          <div class="field full"><label>Assignee (reshuffle here)</label><select name="assignee">${staffRoster(f).map(r => `<option ${r.name === t.assignee ? 'selected' : ''}>${esc(r.name)}</option>`).join('')}<option value="">Unassigned</option></select></div>
+          <div class="field"><label>Priority</label><select name="priority">${Object.keys(PRI).map(p => `<option value="${p}" ${t.priority === p ? 'selected' : ''}>${PRI[p][0]}</option>`).join('')}</select></div>
+          <div class="field"><label>Difficulty</label><select name="difficulty">${Object.entries(WO_TIER).map(([k, v]) => `<option value="${k}" ${t.difficulty === k ? 'selected' : ''}>${k} (${v})</option>`).join('')}</select></div>
+          <div class="field"><label>Daily due time</label><input type="time" name="due_time" value="${esc(t.due_time || '18:00')}"></div>
+          <div class="field"><label>Status</label><select name="active"><option value="1" ${t.active ? 'selected' : ''}>Active</option><option value="0" ${!t.active ? 'selected' : ''}>Paused</option></select></div>
+        </div>
+        <div class="due-actions"><button type="button" class="btn ghost" onclick="document.getElementById('woTplEditModal').remove()">Cancel</button><button class="btn">💾 Save changes</button></div>
+      </form></div>`);
+  };
+
+  window.woTplEditSave = function (ev, id) {
+    ev.preventDefault();
+    const f = F0(); const t = (f.woTemplates || []).find(x => x.id === id); if (!t) return;
+    const d = new FormData(ev.target);
+    Object.assign(t, { title: d.get('title'), assignee: d.get('assignee'), priority: d.get('priority'), difficulty: d.get('difficulty'), due_time: d.get('due_time'), active: d.get('active') === '1' });
+    if (typeof save === 'function') save();
+    try { const fid = window.__arsActiveFarmId || (typeof farmId !== 'undefined' ? farmId : null); if (fid && window.ARSCloud && ARSCloud.upsertCommerceRows) ARSCloud.upsertCommerceRows(fid, [Object.assign({ _et: 'wo_template' }, t)]).catch(() => {}); } catch (e) {}
+    document.getElementById('woTplEditModal')?.remove();
+    toast('✔ Template updated — future daily tasks go to ' + (t.assignee || 'Unassigned') + '.');
+    window.openWoTemplates();
+  };
+
+  window.woTplBulkReassign = function () {
+    const f = F0();
+    const from = document.getElementById('rsFrom')?.value;
+    const to = document.getElementById('rsTo')?.value;
+    if (!from || !to || from === to) { toast('⚠ Pick two different staff.'); return; }
+    if (!confirm('Move ALL active daily templates from ' + from + ' to ' + to + '?\nPast work orders and points stay with ' + from + '.')) return;
+    let n = 0;
+    (f.woTemplates || []).forEach(t => { if (t.active && t.assignee === from) { t.assignee = to; n++; } });
+    if (typeof save === 'function') save();
+    try { const fid = window.__arsActiveFarmId || (typeof farmId !== 'undefined' ? farmId : null); if (fid && window.ARSCloud && ARSCloud.upsertCommerceRows) ARSCloud.upsertCommerceRows(fid, (f.woTemplates || []).map(t => Object.assign({ _et: 'wo_template' }, t))).catch(() => {}); } catch (e) {}
+    toast('🔀 ' + n + ' templates reassigned to ' + to + '.');
+    window.openWoTemplates();
+  };
+
   window.woTplDelete = function (id) {
     const f = F0();
     if (!confirm('Delete this daily template? Existing work orders are kept.')) return;
@@ -461,6 +506,113 @@
     if (typeof save === 'function') save();
     try { const fid = window.__arsActiveFarmId || (typeof farmId !== 'undefined' ? farmId : null); if (fid && window.ARSCloud && ARSCloud.deleteCommerceRow) ARSCloud.deleteCommerceRow(fid, 'wo_template', id).catch(() => {}); } catch (e) {}
     window.openWoTemplates();
+  };
+
+  /* [FIX 167] INCENTIVE / BUNOS CALCULATOR — subdivide a monthly budget
+     intelligently & explainably: share = equal% + performance% weighted by
+     points (60) + on-time (20) + verified (20). Every peso is justified by
+     data the owner can show & explain. */
+  function incStreak(s) {
+    if (!s.dayQ) return 0;
+    const today = new Date(); let streak = 0;
+    for (let i = 0; i < 60; i++) {
+      const d = new Date(today.getTime() - i * 864e5);
+      const key = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+      const q = s.dayQ[key];
+      if (q && q.c > 0 && q.ok === q.c) streak++;
+      else if ((i === 0 || i === 1) && !q) continue;
+      else break;
+    }
+    return streak;
+  }
+
+  window.openIncentiveModal = function () {
+    const f = F0();
+    const st = window.__inc || (window.__inc = { budget: 20000, eq: 20, month: localTodayStr().slice(0, 7) });
+    const months = [...new Set(wos(f).map(x => String(x.closed_at || '').slice(0, 7)).filter(m => m.length === 7))].sort().reverse();
+    if (!months.includes(st.month)) months.unshift(st.month);
+    const rows = staffPerf(f, 3650, st.month).filter(r => r.closed > 0 || r.pts > 0);
+    const N = rows.length || 1;
+    const scored = rows.map(r => {
+      const onT = r.closed ? r.onTime / r.closed : 0;
+      const ver = r.closed ? r.verified / r.closed : 0;
+      const raw = r.pts * 0.6 + onT * 100 * 0.2 + ver * 100 * 0.2;
+      return Object.assign({ onT, ver, raw, streak: incStreak(r) }, r);
+    });
+    const sumRaw = scored.reduce((a, r) => a + r.raw, 0) || 1;
+    const eq = Math.max(0, Math.min(100, +st.eq || 0)) / 100;
+    scored.forEach(r => { r.share = eq * (1 / N) + (1 - eq) * (r.raw / sumRaw); r.peso = Math.floor((+st.budget || 0) * r.share); });
+    scored.sort((a, b) => b.peso - a.peso);
+    const allocated = scored.reduce((a, r) => a + r.peso, 0);
+    document.getElementById('incModal')?.remove();
+    document.body.insertAdjacentHTML('beforeend', `<div class="due-modal-bg open" id="incModal" style="z-index:9999999!important" onclick="if(event.target===this)this.remove()">
+      <div class="reminder-modal" style="max-width:720px;width:96%;text-align:left">
+        <div class="modal-top"><div><div class="eyebrow" style="color:#ffd98a;letter-spacing:.12em;font-weight:800">💰 INCENTIVE / BUNOS CALCULATOR</div><h2>Performance-based budget split</h2><small class="muted">share = ${Math.round(eq * 100)}% equal + ${100 - Math.round(eq * 100)}% performance (points 60 · on-time 20 · verified 20)</small></div><button class="close-reminder" onclick="document.getElementById('incModal').remove()">×</button></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
+          <label class="muted" style="font-size:11px">Budget ₱ <input id="incBudget" type="number" value="${st.budget}" style="width:110px" onchange="window.__inc.budget=+this.value;openIncentiveModal()"></label>
+          <label class="muted" style="font-size:11px">Month <select class="select" style="max-width:150px" onchange="window.__inc.month=this.value;openIncentiveModal()">${months.map(m => `<option ${m === st.month ? 'selected' : ''} value="${m}">${m}</option>`).join('')}</select></label>
+          <label class="muted" style="font-size:11px">Equal split % <input id="incEq" type="number" min="0" max="100" value="${Math.round(eq * 100)}" style="width:70px" onchange="window.__inc.eq=+this.value;openIncentiveModal()"></label>
+        </div>
+        ${scored.map((r, i) => `<div class="wo-row">
+          <div class="wo-row-top"><b>#${i + 1} ${esc(r.name)}</b><span class="wo-pri" style="border-color:#ffd98a55;background:#ffd98a18;color:#ffd98a">₱${r.peso.toLocaleString('en-PH')}</span><small class="muted">${(r.share * 100).toFixed(1)}% share</small></div>
+          <div class="wo-row-meta"><span>🏅 ${woPtsFmt(r.pts)} pts</span><span>⏱ ${Math.round(r.onT * 100)}% on-time</span><span>🛡 ${Math.round(r.ver * 100)}% verified</span><span>📅 ${r.streak}d streak</span><span>✔ ${r.closed} closed</span></div>
+          <div class="wo-actions"><button class="btn ghost small" onclick="printIncSlip('${esc(r.name).replace(/'/g, "\\'")}')">🖨 Slip</button></div>
+        </div>`).join('') || '<div class="empty" style="padding:16px">No closed work orders in this month yet.</div>'}
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px"><span class="muted" style="font-size:11px;align-self:center">Allocated ₱${allocated.toLocaleString('en-PH')} of ₱${(+st.budget || 0).toLocaleString('en-PH')} · unallocated ₱${((+st.budget || 0) - allocated).toLocaleString('en-PH')}</span><button class="btn ghost small" onclick="printIncReport()">🖨 Print full incentive report</button></div>
+      </div></div>`);
+  };
+
+  window.printIncSlip = function (name) {
+    const f = F0(); const st = window.__inc || { budget: 20000, eq: 20, month: localTodayStr().slice(0, 7) };
+    const rows = staffPerf(f, 3650, st.month).filter(r => r.closed > 0 || r.pts > 0);
+    const N = rows.length || 1; const eq = Math.max(0, Math.min(100, +st.eq || 0)) / 100;
+    const scored = rows.map(r => { const onT = r.closed ? r.onTime / r.closed : 0, ver = r.closed ? r.verified / r.closed : 0; const raw = r.pts * 0.6 + onT * 100 * 0.2 + ver * 100 * 0.2; return Object.assign({ onT, ver, raw, streak: incStreak(r) }, r); });
+    const sumRaw = scored.reduce((a, r) => a + r.raw, 0) || 1;
+    scored.forEach(r => { r.share = eq * (1 / N) + (1 - eq) * (r.raw / sumRaw); r.peso = Math.floor((+st.budget || 0) * r.share); });
+    const r = scored.find(x => x.name === name); if (!r) return;
+    if (!window.btPrintTextLines) { toast('⚠ Bluetooth printing unavailable.'); return; }
+    const W = 32, sep = '-'.repeat(W);
+    const clean = t => String(t).replace(/[·₱×↩]/g, m => ({ '·': '-', '₱': 'P', '×': 'x', '↩': '<-' }[m])).replace(/[^\x20-\x7E]/g, '');
+    const ctr = t => { t = clean(t); return t.length >= W ? t : ' '.repeat(Math.max(0, (W - t.length) >> 1)) + t; };
+    const L = [];
+    L.push({ t: ctr(f.name || 'Farm'), c: 1 });
+    L.push({ t: ctr('INCENTIVE / BUNOS ' + st.month), c: 1 });
+    L.push({ t: sep });
+    L.push({ t: clean('Staff: ' + r.name), b: 1 });
+    L.push({ t: clean('AMOUNT: P' + r.peso.toLocaleString('en-PH')), b: 1 });
+    L.push({ t: sep });
+    L.push({ t: 'JUSTIFIED BY:' });
+    L.push({ t: clean(' Points: ' + woPtsFmt(r.pts)) });
+    L.push({ t: clean(' On-time: ' + Math.round(r.onT * 100) + '%  Verified: ' + Math.round(r.ver * 100) + '%') });
+    L.push({ t: clean(' Closed WOs: ' + r.closed + '  Streak: ' + r.streak + 'd') });
+    L.push({ t: clean(' Share: ' + (r.share * 100).toFixed(1) + '% of P' + (+st.budget).toLocaleString('en-PH')) });
+    L.push({ t: sep });
+    L.push({ t: ctr('Salamat sa iyong sipag!'), c: 1 });
+    window.btPrintTextLines(L, 'Incentive slip');
+  };
+
+  window.printIncReport = function () {
+    const f = F0(); const st = window.__inc || { budget: 20000, eq: 20, month: localTodayStr().slice(0, 7) };
+    const rows = staffPerf(f, 3650, st.month).filter(r => r.closed > 0 || r.pts > 0);
+    const N = rows.length || 1; const eq = Math.max(0, Math.min(100, +st.eq || 0)) / 100;
+    const scored = rows.map(r => { const onT = r.closed ? r.onTime / r.closed : 0, ver = r.closed ? r.verified / r.closed : 0; const raw = r.pts * 0.6 + onT * 100 * 0.2 + ver * 100 * 0.2; return Object.assign({ onT, ver, raw }, r); });
+    const sumRaw = scored.reduce((a, r) => a + r.raw, 0) || 1;
+    scored.forEach(r => { r.share = eq * (1 / N) + (1 - eq) * (r.raw / sumRaw); r.peso = Math.floor((+st.budget || 0) * r.share); });
+    scored.sort((a, b) => b.peso - a.peso);
+    if (!window.btPrintTextLines) { toast('⚠ Bluetooth printing unavailable.'); return; }
+    const W = 32, sep = '-'.repeat(W);
+    const clean = t => String(t).replace(/[·₱×]/g, m => ({ '·': '-', '₱': 'P', '×': 'x', '↩': '<-' }[m])).replace(/[^\x20-\x7E]/g, '');
+    const ctr = t => { t = clean(t); return t.length >= W ? t : ' '.repeat(Math.max(0, (W - t.length) >> 1)) + t; };
+    const L = [];
+    L.push({ t: ctr(f.name || 'Farm'), c: 1 });
+    L.push({ t: ctr('INCENTIVE REPORT ' + st.month), c: 1 });
+    L.push({ t: clean('Budget P' + (+st.budget).toLocaleString('en-PH') + ' / ' + N + ' staff'), b: 1 });
+    L.push({ t: sep });
+    scored.forEach(r => { L.push({ t: clean(r.name), b: 1 }); L.push({ t: clean('  pts ' + woPtsFmt(r.pts) + ' onT ' + Math.round(r.onT * 100) + '% ver ' + Math.round(r.ver * 100) + '%') }); L.push({ t: clean('  share ' + (r.share * 100).toFixed(1) + '%  =  P' + r.peso.toLocaleString('en-PH')), b: 1 }); });
+    L.push({ t: sep });
+    L.push({ t: clean('TOTAL: P' + scored.reduce((a, r) => a + r.peso, 0).toLocaleString('en-PH')) });
+    L.push({ t: ctr('Formula: equal%+perf% (60/20/20)'), c: 1 });
+    window.btPrintTextLines(L, 'Incentive report');
   };
 
   /* [FIX 164] live assignee autosuggest from the Staff Roster */
@@ -512,7 +664,7 @@
   }
   window.woPoints = woPoints;
 
-  function staffPerf(f, days) {
+  function staffPerf(f, days, monthKey) {
     const cut = Date.now() - (days || 30) * 864e5;
     const map = {};
     wos(f).forEach(wd => {
@@ -522,6 +674,7 @@
       const p = woPoints(wd);
       if (wd.status !== 'closed') { s.openPts += p.base; return; }
       if (wd.closed_at && new Date(wd.closed_at).getTime() < cut) return;
+      if (monthKey && String(wd.closed_at || '').slice(0, 7) !== monthKey) return;
       s.pts += p.total; s.closed += 1;
       if (wd.on_time !== false) s.onTime += 1; else s.late += 1;
       if (wd.was_reopened) s.reopened += 1;
@@ -601,7 +754,7 @@
         ${drill ? `<div class="dash-section-title" style="margin:14px 0 6px">PROFILE · ${esc(drill.name)}</div>
         <div class="wo-row"><small class="muted">8-week contribution heatmap (darker = more points that day)</small><div style="max-width:340px;margin:8px 0">${heatCells(drill)}</div>
         <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn ghost small" onclick="printMvpSlip('${esc(drill.name).replace(/'/g, "\\'")}')">🖨 Print MVP slip (BLE)</button></div></div>` : ''}
-        <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn ghost small" onclick="printMvpSlip()">🖨 Print Monthly MVP slip</button><button class="btn ghost small" onclick="printRulesSlip()">📜 Print Staff Points Guide (BLE)</button><button class="btn ghost small" onclick="openStaffRoster()">👥 Staff Roster &amp; Shifts</button></div>
+        <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn ghost small" onclick="printMvpSlip()">🖨 Print Monthly MVP slip</button><button class="btn ghost small" onclick="printRulesSlip()">📜 Print Staff Points Guide (BLE)</button><button class="btn ghost small" onclick="openStaffRoster()">👥 Staff Roster &amp; Shifts</button><button class="btn small" onclick="openIncentiveModal()">💰 Incentive / Bunos</button></div>
       </div></div>`);
   };
 
