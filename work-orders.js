@@ -87,7 +87,8 @@
     document.body.insertAdjacentHTML('beforeend', `<div class="due-modal-bg open" id="woListModal" onclick="if(event.target===this)this.remove()" style="z-index:999999!important">
       <div class="reminder-modal" style="max-width:720px;width:96%;text-align:left">
         <div class="modal-top"><div><div class="eyebrow" style="color:#f0b64b;letter-spacing:.12em;font-weight:800">📋 WORK ORDER CENTER</div><h2>All work orders</h2><small class="muted">Open first, sorted by due date · tap status to move through the pipeline</small></div><button class="close-reminder" onclick="document.getElementById('woListModal').remove()">×</button></div>
-        <div style="display:flex;gap:8px;margin:4px 0 12px;flex-wrap:wrap"><button class="btn" onclick="openWOForm()">＋ Create New W.O.</button><button class="btn ghost" onclick="openPerfCenter()">🏆 Staff Performance</button><button class="btn ghost" onclick="openWoTemplates()">🔁 Daily Templates</button></div>
+        <div style="display:flex;gap:8px;margin:4px 0 12px;flex-wrap:wrap"><button class="btn" onclick="openWOForm()">＋ Create New W.O.</button><button class="btn ghost" onclick="openPerfCenter()">🏆 Staff Performance</button><button class="btn ghost" onclick="openWoTemplates()">🔁 Daily Templates</button>
+        <button class="btn" style="background:#0e7f6f" onclick="window.arsOpenKiosk && window.arsOpenKiosk()">🕐 Time In/Out (Face/PIN)</button></div>
         <div style="margin:0 0 8px"><input id="woSearch" class="search" style="width:100%" placeholder="🔍 Search staff / task / WO id…" oninput="window.woFilterList(this.value)"></div>
         <div style="display:flex;gap:6px;overflow-x:auto;padding-bottom:8px">${[...new Set(wos(f).map(x => (x.assignee || '').trim()).filter(Boolean))].map(n => `<button type="button" class="wo-pri" style="white-space:nowrap;border-color:rgba(145,207,202,.3);background:rgba(145,207,202,.08);color:#c9f5ef" onclick="document.getElementById('woSearch').value='${esc(n).replace(/'/g, "\'")}';window.woFilterList('${esc(n).replace(/'/g, "\'")}')">👤 ${esc(n)}</button>`).join('')}</div>
         ${act.length ? act.map(w => {
@@ -346,7 +347,7 @@
     const rec = editId ? staffRoster(f).find(x => x.id === editId) : null;
     if (rec) {
       const oldName = rec.name;
-      Object.assign(rec, { name, shift: d.get('shift'), hours: String(d.get('hours') || '').trim(), active: d.get('active') === 'on' });
+      Object.assign(rec, { name, shift: d.get('shift'), hours: String(d.get('hours') || '').trim(), start_time: d.get('start_time') || '', active: d.get('active') === 'on' });
       if (oldName !== name) {
         rec.aliases = [...new Set([...(rec.aliases || []), oldName])];
         let n = 0;
@@ -387,13 +388,14 @@
         </div>
         ${staffRoster(f).map(r => `<div class="wo-row"><div class="wo-row-top"><b>${esc(r.name)}</b><span class="wo-pri" style="border-color:#57d48d55;background:#57d48d18;color:#57d48d">${SHIFT_ICON[r.shift] || '🕑'} ${r.shift || 'flex'}</span>${r.hours ? `<small class="muted">${esc(r.hours)}</small>` : ''}</div>
           <div class="wo-row-meta"><span>${wos(f).filter(x => resolveStaff(f, x.assignee)?.id === r.id).length} WOs linked</span></div>
-          <div class="wo-actions"><button class="btn ghost small" onclick="openStaffRoster('${r.id}')">✎ Edit</button><button class="btn ghost small delete-action" onclick="deleteStaffRec('${r.id}')">🗑 Delete</button></div></div>`).join('') || '<div class="empty" style="padding:16px">No staff yet — add or import.</div>'}
+          <div class="wo-actions"><button class="btn ghost small" onclick="openStaffRoster('${r.id}')">✎ Edit</button><button class="btn ghost small" onclick="arsEnrollFace('${r.id}')">📷 ${r.face ? 'Re-enroll face ✔' : 'Enroll face'}</button><button class="btn ghost small" onclick="arsSetPin('${r.id}')">🔢 ${r.pin ? 'PIN ✔' : 'Set PIN'}</button><button class="btn ghost small delete-action" onclick="deleteStaffRec('${r.id}')">🗑 Delete</button></div></div>`).join('') || '<div class="empty" style="padding:16px">No staff yet — add or import.</div>'}
         <div id="staffFormWrap" style="display:${edit ? '' : 'none'};margin-top:10px;border-top:1px dashed var(--line);padding-top:10px">
           <form onsubmit="saveStaffRec(event, ${edit ? `'${edit.id}'` : 'null'})">
             <div class="reminder-fields">
               <div class="field full"><label>Full name *</label><input name="name" required value="${esc(edit?.name || '')}" placeholder="e.g. John Lloyd"></div>
               <div class="field"><label>Shift type</label><select name="shift"><option value="day" ${edit?.shift === 'day' ? 'selected' : ''}>☀️ Day shift</option><option value="night" ${edit?.shift === 'night' ? 'selected' : ''}>🌙 Night shift</option><option value="split" ${edit?.shift === 'split' ? 'selected' : ''}>🌓 Split / broken schedule</option><option value="flex" ${(!edit || edit.shift === 'flex') ? 'selected' : ''}>🕑 Flexible</option></select></div>
               <div class="field"><label>Shift hours (free text)</label><input name="hours" value="${esc(edit?.hours || '')}" placeholder="e.g. 6am-6pm · also 9pm-2am"></div>
+              <div class="field"><label>Shift start time (for late detection)</label><input type="time" name="start_time" value="${esc(edit?.start_time || '')}"><small class="field-hint">15-min grace; blank = always on-time</small></div>
               <div class="field full"><label style="display:flex;gap:8px"><input type="checkbox" name="active" ${(!edit || edit.active !== false) ? 'checked' : ''} style="width:auto"> Active</label></div>
             </div>
             <div class="due-actions"><button type="button" class="btn ghost" onclick="document.getElementById('staffFormWrap').style.display='none'">Cancel</button><button class="btn">💾 Save staff</button></div>
