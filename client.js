@@ -1154,7 +1154,7 @@ window.ARSCloud = (() => {
     },
     listCommerceRows: async (farmId) => {
       try {
-        const res = await request(`/rest/v1/app_records?select=entity_type,payload&farm_id=eq.${encodeURIComponent(farmId)}&entity_type=in.(sub_order,sub_meta,staff_rec)&limit=200`, {}, { requireAuth: true });
+        const res = await request(`/rest/v1/app_records?select=entity_type,payload&farm_id=eq.${encodeURIComponent(farmId)}&entity_type=in.(sub_order,sub_meta,staff_rec,att_rec)&limit=200`, {}, { requireAuth: true });
         return Array.isArray(res) ? res : [];
       } catch (e) { return []; }
     },

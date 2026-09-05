@@ -131,7 +131,7 @@
           <div class="field"><label>Priority</label><select name="priority" onchange="window.woCalcPts && window.woCalcPts()">${Object.keys(PRI).map(p => `<option value="${p}" ${w?.priority === p ? 'selected' : ''}>${PRI[p][0]}</option>`).join('')}</select></div>
           <div class="field"><label>Difficulty / effort tier</label><select name="difficulty" onchange="window.woCalcPts && window.woCalcPts()">${Object.entries(WO_TIER).map(([k, v]) => `<option value="${k}" ${w?.difficulty === k ? 'selected' : ''}>${k[0].toUpperCase() + k.slice(1)} (${v} pt${v > 1 ? 's' : ''})</option>`).join('')}</select></div>
           <div class="field"><label>Base points</label><b id="woPtsPrev" style="font-size:18px;color:#ffd98a">1</b><small class="muted" style="display:block">effort + priority bonus · multipliers apply on close</small></div>
-          <div class="field"><label>Due date &amp; time</label><input name="due" type="datetime-local" value="${w?.due ? w.due.slice(0, 16) : ''}"></div>
+          <div class="field"><label>Due date &amp; time</label><input name="due" type="datetime-local" value="${w?.due ? toLocalInput(w.due) : ''}"></div>
           <div class="field"><label>Repeat</label><select name="repeat"><option value="none">One-time</option><option value="daily" ${w?.template_id ? 'selected' : ''}>🔁 Daily (auto-created every morning)</option></select></div>
           <div class="field"><label>Daily due time</label><input type="time" name="due_time" value="${esc(w?.due_time || '18:00')}"></div>
           <div class="field full" style="position:relative"><label>Assignee (auto-suggests from Staff Roster)</label>
@@ -164,7 +164,7 @@
        every morning — never reopen yesterday's closed WO. */
     if (d.get('repeat') === 'daily') {
       const tpls = Array.isArray(f.woTemplates) ? f.woTemplates : (f.woTemplates = []);
-      const tpl = saved.template_id ? tpls.find(t => t.id === saved.template_id) : null;
+      const tpl = (saved.template_id ? tpls.find(t => t.id === saved.template_id) : null) || tpls.find(t => t.active && normName(t.title) === normName(saved.title) && normName(t.assignee || '') === normName(saved.assignee || '')); /* dedupe: no twin templates */
       const rec = { id: saved.template_id || 'TPL-' + Date.now().toString(36).toUpperCase(), title: saved.title, details: saved.details, priority: saved.priority, difficulty: saved.difficulty || 'routine', assignee: saved.assignee, location: saved.location, due_time: d.get('due_time') || '18:00', active: true, last_gen: '' };
       if (tpl) Object.assign(tpl, rec); else tpls.push(rec);
       saved.template_id = rec.id;
@@ -369,7 +369,7 @@
       const fid0 = window.__arsActiveFarmId || (typeof farmId !== 'undefined' ? farmId : null);
       if (fid0 && window.ARSCloud && ARSCloud.listCommerceRows) {
         const rr = await ARSCloud.listCommerceRows(fid0);
-        (rr || []).forEach(rw => { if (rw.entity_type === 'staff_rec' && rw.payload && rw.payload.id) { const i = staffRoster(f).findIndex(x => x.id === rw.payload.id); if (i >= 0) staffRoster(f)[i] = rw.payload; else staffRoster(f).push(rw.payload); } });
+        (rr || []).forEach(rw => { const p = rw.payload; if (!p || !p.id) return; if (rw.entity_type === 'staff_rec') { const i = staffRoster(f).findIndex(x => x.id === p.id); if (i >= 0) staffRoster(f)[i] = p; else staffRoster(f).push(p); } else if (rw.entity_type === 'att_rec') { f.attendance = Array.isArray(f.attendance) ? f.attendance : []; const i = f.attendance.findIndex(x => x.id === p.id); if (i >= 0) f.attendance[i] = p; else f.attendance.push(p); } });
       }
     } catch (e) {}
 
@@ -403,6 +403,7 @@
   };
 
   const woPtsFmt = v => String(Math.round((+v || 0) * 10) / 10);
+  const toLocalInput = iso => { if (!iso) return ''; const d = new Date(iso); const p = n => String(n).padStart(2, '0'); return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + 'T' + p(d.getHours()) + ':' + p(d.getMinutes()); };
   window.woPtsFmt = woPtsFmt;
   const woExpanded = new Set();
   window.woExpand = function (id) { if (woExpanded.has(id)) woExpanded.delete(id); else woExpanded.add(id); window.openWOList(); };
@@ -439,7 +440,7 @@
         ${tpls.map(t => `<div class="wo-row"><div class="wo-row-top"><b>${esc(t.title)}</b><span class="wo-pri" style="border-color:${t.active ? '#57d48d55' : '#94a3b855'};background:${t.active ? '#57d48d18' : 'rgba(148,163,184,.1)'};color:${t.active ? '#57d48d' : '#94a3b8'}">${t.active ? 'ACTIVE' : 'PAUSED'}</span></div>
           <div class="wo-row-meta"><span>👤 ${esc(t.assignee || '—')}</span><span>⏰ due ${esc(t.due_time || '18:00')}</span><span>${esc((WO_TIER[t.difficulty] || 1))} pts base</span></div>
           <div class="wo-actions"><button class="btn ghost small" onclick="woTplEdit('${t.id}')">✎ Edit / Reassign</button><button class="btn ghost small" onclick="woTplToggle('${t.id}')">${t.active ? '⏸ Pause' : '▶ Resume'}</button><button class="btn ghost small" onclick="woTplGenNow('${t.id}')">⚡ Today</button><button class="btn ghost small delete-action" onclick="woTplDelete('${t.id}')">🗑</button></div></div>`).join('') || '<div class="empty" style="padding:16px">No templates yet — create a WO and choose 🔁 Daily.</div>'}
-        ${tpls.length ? `<div style="margin-top:10px;border-top:1px dashed var(--line);padding-top:10px"><small class="muted">🔀 Weekly/monthly reshuffle: move ALL active templates from one staff to another (past work orders keep their original assignee — history & incentives stay accurate).</small><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:6px"><select id="rsFrom" class="select" style="max-width:160px">${[...new Set(tpls.map(t => t.assignee || '').filter(Boolean))].map(n => `<option>${esc(n)}</option>`).join('')}</select><span class="muted">→</span><select id="rsTo" class="select" style="max-width:160px">${staffRoster(f).map(r => `<option>${esc(r.name)}</option>`).join('')}</select><button class="btn ghost small" onclick="woTplBulkReassign()">🔀 Reassign all</button></div></div>` : ''}
+        ${tpls.length ? `<div style="margin-top:10px;border-top:1px dashed var(--line);padding-top:10px"><small class="muted">🔀 Weekly/monthly reshuffle: move ALL active templates from one staff to another (past work orders keep their original assignee — history & incentives stay accurate).</small><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:6px"><select id="rsFrom" class="select" style="max-width:160px">${[...new Set(tpls.map(t => t.assignee || '').filter(Boolean))].map(n => `<option>${esc(n)}</option>`).join('')}</select><span class="muted">→</span><select id="rsTo" class="select" style="max-width:160px">${staffRoster(f).map(r => `<option>${esc(r.name)}</option>`).join('')}</select><button class="btn ghost small" onclick="woTplBulkReassign()">🔀 Reassign all</button><button class="btn ghost small" onclick="woTplDedupe()">🧹 Dedupe templates</button></div></div>` : ''}
       </div></div>`);
   };
 
@@ -497,6 +498,84 @@
     try { const fid = window.__arsActiveFarmId || (typeof farmId !== 'undefined' ? farmId : null); if (fid && window.ARSCloud && ARSCloud.upsertCommerceRows) ARSCloud.upsertCommerceRows(fid, (f.woTemplates || []).map(t => Object.assign({ _et: 'wo_template' }, t))).catch(() => {}); } catch (e) {}
     toast('🔀 ' + n + ' templates reassigned to ' + to + '.');
     window.openWoTemplates();
+  };
+
+  window.woTplDedupe = function () {
+    const f = F0(); const seen = new Map(); const kill = [];
+    (f.woTemplates || []).forEach(t => {
+      const k = normName(t.title) + '|' + normName(t.assignee || '');
+      if (seen.has(k)) kill.push(t.id); else seen.set(k, t);
+    });
+    if (!kill.length) { toast('✔ No duplicate templates found.'); return; }
+    f.woTemplates = (f.woTemplates || []).filter(t => !kill.includes(t.id));
+    if (typeof save === 'function') save();
+    kill.forEach(id => { try { const fid = window.__arsActiveFarmId || (typeof farmId !== 'undefined' ? farmId : null); if (fid && window.ARSCloud && ARSCloud.deleteCommerceRow) ARSCloud.deleteCommerceRow(fid, 'wo_template', id).catch(() => {}); } catch (e) {} });
+    toast('🧹 Removed ' + kill.length + ' duplicate template(s). Existing WOs untouched.');
+    window.openWoTemplates();
+  };
+
+  /* [FIX 168] ATTENDANCE LEDGER — late / early-in / early-out / day-off flags
+     that feed performance & incentives with transparent point effects. */
+  const ATT_STATUS = {
+    ontime: ['On time', 0], late: ['Late', -0.5], early_in: ['Early-in', 0.25],
+    early_out_done: ['Early-out · work DONE', 0], early_out_notdone: ['Early-out · work NOT done', -1],
+    day_off: ['Day off', 0], cancelled_day_off: ['Cancelled day-off (worked)', 1]
+  };
+  window.ATT_STATUS = ATT_STATUS;
+
+  window.openAttendance = function () {
+    const f = F0();
+    const today = localTodayStr();
+    const date = window.__attDate || today;
+    const recs = (f.attendance || []).filter(a => a.date === date);
+    document.getElementById('attModal')?.remove();
+    document.body.insertAdjacentHTML('beforeend', `<div class="due-modal-bg open" id="attModal" style="z-index:99999999!important" onclick="if(event.target===this)this.remove()">
+      <div class="reminder-modal" style="max-width:600px;width:96%;text-align:left">
+        <div class="modal-top"><div><div class="eyebrow" style="color:#ffd98a;letter-spacing:.12em;font-weight:800">🕐 ATTENDANCE LEDGER</div><h2>Daily time discipline</h2><small class="muted">Late −0.5 · Early-in +0.25 · Early-out w/o work −1 · Cancelled day-off +1 · Day-off neutral (keeps streak)</small></div><button class="close-reminder" onclick="document.getElementById('attModal').remove()">×</button></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
+          <input type="date" value="${date}" onchange="window.__attDate=this.value;openAttendance()">
+        </div>
+        ${recs.map(a => `<div class="wo-row"><div class="wo-row-top"><b>${esc(a.staff)}</b><span class="wo-pri" style="border-color:#ffd98a55;background:#ffd98a18;color:#ffd98a">${ATT_STATUS[a.status] ? ATT_STATUS[a.status][0] : a.status}</span></div>
+          ${a.note ? `<small class="muted">${esc(a.note)}</small>` : ''}
+          <div class="wo-actions"><button class="btn ghost small" onclick="attEdit('${esc(a.id)}')">✎ Edit</button><button class="btn ghost small delete-action" onclick="attDelete('${esc(a.id)}')">🗑</button></div></div>`).join('') || '<small class="muted">No attendance records for this date.</small>'}
+        <form onsubmit="attSave(event)" style="margin-top:10px;border-top:1px dashed var(--line);padding-top:10px">
+          <div class="reminder-fields">
+            <div class="field full"><label>Staff</label><select name="staff">${staffRoster(f).map(r => `<option>${esc(r.name)}</option>`).join('')}</select></div>
+            <div class="field full"><label>Status</label><select name="status">${Object.entries(ATT_STATUS).map(([k, v]) => `<option value="${k}">${v[0]} (${v[1] > 0 ? '+' : ''}${v[1]} pts)</option>`).join('')}</select></div>
+            <div class="field full"><label>Note (optional)</label><input name="note" placeholder="e.g. 30 min late — traffic"></div>
+          </div>
+          <div class="due-actions"><button class="btn">💾 Save attendance</button></div>
+        </form>
+      </div></div>`);
+  };
+
+  window.attSave = function (ev) {
+    ev.preventDefault();
+    const f = F0(); const d = new FormData(ev.target);
+    const date = window.__attDate || localTodayStr();
+    const staff = String(d.get('staff') || '').trim();
+    const id = 'ATT-' + normName(staff).replace(/[^a-z0-9]/g, '') + '-' + date;
+    f.attendance = Array.isArray(f.attendance) ? f.attendance : [];
+    const i = f.attendance.findIndex(a => a.id === id);
+    const rec = { id, staff, date, status: d.get('status'), note: String(d.get('note') || '').trim() };
+    if (i >= 0) f.attendance[i] = rec; else f.attendance.push(rec);
+    if (typeof save === 'function') save();
+    try { const fid = window.__arsActiveFarmId || (typeof farmId !== 'undefined' ? farmId : null); if (fid && window.ARSCloud && ARSCloud.upsertCommerceRows) ARSCloud.upsertCommerceRows(fid, [Object.assign({ _et: 'att_rec' }, rec)]).catch(() => {}); } catch (e) {}
+    toast('🕐 Attendance saved: ' + staff + ' · ' + ATT_STATUS[rec.status][0]);
+    window.openAttendance();
+  };
+  window.attEdit = function (id) {
+    const f = F0(); const a = (f.attendance || []).find(x => x.id === id); if (!a) return;
+    window.__attDate = a.date; window.openAttendance();
+    setTimeout(() => { const m = document.getElementById('attModal'); if (!m) return; m.querySelector('[name=staff]').value = a.staff; m.querySelector('[name=status]').value = a.status; m.querySelector('[name=note]').value = a.note || ''; }, 50);
+  };
+  window.attDelete = function (id) {
+    const f = F0();
+    if (!confirm('Delete this attendance record?')) return;
+    f.attendance = (f.attendance || []).filter(x => x.id !== id);
+    if (typeof save === 'function') save();
+    try { const fid = window.__arsActiveFarmId || (typeof farmId !== 'undefined' ? farmId : null); if (fid && window.ARSCloud && ARSCloud.deleteCommerceRow) ARSCloud.deleteCommerceRow(fid, 'att_rec', id).catch(() => {}); } catch (e) {}
+    window.openAttendance();
   };
 
   window.woTplDelete = function (id) {
@@ -584,6 +663,7 @@
     L.push({ t: 'JUSTIFIED BY:' });
     L.push({ t: clean(' Points: ' + woPtsFmt(r.pts)) });
     L.push({ t: clean(' On-time: ' + Math.round(r.onT * 100) + '%  Verified: ' + Math.round(r.ver * 100) + '%') });
+    if (r.att) L.push({ t: clean(' Attendance: late ' + r.att.late + ' · early-in ' + r.att.earlyIn + ' · early-out(no work) ' + r.att.eon + ' · day-off ' + r.att.off + ' · cancel-off ' + r.att.coff) });
     L.push({ t: clean(' Closed WOs: ' + r.closed + '  Streak: ' + r.streak + 'd') });
     L.push({ t: clean(' Share: ' + (r.share * 100).toFixed(1) + '% of P' + (+st.budget).toLocaleString('en-PH')) });
     L.push({ t: sep });
@@ -608,7 +688,8 @@
     L.push({ t: ctr('INCENTIVE REPORT ' + st.month), c: 1 });
     L.push({ t: clean('Budget P' + (+st.budget).toLocaleString('en-PH') + ' / ' + N + ' staff'), b: 1 });
     L.push({ t: sep });
-    scored.forEach(r => { L.push({ t: clean(r.name), b: 1 }); L.push({ t: clean('  pts ' + woPtsFmt(r.pts) + ' onT ' + Math.round(r.onT * 100) + '% ver ' + Math.round(r.ver * 100) + '%') }); L.push({ t: clean('  share ' + (r.share * 100).toFixed(1) + '%  =  P' + r.peso.toLocaleString('en-PH')), b: 1 }); });
+    scored.forEach(r => { L.push({ t: clean(r.name), b: 1 }); L.push({ t: clean('  pts ' + woPtsFmt(r.pts) + ' onT ' + Math.round(r.onT * 100) + '% ver ' + Math.round(r.ver * 100) + '%') });
+      if (r.att) L.push({ t: clean('  att: L' + r.att.late + ' EI' + r.att.earlyIn + ' EO' + r.att.eon + ' off' + r.att.off) }); L.push({ t: clean('  share ' + (r.share * 100).toFixed(1) + '%  =  P' + r.peso.toLocaleString('en-PH')), b: 1 }); });
     L.push({ t: sep });
     L.push({ t: clean('TOTAL: P' + scored.reduce((a, r) => a + r.peso, 0).toLocaleString('en-PH')) });
     L.push({ t: ctr('Formula: equal%+perf% (60/20/20)'), c: 1 });
@@ -683,6 +764,27 @@
       const day = (wd.closed_at || '').slice(0, 10);
       if (day) { s.perDay[day] = (s.perDay[day] || 0) + p.total; s.dayQ = s.dayQ || {}; const q = s.dayQ[day] || (s.dayQ[day] = { c: 0, ok: 0 }); q.c++; if (wd.on_time !== false && (wd.verified || (wd.review && wd.review.total > 0 && wd.review.done === wd.review.total))) q.ok++; }
     });
+    /* [FIX 168] attendance effects on points (transparent, printed on slips) */
+    (f.attendance || []).forEach(a => {
+      if (monthKey && String(a.date || '').slice(0, 7) !== monthKey) return;
+      if (!monthKey && new Date(a.date + 'T00:00:00').getTime() < cut) return;
+      const r0 = resolveStaff(f, a.staff);
+      const s = map[r0 ? r0.name : (a.staff || 'Unassigned')];
+      if (!s) return;
+      s.att = s.att || { late: 0, earlyIn: 0, eod: 0, eon: 0, off: 0, coff: 0 };
+      if (a.status === 'late') s.att.late++;
+      else if (a.status === 'early_in') s.att.earlyIn++;
+      else if (a.status === 'early_out_done') s.att.eod++;
+      else if (a.status === 'early_out_notdone') s.att.eon++;
+      else if (a.status === 'day_off') { s.att.off++; s.dayOff = s.dayOff || {}; s.dayOff[a.date] = true; }
+      else if (a.status === 'cancelled_day_off') s.att.coff++;
+    });
+    Object.values(map).forEach(s => {
+      if (!s.att) return;
+      const adj = s.att.earlyIn * 0.25 + s.att.coff * 1 - s.att.late * 0.5 - s.att.eon * 1;
+      s.pts = Math.max(0, Math.round((s.pts + adj) * 10) / 10);
+      s.attAdj = adj;
+    });
     return Object.values(map).sort((a, b) => b.pts - a.pts);
   }
   window.staffPerf = staffPerf;
@@ -693,6 +795,7 @@
     if (s.closed >= 3 && s.onTime / s.closed >= 0.9) b.push(['⏱️', 'On-Time Hero']);
     if (s.closed >= 3 && s.reopened === 0) b.push(['🛡️', 'Quality Streak']);
     if (s.pts > 0 && s.late === 0 && s.closed >= 2) b.push(['✨', 'Clean Sweep']);
+    if (((s.att && s.att.late) || 0) === 0 && (s.closed || 0) >= 5) b.push(['🕐', 'Punctual']);
     if (s.dayQ) {
       const today = new Date(); let streak = 0;
       for (let i = 0; i < 60; i++) {
@@ -702,6 +805,7 @@
         if (q && q.c > 0 && q.ok === q.c) streak++;
         else if (i === 0 && !q) continue; /* today not closed yet doesn't break streak */
         else if (!q && i === 1) continue; /* yesterday may still be in progress */
+        else if (s.dayOff && s.dayOff[key]) continue; /* [FIX 168] day-off never breaks streak */
         else break;
       }
       if (streak >= 3) b.push(['📅', 'Consistency ' + streak + 'd']);
@@ -729,7 +833,7 @@
       const fid0 = window.__arsActiveFarmId || (typeof farmId !== 'undefined' ? farmId : null);
       if (fid0 && window.ARSCloud && ARSCloud.listCommerceRows) {
         const rr = await ARSCloud.listCommerceRows(fid0);
-        (rr || []).forEach(rw => { if (rw.entity_type === 'staff_rec' && rw.payload && rw.payload.id) { const i = staffRoster(f).findIndex(x => x.id === rw.payload.id); if (i >= 0) staffRoster(f)[i] = rw.payload; else staffRoster(f).push(rw.payload); } });
+        (rr || []).forEach(rw => { const p = rw.payload; if (!p || !p.id) return; if (rw.entity_type === 'staff_rec') { const i = staffRoster(f).findIndex(x => x.id === p.id); if (i >= 0) staffRoster(f)[i] = p; else staffRoster(f).push(p); } else if (rw.entity_type === 'att_rec') { f.attendance = Array.isArray(f.attendance) ? f.attendance : []; const i = f.attendance.findIndex(x => x.id === p.id); if (i >= 0) f.attendance[i] = p; else f.attendance.push(p); } });
       }
     } catch (e) {}
 
@@ -747,14 +851,14 @@
         <div class="dash-section-title" style="margin:14px 0 6px">LEADERBOARD · tap a card for the full profile</div>
         ${rows.map((r, i) => `<div class="wo-row" style="cursor:pointer" onclick="openPerfCenter('${esc(r.name).replace(/'/g, "\\'")}')">
           <div class="wo-row-top"><b>#${i + 1} ${esc(r.name)}</b>${r.shift ? `<span class="wo-pri" style="border-color:#57d48d55;background:#57d48d18;color:#57d48d">${({day:'☀️',night:'🌙',split:'🌓',flex:'🕑'})[r.shift] || '🕑'} ${r.shift}</span>` : ''}<span class="wo-pri" style="border-color:#ffd98a55;background:#ffd98a18;color:#ffd98a">${woPtsFmt(r.pts)} pts</span></div>
-          <div class="wo-row-meta"><span>✔ ${r.closed} closed</span><span>⏱ ${r.closed ? Math.round(r.onTime / r.closed * 100) : 0}% on-time</span><span>🛡 ${r.verified} verified</span><span>↩ ${r.reopened} reopened</span><span>🏋 ${r.heavy} heavy pts</span></div>
+          <div class="wo-row-meta"><span>✔ ${r.closed} closed</span><span>⏱ ${r.closed ? Math.round(r.onTime / r.closed * 100) : 0}% on-time</span><span>🛡 ${r.verified} verified</span><span>↩ ${r.reopened} reopened</span><span>🏋 ${r.heavy} heavy pts</span>${r.att ? `<span>🕐 L${r.att.late} · EI${r.att.earlyIn} · EO${r.att.eon}</span>` : ''}</div>
           <div style="height:8px;border-radius:5px;background:rgba(145,207,202,.10);margin:6px 0 4px"><div style="width:${Math.round(r.pts / maxPts * 100)}%;height:100%;border-radius:5px;background:linear-gradient(90deg,#13b9ad,#57d48d)"></div></div>
           <div>${staffBadges(r).map(b => `<span class="wo-pri" style="margin-right:6px;border-color:#57d48d55;background:#57d48d18;color:#57d48d">${b[0]} ${b[1]}</span>`).join('') || '<small class="muted">No badges yet this month.</small>'}</div>
         </div>`).join('') || ''}
         ${drill ? `<div class="dash-section-title" style="margin:14px 0 6px">PROFILE · ${esc(drill.name)}</div>
         <div class="wo-row"><small class="muted">8-week contribution heatmap (darker = more points that day)</small><div style="max-width:340px;margin:8px 0">${heatCells(drill)}</div>
         <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn ghost small" onclick="printMvpSlip('${esc(drill.name).replace(/'/g, "\\'")}')">🖨 Print MVP slip (BLE)</button></div></div>` : ''}
-        <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn ghost small" onclick="printMvpSlip()">🖨 Print Monthly MVP slip</button><button class="btn ghost small" onclick="printRulesSlip()">📜 Print Staff Points Guide (BLE)</button><button class="btn ghost small" onclick="openStaffRoster()">👥 Staff Roster &amp; Shifts</button><button class="btn small" onclick="openIncentiveModal()">💰 Incentive / Bunos</button></div>
+        <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn ghost small" onclick="printMvpSlip()">🖨 Print Monthly MVP slip</button><button class="btn ghost small" onclick="printRulesSlip()">📜 Print Staff Points Guide (BLE)</button><button class="btn ghost small" onclick="openStaffRoster()">👥 Staff Roster &amp; Shifts</button><button class="btn small" onclick="openIncentiveModal()">💰 Incentive / Bunos</button><button class="btn ghost small" onclick="openAttendance()">🕐 Attendance</button></div>
       </div></div>`);
   };
 
