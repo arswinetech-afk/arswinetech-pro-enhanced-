@@ -247,11 +247,17 @@
     } catch (e) {}
   }
   const baseName = s => String(s || '').replace(/\s*\(.*$/, '').trim();
+  const normName = s => String(s || '').toLowerCase().replace(/\s+/g, ' ').trim();
   function resolveStaff(f, name) {
-    const n = String(name || '').trim();
+    const n = normName(name);
     if (!n) return null;
     const r = staffRoster(f);
-    return r.find(x => x.name === n) || r.find(x => n.startsWith(x.name + ' (') || (x.name && n.includes(x.name))) || null;
+    return r.find(x => normName(x.name) === n)
+      || r.find(x => normName(baseName(name)) === normName(x.name))
+      || r.find(x => (x.aliases || []).some(a => normName(a) === n))
+      || r.find(x => n.startsWith(normName(x.name) + ' ('))
+      || r.find(x => normName(x.name).length >= 4 && n.includes(normName(x.name)))
+      || null;
   }
   window.resolveStaff = resolveStaff;
 
@@ -263,6 +269,40 @@
     if (typeof save === 'function') save();
     staffSync(f);
     toast('👥 ' + added + ' staff imported from work orders. Edit their shifts now.');
+    window.openStaffRoster();
+  };
+
+  window.deleteStaffRec = function (id) {
+    const f = F0(); const r = staffRoster(f).find(x => x.id === id);
+    if (!r) return;
+    if (!confirm('Remove ' + r.name + ' from the roster?\nTheir existing work orders keep the name and will still group together in Performance.')) return;
+    f.staff = staffRoster(f).filter(x => x.id !== id);
+    if (typeof save === 'function') save();
+    staffSync(f);
+    try { const fid = window.__arsActiveFarmId || (typeof farmId !== 'undefined' ? farmId : null); if (fid && window.ARSCloud && ARSCloud.deleteCommerceRow) ARSCloud.deleteCommerceRow(fid, 'staff_rec', id).catch(() => {}); } catch (e) {}
+    toast('🗑 Removed from roster.');
+    window.openStaffRoster();
+  };
+
+  window.woDedupeRoster = function () {
+    const f = F0(); const seen = new Map(); const removeIds = [];
+    staffRoster(f).forEach(r => {
+      const k = normName(r.name);
+      if (seen.has(k)) {
+        const keep = seen.get(k);
+        keep.aliases = [...new Set([...(keep.aliases || []), r.name, ...(r.aliases || [])])];
+        if (!keep.hours && r.hours) keep.hours = r.hours;
+        if (r.shift && (!keep.shift || keep.shift === 'flex')) keep.shift = r.shift;
+        removeIds.push(r.id);
+      } else seen.set(k, r);
+    });
+    if (removeIds.length) f.staff = staffRoster(f).filter(x => !removeIds.includes(x.id));
+    let n = 0;
+    wos(f).forEach(wd => { const r = resolveStaff(f, wd.assignee); if (r && wd.assignee !== r.name) { wd.assignee = r.name; n++; } });
+    if (typeof save === 'function') save();
+    staffSync(f); arsWOSync(wos(f));
+    removeIds.forEach(id => { try { const fid = window.__arsActiveFarmId || (typeof farmId !== 'undefined' ? farmId : null); if (fid && window.ARSCloud && ARSCloud.deleteCommerceRow) ARSCloud.deleteCommerceRow(fid, 'staff_rec', id).catch(() => {}); } catch (e) {} });
+    toast('🧹 Roster deduped · ' + n + ' WOs re-linked to canonical names.');
     window.openStaffRoster();
   };
 
@@ -281,7 +321,17 @@
     const name = String(d.get('name') || '').trim();
     if (!name) { toast('⚠ Name required.'); return; }
     const rec = editId ? staffRoster(f).find(x => x.id === editId) : null;
-    if (rec) Object.assign(rec, { name, shift: d.get('shift'), hours: String(d.get('hours') || '').trim(), active: d.get('active') === 'on' });
+    if (rec) {
+      const oldName = rec.name;
+      Object.assign(rec, { name, shift: d.get('shift'), hours: String(d.get('hours') || '').trim(), active: d.get('active') === 'on' });
+      if (oldName !== name) {
+        rec.aliases = [...new Set([...(rec.aliases || []), oldName])];
+        let n = 0;
+        wos(f).forEach(wd => { if (normName(wd.assignee) === normName(oldName) || normName(baseName(wd.assignee)) === normName(oldName)) { wd.assignee = name; n++; } });
+        arsWOSync(wos(f));
+        toast('🔁 ' + n + ' work orders re-linked to ' + name + '.');
+      }
+    }
     else staffRoster(f).push({ id: 'STF-' + Date.now().toString(36).toUpperCase(), name, shift: d.get('shift'), hours: String(d.get('hours') || '').trim(), active: true });
     if (typeof save === 'function') save();
     staffSync(f);
@@ -310,10 +360,11 @@
           <button class="btn small" onclick="document.getElementById('staffFormWrap').style.display='';window.__staffEdit=null;document.getElementById('staffFormWrap').querySelector('form').reset();">＋ Add staff</button>
           <button class="btn ghost small" onclick="woImportRoster()">⤓ Import names from WOs</button>
           <button class="btn ghost small" onclick="woMergeToRoster()">🔀 Merge duplicate WOs</button>
+          <button class="btn ghost small" onclick="woDedupeRoster()">🧹 Dedupe roster (RICHARD = Richard)</button>
         </div>
         ${staffRoster(f).map(r => `<div class="wo-row"><div class="wo-row-top"><b>${esc(r.name)}</b><span class="wo-pri" style="border-color:#57d48d55;background:#57d48d18;color:#57d48d">${SHIFT_ICON[r.shift] || '🕑'} ${r.shift || 'flex'}</span>${r.hours ? `<small class="muted">${esc(r.hours)}</small>` : ''}</div>
           <div class="wo-row-meta"><span>${wos(f).filter(x => resolveStaff(f, x.assignee)?.id === r.id).length} WOs linked</span></div>
-          <div class="wo-actions"><button class="btn ghost small" onclick="openStaffRoster('${r.id}')">✎ Edit</button></div></div>`).join('') || '<div class="empty" style="padding:16px">No staff yet — add or import.</div>'}
+          <div class="wo-actions"><button class="btn ghost small" onclick="openStaffRoster('${r.id}')">✎ Edit</button><button class="btn ghost small delete-action" onclick="deleteStaffRec('${r.id}')">🗑 Delete</button></div></div>`).join('') || '<div class="empty" style="padding:16px">No staff yet — add or import.</div>'}
         <div id="staffFormWrap" style="display:${edit ? '' : 'none'};margin-top:10px;border-top:1px dashed var(--line);padding-top:10px">
           <form onsubmit="saveStaffRec(event, ${edit ? `'${edit.id}'` : 'null'})">
             <div class="reminder-fields">
