@@ -81,6 +81,8 @@
       }
     } catch (e) {}
     const list = wos(f).slice().sort((a, b) => (a.status === 'closed') - (b.status === 'closed') || String(a.due || '9999').localeCompare(String(b.due || '9999')));
+    const act = list.filter(x => !(x.status === 'closed' && x.closed_at && (now() - new Date(x.closed_at).getTime() > 7 * 864e5)));
+    const hist = list.filter(x => (x.status === 'closed' && x.closed_at && (now() - new Date(x.closed_at).getTime() > 7 * 864e5)));
     document.getElementById('woListModal')?.remove();
     document.body.insertAdjacentHTML('beforeend', `<div class="due-modal-bg open" id="woListModal" onclick="if(event.target===this)this.remove()" style="z-index:999999!important">
       <div class="reminder-modal" style="max-width:720px;width:96%;text-align:left">
@@ -88,11 +90,14 @@
         <div style="display:flex;gap:8px;margin:4px 0 12px;flex-wrap:wrap"><button class="btn" onclick="openWOForm()">＋ Create New W.O.</button><button class="btn ghost" onclick="openPerfCenter()">🏆 Staff Performance</button></div>
         <div style="margin:0 0 8px"><input id="woSearch" class="search" style="width:100%" placeholder="🔍 Search staff / task / WO id…" oninput="window.woFilterList(this.value)"></div>
         <div style="display:flex;gap:6px;overflow-x:auto;padding-bottom:8px">${[...new Set(wos(f).map(x => (x.assignee || '').trim()).filter(Boolean))].map(n => `<button type="button" class="wo-pri" style="white-space:nowrap;border-color:rgba(145,207,202,.3);background:rgba(145,207,202,.08);color:#c9f5ef" onclick="document.getElementById('woSearch').value='${esc(n).replace(/'/g, "\'")}';window.woFilterList('${esc(n).replace(/'/g, "\'")}')">👤 ${esc(n)}</button>`).join('')}</div>
-        ${list.length ? list.map(w => {
+        ${act.length ? act.map(w => {
           const late = w.status !== 'closed' && w.due && new Date(w.due).getTime() < now();
+          const exp = woExpanded.has(w.id);
           return `<div class="wo-row">
             <div class="wo-row-top"><span class="wo-pri" style="border-color:${PRI[w.priority][1]}55;background:${PRI[w.priority][1]}18;color:${PRI[w.priority][1]}">${PRI[w.priority][0]}</span><b>${esc(w.title)}</b><small class="muted">${esc(w.id)}</small></div>
             <div class="wo-row-meta"><span>👤 ${esc(w.assignee || 'Unassigned')}</span><span>📍 ${esc(w.location || '—')}</span><span class="${late ? 'wo-bad' : ''}">🗓 ${fmtDue(w.due)}</span><span>Status: <b>${ST[w.status]}</b></span></div>
+            <button type="button" class="btn ghost small" style="margin:6px 0 0" onclick="woExpand('${w.id}')">${exp ? '▴ Collapse' : '▾ Expand'}</button>
+            <div class="wo-body" style="${exp ? '' : 'display:none'}">
             ${w.details ? (() => { const ls = String(w.details).split(/\n+/).map(s => s.trim()).filter(Boolean); const dn = w.done_lines || []; return `<div style="margin:6px 0 0"><small class="muted" style="font-size:10px">${dn.length}/${ls.length} done · tap boxes as you finish each item</small>${ls.map((l, i) => `<label style="display:flex;gap:8px;align-items:flex-start;padding:3px 0;font-size:12px;color:${dn.includes(i) ? '#7fbf9f' : '#c9d9d7'};${dn.includes(i) ? 'text-decoration:line-through;opacity:.8' : ''}"><input type="checkbox" ${dn.includes(i) ? 'checked' : ''} onchange="woToggleLine('${w.id}',${i},this.checked)" style="width:auto;margin-top:2px"> ${esc(l)}</label>`).join('')}</div>`; })() : ''}
             <div class="wo-actions">
               ${w.status === 'open' ? `<button class="btn ghost small" onclick="woSetStatus('${w.id}','in_progress')">▶ Start</button>` : ''}
@@ -106,8 +111,10 @@
               <button class="btn ghost small" onclick="openWOForm('${w.id}')">✎ Edit</button>
               <button class="btn ghost small delete-action" onclick="woDelete('${w.id}')">🗑</button>
             </div>
+            </div>
           </div>`;
-        }).join('') : '<div class="empty" style="padding:20px">No work orders yet — create the first one for your team.</div>'}
+        }).join('') : (list.length ? '<small class="muted" style="display:block;padding:6px 0">All current tasks are in the closed history below.</small>' : '<div class="empty" style="padding:20px">No work orders yet — create the first one for your team.</div>')}
+        ${hist.length ? `<button type="button" class="btn ghost small" style="margin:12px 0 6px" onclick="const el=document.getElementById('woHistoryWrap');el.style.display=el.style.display==='none'?'':'none';this.textContent=el.style.display==='none'?'📚 Show closed history (${hist.length})':'📚 Hide closed history'">📚 Show closed history (${hist.length})</button><div id="woHistoryWrap" style="display:none">${hist.map(hh => `<div class="wo-row"><div class="wo-row-top"><span class="wo-pri" style="border-color:#57d48d55;background:#57d48d18;color:#57d48d">✔ CLOSED</span><b>${esc(hh.title)}</b><small class="muted">${esc(hh.id)}</small></div><div class="wo-row-meta"><span>👤 ${esc(hh.assignee || '—')}</span><span>🗓 ${fmtDue(hh.due)}</span><span>🏅 ${woPtsFmt(woPoints(hh).total)} pts</span></div></div>`).join('')}</div>` : ''}
       </div></div>`);
   };
 
@@ -383,6 +390,11 @@
       </div></div>`);
   };
 
+  const woPtsFmt = v => String(Math.round((+v || 0) * 10) / 10);
+  window.woPtsFmt = woPtsFmt;
+  const woExpanded = new Set();
+  window.woExpand = function (id) { if (woExpanded.has(id)) woExpanded.delete(id); else woExpanded.add(id); window.openWOList(); };
+
   /* [FIX 164] live assignee autosuggest from the Staff Roster */
   window.woSuggest = function (v) {
     const box = document.getElementById('woSuggestBox');
@@ -476,8 +488,9 @@
     return out;
   }
 
-  window.openPerfCenter = async function (drillName) {
+  window.openPerfCenter = async function (drillName, daysArg) {
     const f = F0();
+    if (daysArg) window.__perfDays = +daysArg;
     try {
       const fid0 = window.__arsActiveFarmId || (typeof farmId !== 'undefined' ? farmId : null);
       if (fid0 && window.ARSCloud && ARSCloud.listCommerceRows) {
@@ -486,19 +499,20 @@
       }
     } catch (e) {}
 
-    const rows = staffPerf(f, 30);
+    const daysSel = +window.__perfDays || 30;
+    const rows = staffPerf(f, daysSel);
     const maxPts = Math.max(1, ...rows.map(r => r.pts));
     const cap = 40; /* ~6-day-week healthy monthly load in points */
     document.getElementById('perfCenterModal')?.remove();
     const drill = drillName ? rows.find(r => r.name === drillName) : null;
     document.body.insertAdjacentHTML('beforeend', `<div class="due-modal-bg open" id="perfCenterModal" style="z-index:9999999!important" onclick="if(event.target===this)this.remove()">
       <div class="reminder-modal" style="max-width:720px;width:96%;text-align:left">
-        <div class="modal-top"><div><div class="eyebrow" style="color:#ffd98a;letter-spacing:.12em;font-weight:800">🏆 STAFF PERFORMANCE CENTER</div><h2>Last 30 days · effort × quality, never just counts</h2><small class="muted">pts = (effort tier + priority bonus) × verified/on-time/reopen multipliers</small></div><button class="close-reminder" onclick="document.getElementById('perfCenterModal').remove()">×</button></div>
+        <div class="modal-top"><div><div class="eyebrow" style="color:#ffd98a;letter-spacing:.12em;font-weight:800">🏆 STAFF PERFORMANCE CENTER</div><h2>Effort × quality, never just counts</h2><div style="margin:4px 0 8px"><select class="select" style="max-width:220px" onchange="openPerfCenter(null, this.value)"><option value="30" ${daysSel === 30 ? 'selected' : ''}>Last 30 days</option><option value="90" ${daysSel === 90 ? 'selected' : ''}>Last 90 days</option><option value="365" ${daysSel === 365 ? 'selected' : ''}>Last 12 months</option><option value="3650" ${daysSel === 3650 ? 'selected' : ''}>All time</option></select></div><small class="muted">pts = (effort tier + priority bonus) × verified/on-time/reopen multipliers</small></div><button class="close-reminder" onclick="document.getElementById('perfCenterModal').remove()">×</button></div>
         <div class="dash-section-title" style="margin:8px 0 6px">WORKLOAD (open assigned points · capacity ≈ ${cap})</div>
-        ${rows.map(r => { const pct = Math.min(100, Math.round(r.openPts / cap * 100)); const col = r.openPts > cap ? '#ff8b95' : r.openPts > cap * 0.6 ? '#ffc968' : '#57d48d'; return `<div style="display:flex;align-items:center;gap:8px;margin:4px 0"><small style="width:130px;color:#c9d9d7">${({day:'☀️',night:'🌙',split:'🌓',flex:'🕑'})[r.shift] || '🕑'} ${esc(r.name)}</small><div style="flex:1;height:10px;border-radius:6px;background:rgba(145,207,202,.10)"><div style="width:${pct}%;height:100%;border-radius:6px;background:${col}"></div></div><small style="width:52px;text-align:right;color:${col}">${r.openPts} pts</small></div>`; }).join('') || '<small class="muted">No staff with work orders yet.</small>'}
+        ${rows.map(r => { const pct = Math.min(100, Math.round(r.openPts / cap * 100)); const col = r.openPts > cap ? '#ff8b95' : r.openPts > cap * 0.6 ? '#ffc968' : '#57d48d'; return `<div style="display:flex;align-items:center;gap:8px;margin:4px 0"><small style="width:130px;color:#c9d9d7">${({day:'☀️',night:'🌙',split:'🌓',flex:'🕑'})[r.shift] || '🕑'} ${esc(r.name)}</small><div style="flex:1;height:10px;border-radius:6px;background:rgba(145,207,202,.10)"><div style="width:${pct}%;height:100%;border-radius:6px;background:${col}"></div></div><small style="width:52px;text-align:right;color:${col}">${woPtsFmt(r.openPts)} pts</small></div>`; }).join('') || '<small class="muted">No staff with work orders yet.</small>'}
         <div class="dash-section-title" style="margin:14px 0 6px">LEADERBOARD · tap a card for the full profile</div>
         ${rows.map((r, i) => `<div class="wo-row" style="cursor:pointer" onclick="openPerfCenter('${esc(r.name).replace(/'/g, "\\'")}')">
-          <div class="wo-row-top"><b>#${i + 1} ${esc(r.name)}</b>${r.shift ? `<span class="wo-pri" style="border-color:#57d48d55;background:#57d48d18;color:#57d48d">${({day:'☀️',night:'🌙',split:'🌓',flex:'🕑'})[r.shift] || '🕑'} ${r.shift}</span>` : ''}<span class="wo-pri" style="border-color:#ffd98a55;background:#ffd98a18;color:#ffd98a">${r.pts} pts</span></div>
+          <div class="wo-row-top"><b>#${i + 1} ${esc(r.name)}</b>${r.shift ? `<span class="wo-pri" style="border-color:#57d48d55;background:#57d48d18;color:#57d48d">${({day:'☀️',night:'🌙',split:'🌓',flex:'🕑'})[r.shift] || '🕑'} ${r.shift}</span>` : ''}<span class="wo-pri" style="border-color:#ffd98a55;background:#ffd98a18;color:#ffd98a">${woPtsFmt(r.pts)} pts</span></div>
           <div class="wo-row-meta"><span>✔ ${r.closed} closed</span><span>⏱ ${r.closed ? Math.round(r.onTime / r.closed * 100) : 0}% on-time</span><span>🛡 ${r.verified} verified</span><span>↩ ${r.reopened} reopened</span><span>🏋 ${r.heavy} heavy pts</span></div>
           <div style="height:8px;border-radius:5px;background:rgba(145,207,202,.10);margin:6px 0 4px"><div style="width:${Math.round(r.pts / maxPts * 100)}%;height:100%;border-radius:5px;background:linear-gradient(90deg,#13b9ad,#57d48d)"></div></div>
           <div>${staffBadges(r).map(b => `<span class="wo-pri" style="margin-right:6px;border-color:#57d48d55;background:#57d48d18;color:#57d48d">${b[0]} ${b[1]}</span>`).join('') || '<small class="muted">No badges yet this month.</small>'}</div>
@@ -624,7 +638,7 @@
     L.push({ t: ctr('STAFF PERFORMANCE SLIP'), c: 1 });
     L.push({ t: sep });
     L.push({ t: clean('Staff: ' + mvp.name), b: 1 });
-    L.push({ t: clean('Points (30d): ' + mvp.pts) });
+    L.push({ t: clean('Points: ' + woPtsFmt(mvp.pts)) });
     L.push({ t: clean('Closed WOs: ' + mvp.closed + '  On-time: ' + (mvp.closed ? Math.round(mvp.onTime / mvp.closed * 100) : 0) + '%') });
     L.push({ t: clean('Verified: ' + mvp.verified + '  Reopened: ' + mvp.reopened) });
     L.push({ t: clean('Heavy/Expert points: ' + mvp.heavy) });
