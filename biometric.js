@@ -4,9 +4,15 @@
    modal with clear correct/wrong feedback, auto-print on clock-in (or prompt
    to connect Bluetooth), then a SHIFT CARD with the day's work orders + a
    quick performance view + "✔ Done — next staff" so the kiosk cycles.
+   FIX 171: shift card reads the REAL work-order list (it was always 0 — the
+   list helper lived inside work-orders.js and was never shared), rows now
+   show status + due/overdue, and clocking in AUTO-STARTS the staff's
+   actionable open tasks (overdue / due today / ongoing no-due) so the shift
+   begins with work already IN PROGRESS. Future-dated tasks stay OPEN.
    ═══════════════════════════════════════════════════════════════════════════ */
 (function () {
   const F0 = () => (typeof F === 'function' && F()) ? F() : {};
+  const WOL = f => Array.isArray(f.workOrders) ? f.workOrders : [];
   const MODEL_URI = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js/weights';
   let faceReady = null;
 
@@ -103,7 +109,7 @@
 
   /* ── duty slip printing ─────────────────────────────────────────────────── */
   function printDayOrders(f, name) {
-    const todays = (window.wos ? wos(f) : (f.workOrders || [])).filter(wd => {
+    const todays = WOL(f).filter(wd => {
       const r = window.resolveStaff ? resolveStaff(f, wd.assignee) : null;
       return (r ? r.name : wd.assignee) === name && ['open', 'in_progress'].includes(wd.status);
     });
@@ -176,18 +182,28 @@
   /* ── SHIFT CARD: day's WOs + quick performance + print + next staff ─────── */
   window.arsOpenShiftCard = function (st, info) {
     const f = F0();
+    /* FIX 171: clock-in auto-starts the staff's actionable open tasks */
+    if (info && info.action === 'in' && window.arsAutoStartTasks) {
+      const n = window.arsAutoStartTasks(f, st.name);
+      if (n && window.toast) toast('▶ ' + n + ' task' + (n > 1 ? 's' : '') + ' auto-started for ' + st.name + ' — shift on!');
+    }
     const perf = (window.staffPerf ? staffPerf(f, 30) : []).find(r => r.name === st.name) || null;
-    const todays = (window.wos ? wos(f) : []).filter(wd => {
+    const act = WOL(f).filter(wd => {
       const r = window.resolveStaff ? resolveStaff(f, wd.assignee) : null;
       return (r ? r.name : wd.assignee) === st.name && ['open', 'in_progress'].includes(wd.status);
     });
+    /* overdue first, then due today, then ongoing (no due), then future */
+    const t0 = Date.now();
+    const rank = wd => { if (!wd.due || isNaN(new Date(wd.due).getTime())) return 2; const dt = new Date(wd.due).getTime(); if (dt < t0) return 0; if (new Date(wd.due).toDateString() === new Date(t0).toDateString()) return 1; return 3; };
+    act.sort((a, b) => rank(a) - rank(b) || String(a.due || '9999').localeCompare(String(b.due || '9999')));
     document.getElementById('shiftCardModal')?.remove();
     document.body.insertAdjacentHTML('beforeend', `<div class="due-modal-bg open" id="shiftCardModal" style="z-index:99999999!important">
       <div class="reminder-modal" style="max-width:560px;width:96%;text-align:left">
         <div class="modal-top"><div><div class="eyebrow" style="color:#57d48d;letter-spacing:.12em;font-weight:800">🧾 SHIFT CARD</div><h2>${esc(st.name)}</h2><small class="muted">${info && info.action === 'in' ? (info.status === 'late' ? '⏰ Time-in ' + info.hm + ' (LATE)' : '✅ Time-in ' + info.hm + ' (on time)') : info && info.action === 'out' ? '🏁 Time-out ' + info.hm : ''}</small></div><button class="close-reminder" onclick="document.getElementById('shiftCardModal').remove()">×</button></div>
         <div class="wo-row-meta" style="margin:4px 0 10px"><span>🏅 ${perf ? woPtsFmt(perf.pts) + ' pts (30d)' : '0 pts'}</span><span>⏱ ${perf && perf.closed ? Math.round(perf.onTime / perf.closed * 100) : 0}% on-time</span><span>🛡 ${perf ? perf.verified : 0} verified</span><span>📅 ${perf ? (perf.dayQ ? 'streak active' : '') : ''}</span></div>
-        <div class="dash-section-title" style="margin:0 0 6px">TODAY'S WORK ORDERS (${todays.length})</div>
-        ${todays.map(wd => `<div class="wo-row"><div class="wo-row-top"><span class="wo-pri" style="border-color:#ffd98a55;background:#ffd98a18;color:#ffd98a">${(wd.priority || '').toUpperCase()}</span><b>${esc(wd.title)}</b></div>${wd.details ? `<small class="muted">${String(wd.details).split(/\n+/).filter(s => s.trim()).length} checklist items</small>` : ''}</div>`).join('') || '<small class="muted">No open work orders today.</small>'}
+        <div class="dash-section-title" style="margin:0 0 2px">ACTIVE WORK ORDERS (${act.length})</div>
+        <small class="muted" style="display:block;margin:0 0 6px">overdue &amp; due-today first · actionable tasks auto-start when you time in</small>
+        ${act.map(wd => { const od = wd.due && new Date(wd.due).getTime() < t0; const sx = wd.status === 'in_progress' ? ['▶ STARTED', '#57d48d'] : ['OPEN', '#94a3b8']; const dl = wd.due ? (od ? '⚠ OVERDUE · ' : '🗓 ') + new Date(wd.due).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '🔁 ongoing — no due date'; const ni = wd.details ? String(wd.details).split(/\n+/).filter(s => s.trim()).length : 0; return `<div class="wo-row"><div class="wo-row-top"><span class="wo-pri" style="border-color:#ffd98a55;background:#ffd98a18;color:#ffd98a">${(wd.priority || '').toUpperCase()}</span><b>${esc(wd.title)}</b><span class="wo-pri" style="border-color:${sx[1]}55;background:${sx[1]}18;color:${sx[1]}">${sx[0]}</span></div><small class="muted" style="${od ? 'color:#ff5c68' : ''}">${dl}${ni ? ' · ' + ni + ' checklist items' : ''}</small></div>`; }).join('') || '<small class="muted">No active work orders right now — rest up or add one in the W.O. Center.</small>'}
         <div class="due-actions" style="margin-top:12px;flex-wrap:wrap">
           <button class="btn" id="shiftPrintBtn">🖨 Print duty slip</button>
           <button class="btn" id="shiftDoneBtn" style="background:#0e7f6f">✔ Done — next staff</button>

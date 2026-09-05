@@ -180,6 +180,38 @@
     window.openWOList && window.openWOList();
   };
 
+  /* ── FIX 171: auto-start on clock-in ──────────────────────────────────────
+     When a staff member clocks in at the kiosk, their actionable OPEN work
+     orders — overdue, due today, or ongoing (no due date) — automatically
+     move to IN PROGRESS: the shift has begun, so today's duties have begun.
+     Future-dated work orders stay OPEN until their day arrives. Returns the
+     number of work orders started so the kiosk can toast it. */
+  window.arsAutoStartTasks = function (f, name) {
+    const p2 = n => String(n).padStart(2, '0');
+    const ld = new Date();
+    const today = ld.getFullYear() + '-' + p2(ld.getMonth() + 1) + '-' + p2(ld.getDate());
+    const changed = [];
+    wos(f).forEach(w => {
+      if (w.status !== 'open') return;
+      const r = window.resolveStaff ? resolveStaff(f, w.assignee) : null;
+      if ((r ? r.name : (w.assignee || '')) !== name) return;
+      let dueDay = '';
+      if (w.due) { const d = new Date(w.due); if (!isNaN(d.getTime())) dueDay = d.getFullYear() + '-' + p2(d.getMonth() + 1) + '-' + p2(d.getDate()); }
+      if (dueDay && dueDay > today) return; /* future-dated: stays OPEN */
+      w.status = 'in_progress';
+      w.started_at = new Date().toISOString();
+      w.auto_started = true;
+      changed.push(w);
+    });
+    if (changed.length) {
+      if (typeof save === 'function') save();
+      if (typeof arsWOSync === 'function') arsWOSync(changed);
+      if (typeof renderAll === 'function') renderAll();
+    }
+    return changed.length;
+  };
+  window.wos = wos; /* FIX 171: shared accessor so kiosk/shift card read the same list */
+
   window.woSetStatus = function (id, status) {
     const f = F0(), w = wos(f).find(x => x.id === id);
     if (!w) return;
