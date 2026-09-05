@@ -6077,3 +6077,6 @@ html, body, .shell, .main {
 /* [REBUILD FIX 149] trial banners */
 .ars-trial-banner{display:flex;gap:8px;align-items:center;flex-wrap:wrap;background:linear-gradient(135deg,rgba(19,185,172,.16),rgba(7,152,143,.10));border:1px solid rgba(46,211,197,.35);color:#c9f5ef;border-radius:12px;padding:10px 12px;margin:0 0 12px;font-size:12.5px}
 .ars-trial-banner.expired{background:linear-gradient(135deg,rgba(255,92,104,.14),rgba(120,20,30,.12));border-color:rgba(255,92,104,.4);color:#ffd7db}
+
+/* [FIX 170] toasts must appear above kiosk/roster modals */
+.toast{z-index:999999999!important}

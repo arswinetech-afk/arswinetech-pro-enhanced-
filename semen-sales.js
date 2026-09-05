@@ -1064,6 +1064,7 @@
     }
   }
   window.btPrintTextLines = btPrintTextLines;
+  window.btConnected = () => !!(btDev && btDev.gatt && btDev.gatt.connected && btChar); /* [FIX 170] */
 
   /* ── 58mm ESC/POS STATEMENT GENERATOR (32 Columns) ── */
   function statementTextLines(customerName, lastPaidAmount, lastPaidNote) {
