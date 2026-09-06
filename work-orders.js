@@ -75,6 +75,7 @@
         const rows = await ARSCloud.listWorkOrders(fid);
         (rows || []).forEach(rw => {
           const p = rw && rw.payload; if (!p || !p.id) return;
+          if ((f.deleted_ids || []).includes(p.id)) return; /* FIX 178: never resurrect deleted WOs */
           const i = wos(f).findIndex(x => x.id === p.id);
           if (i >= 0) wos(f)[i] = p; else wos(f).push(p);
         });
@@ -238,6 +239,8 @@
   window.woDelete = function (id) {
     const f = F0();
     if (!confirm('Delete this work order permanently?')) return;
+    f.deleted_ids = Array.isArray(f.deleted_ids) ? f.deleted_ids : [];
+    if (id && !f.deleted_ids.includes(id)) f.deleted_ids.push(id); /* FIX 178: tombstone stops cloud revive */
     f.workOrders = f.workOrders.filter(x => x.id !== id);
     if (typeof save === 'function') save();
     try { const fid = window.__arsActiveFarmId || (typeof farmId !== 'undefined' ? farmId : null); if (fid && window.ARSCloud && ARSCloud.deleteCommerceRow) ARSCloud.deleteCommerceRow(fid, 'work_order', id).catch(() => {}); } catch (e) {}
@@ -338,12 +341,34 @@
   window.deleteStaffRec = function (id) {
     const f = F0(); const r = staffRoster(f).find(x => x.id === id);
     if (!r) return;
-    if (!confirm('Remove ' + r.name + ' from the roster?\nTheir existing work orders keep the name and will still group together in Performance.')) return;
+    const openN = wos(f).filter(w => w.status !== 'closed' && resolveStaff(f, w.assignee)?.id === r.id).length;
+    if (!confirm('Mark ' + r.name + ' as LEFT the farm?\n\n• They disappear from the kiosk, Performance, Incentives and staff chips.\n' + (openN ? '• ' + openN + ' open work order(s) move to Unassigned so no task is lost.\n' : '') + '• Past closed work orders stay in farm history.')) return;
+    r.active = false; r.left_at = localTodayStr();
+    let moved = 0;
+    wos(f).forEach(w => { if (w.status !== 'closed' && resolveStaff(f, w.assignee)?.id === r.id) { w.assignee = ''; moved++; } });
+    if (moved && typeof arsWOSync === 'function') arsWOSync(wos(f));
+    if (typeof save === 'function') save();
+    staffSync(f);
+    toast('🚪 ' + r.name + ' marked as LEFT.' + (moved ? ' ' + moved + ' open task(s) → Unassigned.' : ''));
+    window.openStaffRoster();
+  };
+
+  window.reinstateStaff = function (id) {
+    const f = F0(); const r = staffRoster(f).find(x => x.id === id); if (!r) return;
+    r.active = true; delete r.left_at;
+    if (typeof save === 'function') save();
+    staffSync(f);
+    toast('✔ ' + r.name + ' is back on the roster.');
+    window.openStaffRoster();
+  };
+  window.eraseStaff = function (id) {
+    const f = F0(); const r = staffRoster(f).find(x => x.id === id); if (!r) return;
+    if (!confirm('ERASE ' + r.name + ' completely? Past work orders keep the text name but Performance grouping for them is lost. This cannot be undone.')) return;
     f.staff = staffRoster(f).filter(x => x.id !== id);
     if (typeof save === 'function') save();
     staffSync(f);
     try { const fid = window.__arsActiveFarmId || (typeof farmId !== 'undefined' ? farmId : null); if (fid && window.ARSCloud && ARSCloud.deleteCommerceRow) ARSCloud.deleteCommerceRow(fid, 'staff_rec', id).catch(() => {}); } catch (e) {}
-    toast('🗑 Removed from roster.');
+    toast('🗑 Erased from roster.');
     window.openStaffRoster();
   };
 
@@ -425,9 +450,9 @@
           <button class="btn ghost small" onclick="woMergeToRoster()">🔀 Merge duplicate WOs</button>
           <button class="btn ghost small" onclick="woDedupeRoster()">🧹 Dedupe roster (RICHARD = Richard)</button>
         </div>
-        ${staffRoster(f).map(r => `<div class="wo-row"><div class="wo-row-top"><b>${esc(r.name)}</b><span class="wo-pri" style="border-color:#57d48d55;background:#57d48d18;color:#57d48d">${SHIFT_ICON[r.shift] || '🕑'} ${r.shift || 'flex'}</span>${r.hours ? `<small class="muted">${esc(r.hours)}</small>` : ''}</div>
+        ${staffRoster(f).map(r => `<div class="wo-row"><div class="wo-row-top"><b>${esc(r.name)}</b><span class="wo-pri" style="border-color:#57d48d55;background:#57d48d18;color:#57d48d">${SHIFT_ICON[r.shift] || '🕑'} ${r.shift || 'flex'}</span>${r.active === false ? '<span class="wo-pri" style="border-color:#94a3b855;background:rgba(148,163,184,.1);color:#94a3b8">🚪 LEFT</span>' : ''}${r.hours ? `<small class="muted">${esc(r.hours)}</small>` : ''}</div>
           <div class="wo-row-meta"><span>${wos(f).filter(x => resolveStaff(f, x.assignee)?.id === r.id).length} WOs linked</span></div>
-          <div class="wo-actions"><button class="btn ghost small" onclick="openStaffRoster('${r.id}')">✎ Edit</button><button class="btn ghost small" onclick="arsEnrollFace('${r.id}')">📷 ${r.face ? 'Re-enroll face ✔' : 'Enroll face'}</button><button class="btn ghost small" onclick="arsSetPin('${r.id}')">🔢 ${r.pin ? 'PIN ✔' : 'Set PIN'}</button><button class="btn ghost small delete-action" onclick="deleteStaffRec('${r.id}')">🗑 Delete</button></div></div>`).join('') || '<div class="empty" style="padding:16px">No staff yet — add or import.</div>'}
+          <div class="wo-actions"><button class="btn ghost small" onclick="openStaffRoster('${r.id}')">✎ Edit</button><button class="btn ghost small" onclick="arsEnrollFace('${r.id}')">📷 ${r.face ? 'Re-enroll face ✔' : 'Enroll face'}</button><button class="btn ghost small" onclick="arsSetPin('${r.id}')">🔢 ${r.pin ? 'PIN ✔' : 'Set PIN'}</button>${r.active === false ? `<button class="btn ghost small" onclick="reinstateStaff('${r.id}')">▶ Reinstate</button><button class="btn ghost small delete-action" onclick="eraseStaff('${r.id}')">🗑 Erase</button>` : `<button class="btn ghost small delete-action" onclick="deleteStaffRec('${r.id}')">🚪 Left farm</button>`}</div></div>`).join('') || '<div class="empty" style="padding:16px">No staff yet — add or import.</div>'}
         <div id="staffFormWrap" style="display:${edit ? '' : 'none'};margin-top:10px;border-top:1px dashed var(--line);padding-top:10px">
           <form onsubmit="saveStaffRec(event, ${edit ? `'${edit.id}'` : 'null'})">
             <div class="reminder-fields">
@@ -654,7 +679,7 @@
           <div class="wo-actions"><button class="btn ghost small" onclick="attEdit('${esc(a.id)}')">✎ Edit</button><button class="btn ghost small delete-action" onclick="attDelete('${esc(a.id)}')">🗑</button></div></div>`; }).join('') || '<small class="muted">No attendance records for this date.</small>'}
         <form onsubmit="attSave(event)" style="margin-top:10px;border-top:1px dashed var(--line);padding-top:10px">
           <div class="reminder-fields">
-            <div class="field full"><label>Staff</label><select name="staff">${staffRoster(f).map(r => `<option>${esc(r.name)}</option>`).join('')}</select></div>
+            <div class="field full"><label>Staff</label><select name="staff">${staffRoster(f).filter(r => r.active !== false).map(r => `<option>${esc(r.name)}</option>`).join('')}</select></div>
             <div class="field full"><label>Status</label><select name="status">${Object.entries(ATT_STATUS).map(([k]) => `<option value="${k}">${ATT_OPT[k] || k}</option>`).join('')}</select></div>
             <div class="field"><label>🕒 Time-in</label><input name="in_at" type="time"></div>
             <div class="field"><label>🕒 Time-out</label><input name="out_at" type="time"></div>
@@ -871,6 +896,7 @@
     const map = {};
     wos(f).forEach(wd => {
       const r0 = resolveStaff(f, wd.assignee);
+      if (r0 && r0.active === false) return; /* FIX 178: left the farm — off the boards */
       const who = r0 ? r0.name : ((wd.assignee || 'Unassigned').trim() || 'Unassigned');
       const s = map[who] || (map[who] = { name: who, shift: r0 ? r0.shift : '', hours: r0 ? r0.hours : '', pts: 0, closed: 0, onTime: 0, late: 0, reopened: 0, verified: 0, heavy: 0, openPts: 0, perDay: {} });
       const p = woPoints(wd);
@@ -890,6 +916,7 @@
       if (monthKey && String(a.date || '').slice(0, 7) !== monthKey) return;
       if (!monthKey && new Date(a.date + 'T00:00:00').getTime() < cut) return;
       const r0 = resolveStaff(f, a.staff);
+      if (r0 && r0.active === false) return; /* FIX 178 */
       const who = r0 ? r0.name : (a.staff || 'Unassigned');
       const s = map[who] || (map[who] = { name: who, shift: r0 ? r0.shift : '', hours: r0 ? r0.hours : '', pts: 0, closed: 0, onTime: 0, late: 0, reopened: 0, verified: 0, heavy: 0, openPts: 0, perDay: {} });
       s.att = s.att || { late: 0, earlyIn: 0, eod: 0, eon: 0, off: 0, coff: 0, absent: 0, attPts: 0 };
