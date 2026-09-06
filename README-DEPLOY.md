@@ -39,6 +39,10 @@ match `index.html` / `sw.js` (`css/`, `js/`, `supabase/`, `assets/`, `icons/`).
   the shell + data still load, and sync shows "Offline … saved locally".
 * To update later: rebuild this folder from the repo with
   `qa/build-deploy-layout.sh`, bump `CACHE_NAME` inside `sw.js`, and re-upload.
+* **Self-download link:** after you zip the build, drop the zip into this folder
+  too (the build script's companion step does this). Your team can then always
+  fetch the latest build from `https://<your-pages-domain>/arswinetech-pro-latest.zip`
+  — no GitHub account needed, works on any phone browser.
 
 ## Notes
 * The `_headers` file keeps `sw.js` uncached at the edge (so updates land) while

@@ -89,12 +89,14 @@
         <div class="modal-top"><div><div class="eyebrow" style="color:#f0b64b;letter-spacing:.12em;font-weight:800">📋 WORK ORDER CENTER</div><h2>All work orders</h2><small class="muted">Open first, sorted by due date · tap status to move through the pipeline</small></div><button class="close-reminder" onclick="document.getElementById('woListModal').remove()">×</button></div>
         <div style="display:flex;gap:8px;margin:4px 0 12px;flex-wrap:wrap"><button class="btn" onclick="openWOForm()">＋ Create New W.O.</button><button class="btn ghost" onclick="openPerfCenter()">🏆 Staff Performance</button><button class="btn ghost" onclick="openWoTemplates()">🔁 Daily Templates</button>
         <button class="btn" style="background:#0e7f6f" onclick="window.arsOpenKiosk && window.arsOpenKiosk()">🕐 Time In/Out (Face/PIN)</button></div>
-        <div style="margin:0 0 8px"><input id="woSearch" class="search" style="width:100%" placeholder="🔍 Search staff / task / WO id…" oninput="window.woFilterList(this.value)"></div>
-        <div style="display:flex;gap:6px;overflow-x:auto;padding-bottom:8px">${[...new Set(wos(f).map(x => (x.assignee || '').trim()).filter(Boolean))].map(n => `<button type="button" class="wo-pri" style="white-space:nowrap;border-color:rgba(145,207,202,.3);background:rgba(145,207,202,.08);color:#c9f5ef" onclick="document.getElementById('woSearch').value='${esc(n).replace(/'/g, "\'")}';window.woFilterList('${esc(n).replace(/'/g, "\'")}')">👤 ${esc(n)}</button>`).join('')}</div>
+        <div style="margin:0 0 8px"><input id="woSearch" class="search" style="width:100%" placeholder="🔍 Search staff / task / WO id…" oninput="window.woSearchInput(this.value)"></div>
+        <div style="display:flex;gap:6px;overflow-x:auto;padding-bottom:8px">${[...new Set(wos(f).map(x => { const r = window.resolveStaff ? resolveStaff(f, x.assignee) : null; return r ? r.name : (x.assignee || '').trim(); }).filter(Boolean))].map(n => `<button type="button" class="wo-pri wo-chip" data-name="${esc(n)}" style="white-space:nowrap;border-color:rgba(145,207,202,.3);background:rgba(145,207,202,.08);color:#c9f5ef" onclick="window.woChipFilter('${esc(n).replace(/'/g, "\'")}')">👤 ${esc(n)}</button>`).join('')}</div>
         ${act.length ? act.map(w => {
           const late = w.status !== 'closed' && w.due && new Date(w.due).getTime() < now();
           const exp = woExpanded.has(w.id);
-          return `<div class="wo-row">
+          const rs0 = window.resolveStaff ? resolveStaff(f, w.assignee) : null;
+          const sN = rs0 ? rs0.name : (w.assignee || '');
+          return `<div class="wo-row" data-staff="${esc(sN)}" data-q="${esc((w.title + ' ' + (w.id || '') + ' ' + (w.assignee || '') + ' ' + (w.location || '')).toLowerCase())}">
             <div class="wo-row-top"><span class="wo-pri" style="border-color:${PRI[w.priority][1]}55;background:${PRI[w.priority][1]}18;color:${PRI[w.priority][1]}">${PRI[w.priority][0]}</span>${w.template_id ? '<span class="wo-pri" style="border-color:#ffd98a55;background:#ffd98a18;color:#ffd98a">🔁 daily</span>' : ''}<b>${esc(w.title)}</b><small class="muted">${esc(w.id)}</small></div>
             <div class="wo-row-meta"><span>👤 ${esc(w.assignee || 'Unassigned')}</span><span>📍 ${esc(w.location || '—')}</span><span class="${late ? 'wo-bad' : ''}">🗓 ${fmtDue(w.due)}</span><span>Status: <b>${ST[w.status]}</b></span></div>
             <button type="button" class="btn ghost small" style="margin:6px 0 0" onclick="woExpand('${w.id}')">${exp ? '▴ Collapse' : '▾ Expand'}</button>
@@ -115,8 +117,11 @@
             </div>
           </div>`;
         }).join('') : (list.length ? '<small class="muted" style="display:block;padding:6px 0">All current tasks are in the closed history below.</small>' : '<div class="empty" style="padding:20px">No work orders yet — create the first one for your team.</div>')}
-        ${hist.length ? `<button type="button" class="btn ghost small" style="margin:12px 0 6px" onclick="const el=document.getElementById('woHistoryWrap');el.style.display=el.style.display==='none'?'':'none';this.textContent=el.style.display==='none'?'📚 Show closed history (${hist.length})':'📚 Hide closed history'">📚 Show closed history (${hist.length})</button><div id="woHistoryWrap" style="display:none">${hist.map(hh => `<div class="wo-row"><div class="wo-row-top"><span class="wo-pri" style="border-color:#57d48d55;background:#57d48d18;color:#57d48d">✔ CLOSED</span><b>${esc(hh.title)}</b><small class="muted">${esc(hh.id)}</small></div><div class="wo-row-meta"><span>👤 ${esc(hh.assignee || '—')}</span><span>🗓 ${fmtDue(hh.due)}</span><span>🏅 ${woPtsFmt(woPoints(hh).total)} pts</span></div></div>`).join('')}</div>` : ''}
+        ${hist.length ? `<button type="button" class="btn ghost small" style="margin:12px 0 6px" onclick="const el=document.getElementById('woHistoryWrap');el.style.display=el.style.display==='none'?'':'none';this.textContent=el.style.display==='none'?'📚 Show closed history (${hist.length})':'📚 Hide closed history'">📚 Show closed history (${hist.length})</button><div id="woHistoryWrap" style="display:none">${hist.map(hh => { const r0 = window.resolveStaff ? resolveStaff(f, hh.assignee) : null; const hN = r0 ? r0.name : (hh.assignee || ''); return `<div class="wo-row" data-staff="${esc(hN)}" data-q="${esc((hh.title + ' ' + (hh.id || '') + ' ' + (hh.assignee || '')).toLowerCase())}"><div class="wo-row-top"><span class="wo-pri" style="border-color:#57d48d55;background:#57d48d18;color:#57d48d">✔ CLOSED</span><b>${esc(hh.title)}</b><small class="muted">${esc(hh.id)}</small></div><div class="wo-row-meta"><span>👤 ${esc(hh.assignee || '—')}</span><span>🗓 ${fmtDue(hh.due)}</span><span>🏅 ${woPtsFmt(woPoints(hh).total)} pts</span></div></div>`; }).join('')}</div>` : ''}
       </div></div>`);
+    if (window.__woStaff) { const si = document.getElementById('woSearch'); if (si) si.value = window.__woStaff; }
+    window.woPaintChips();
+    window.woFilterList((document.getElementById('woSearch') || {}).value || '');
   };
 
   /* ── create / edit form ──────────────────────────────────────────────── */
@@ -904,12 +909,40 @@
     } catch (e) {}
   }
 
-  /* [FIX 161] quick staff/task filter for the WO list */
-  window.woFilterList = function (term) {
-    const t = String(term || '').toLowerCase();
-    document.querySelectorAll('#woListModal .wo-row').forEach(row => {
-      row.style.display = !t || row.textContent.toLowerCase().includes(t) ? '' : 'none';
+  /* [FIX 172] quick staff/task filter for the WO list.
+     FIX 161 matched the card's whole text — including HIDDEN checklist
+     lines — so a card assigned to DOLPHY whose checklist mentioned
+     "Christian" leaked into Christian's filter. Now: staff chips do an
+     EXACT staff match (data-staff), and the search box only looks at
+     title / WO id / assignee / location (data-q). Tap a chip again to
+     clear it; typing in the search box clears the chip. */
+  window.woPaintChips = function () {
+    const s = (window.__woStaff || '').toLowerCase();
+    document.querySelectorAll('#woListModal .wo-chip').forEach(c => {
+      const on = !!s && (c.getAttribute('data-name') || '').toLowerCase() === s;
+      c.style.background = on ? '#0e7f6f' : 'rgba(145,207,202,.08)';
+      c.style.color = on ? '#fff' : '#c9f5ef';
+      c.style.borderColor = on ? '#0e7f6f' : 'rgba(145,207,202,.3)';
     });
+  };
+  window.woFilterList = function (term) {
+    const t = String(term || '').toLowerCase().trim();
+    const s = (window.__woStaff || '').toLowerCase();
+    document.querySelectorAll('#woListModal .wo-row').forEach(row => {
+      let ok = true;
+      if (s) ok = (row.getAttribute('data-staff') || '').toLowerCase() === s;
+      if (ok && t) ok = (row.getAttribute('data-q') || '').includes(t);
+      row.style.display = ok ? '' : 'none';
+    });
+  };
+  window.woSearchInput = function (v) { window.__woStaff = ''; window.woPaintChips(); window.woFilterList(v); };
+  window.woChipFilter = function (n) {
+    const inp = document.getElementById('woSearch');
+    const on = (window.__woStaff || '') === n;
+    window.__woStaff = on ? '' : n;
+    if (inp) inp.value = on ? '' : n;
+    window.woPaintChips();
+    window.woFilterList(inp ? inp.value : '');
   };
 
   window.woToggleLine = function (id, idx, on) {

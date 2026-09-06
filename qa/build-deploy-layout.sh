@@ -40,4 +40,9 @@ done
 cp "$REPO/icon-192.png" "$OUT/icons/icon-192.png"
 cp "$REPO/icon-512.png" "$OUT/icons/icon-512.png"
 
+# optional: host the zip on the site itself (self-download link, no GitHub login)
+if [ -f /home/user/download/arswinetech-pro-latest.zip ]; then
+  cp /home/user/download/arswinetech-pro-latest.zip "$OUT/arswinetech-pro-latest.zip"
+fi
+
 echo "✔ build-deploy layout ready at $OUT"
