@@ -491,6 +491,7 @@
           <button type="button" class="btn sow-quick-btn treat" onclick="event.stopPropagation();openSowTreatmentModal(${index})">💊 + Treat</button>
           <button type="button" class="btn sow-quick-btn move" onclick="event.stopPropagation();window.openQuickMoveForSow(${index})">🚚 Move Stall</button>
           <button type="button" class="btn ghost small" onclick="event.stopPropagation();window.openQuickPedigreeForSow(${index})">🧬 Pedigree</button>
+          <button type="button" class="btn ghost small" onclick="event.stopPropagation();window.openSowProfile && window.openSowProfile(${index})">👁 Profile</button>
         </div>
 
         <!-- Sow Vitals Meta -->

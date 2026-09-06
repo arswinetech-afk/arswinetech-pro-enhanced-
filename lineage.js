@@ -19,8 +19,32 @@
     return (F().semen || []).map(normSemen).filter(x => !x.deleted_at)
   }
 
-  function records(sowId) {
-    return (F().breedingRecords || []).filter(x => x.sow_id === sowId && !x.deleted_at).sort((a, b) => String(b.insemination_date).localeCompare(String(a.insemination_date)))
+  /* [FIX 173] Robust sow-to-breeding-record linking. Legacy records could be
+     tied to a sow by NAME only (or an older id), so the exact "sow_id ==="
+     match left sows like Sakura with an empty Insemination History while the
+     looser "last semen" lookup still found the boar. Match on id / name /
+     legacy sow field / rfid, case- and trim-insensitive. */
+  function matchSowRec(x, sowId, sowName, rfid) {
+    const c = v => String(v == null ? '' : v).trim().toLowerCase();
+    const targets = [c(sowId), c(sowName), c(rfid)].filter(Boolean);
+    if (!targets.length) return false;
+    const keys = [c(x.sow_id), c(x.sow_name), c(x.sow)].filter(Boolean);
+    return keys.some(k => targets.includes(k));
+  }
+  function records(sowId, sowName, rfid) {
+    return (F().breedingRecords || []).filter(x => !x.deleted_at && matchSowRec(x, sowId, sowName, rfid)).sort((a, b) => String(b.insemination_date).localeCompare(String(a.insemination_date)))
+  }
+  /* Stamp the sow's real id onto records linked only by name (heals legacy). */
+  function healBreedingLinks(f, sow) {
+    const c = v => String(v == null ? '' : v).trim().toLowerCase();
+    let changed = false;
+    (f.breedingRecords || []).forEach(x => {
+      if (x.deleted_at) return;
+      if (x.sow_id && c(x.sow_id) === c(sow.id)) return;
+      if (matchSowRec(x, sow.id, sow.name, sow.rfid)) { x.sow_id = sow.id; x.sow_name = sow.name; changed = true; }
+    });
+    if (changed && typeof save === 'function') save();
+    return changed;
   }
 
   function latestSuccessful(sowId) {
@@ -765,7 +789,8 @@
       return;
     }
     let sow = farmSows[index];
-    let hist = records(sow.id || sow.name);
+    healBreedingLinks(F(), sow); /* FIX 173: heal name-only links first */
+    let hist = records(sow.id, sow.name, sow.rfid);
 
     // 1. Most Recent Farrowing Record & Pregnancy State Check
     const sowNameClean = String(sow.name || '').trim().toLowerCase();
@@ -926,6 +951,7 @@
                       <span>🧬</span>
                       <span>${escFirst(semenUsed)}${recentBatch ? ` (Batch ${escFirst(recentBatch.id)})` : ''}</span>
                     </b>
+                    ${latestBreed && (latestBreed.insemination_date || latestBreed.date) ? `<small class="muted" style="display:block;margin-top:3px">🗓 Inseminated ${fmtDate(latestBreed.insemination_date || latestBreed.date)}${latestBreed.status === 'failed' ? ' · ❌ cycle ended — ' + escFirst(latestBreed.failure_reason || 'return to heat') : ''}</small>` : ''}
                   </div>
                 ` : ''}
               </div>
@@ -989,7 +1015,7 @@
                 <span>
                   <b>${fmtDate(r.insemination_date)}</b>
                   <br>${escFirst(r.boar_name || 'Boar')} · Batch ${escFirst(r.semen_batch_no || '—')}
-                  <br><small class="muted">${escFirst(r.status || 'Recorded')}</small>
+                  <br><small class="muted">${r.status === 'failed' ? '❌' : r.status === 'successful' ? '✔' : '•'} ${escFirst(r.status || 'Recorded')}${r.failure_reason ? ' — ' + escFirst(r.failure_reason) : ''}</small>
                 </span>
                 <i>›</i>
               </button>
@@ -1070,6 +1096,7 @@
   };
   const oldRender = window.renderAll;
   window.renderAll = function() {
+    try { const f0 = F(); (f0.sows || []).forEach(sw => healBreedingLinks(f0, sw)); } catch (e) {} /* FIX 173 */
     (typeof oldRender === 'function' && oldRender());
     pigletPage()
   };
