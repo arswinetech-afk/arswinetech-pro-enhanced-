@@ -155,12 +155,14 @@
     const rec = f.attendance.find(a => a.id === id);
     const hm = p(date.getHours()) + ':' + p(date.getMinutes());
     if (!rec || !rec.in_at) {
-      let status = 'ontime';
+      let status = 'ontime', lateMin = 0;
       if (st.start_time) {
         const [sh, sm] = String(st.start_time).split(':').map(Number);
-        if (date.getHours() * 60 + date.getMinutes() > sh * 60 + (sm || 0) + 15) status = 'late';
+        const over = date.getHours() * 60 + date.getMinutes() - (sh * 60 + (sm || 0));
+        if (over > 15) { status = 'late'; lateMin = over; }
       }
-      const r = { id, staff: st.name, date: dstr, status, note: 'time-in ' + hm + ' via ' + via, in_at: hm };
+      const r = { id, staff: st.name, date: dstr, status, note: 'time-in ' + hm + ' via ' + via + (status === 'late' ? ' · ' + Math.floor(lateMin / 60) + 'h ' + (lateMin % 60) + 'm late' : ''), in_at: hm };
+      if (status === 'late') r.late_min = lateMin; /* FIX 174: powers −1 pt/hr deduction */
       const i = f.attendance.findIndex(a => a.id === id);
       if (i >= 0) f.attendance[i] = Object.assign(f.attendance[i], r); else f.attendance.push(r);
       if (typeof save === 'function') save();

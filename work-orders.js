@@ -556,11 +556,45 @@
   /* [FIX 168] ATTENDANCE LEDGER — late / early-in / early-out / day-off flags
      that feed performance & incentives with transparent point effects. */
   const ATT_STATUS = {
-    ontime: ['On time', 0], late: ['Late', -0.5], early_in: ['Early-in', 0.25],
+    ontime: ['On time', 0], late: ['Late', -1], early_in: ['Early-in', 0.25],
     early_out_done: ['Early-out · work DONE', 0], early_out_notdone: ['Early-out · work NOT done', -1],
+    absent: ['Absent', -3],
     day_off: ['Day off', 0], cancelled_day_off: ['Cancelled day-off (worked)', 1]
   };
   window.ATT_STATUS = ATT_STATUS;
+  const ATT_OPT = {
+    ontime: 'On time (0)', late: 'Late (−1 pt per hour late)', early_in: 'Early-in (+0.25)',
+    early_out_done: 'Early-out · work DONE (0)', early_out_notdone: 'Early-out · work NOT done (−1)',
+    absent: 'Absent (−3)', day_off: 'Day off (0 · keeps streak)', cancelled_day_off: 'Cancelled day-off (+1)'
+  };
+
+  /* [FIX 174] minutes past the shift start this record clocked in */
+  function lateMinutes(f, a) {
+    if (typeof a.late_min === 'number' && a.late_min >= 0) return a.late_min;
+    const r0 = window.resolveStaff ? resolveStaff(f, a.staff) : null;
+    const st = staffRoster(f).find(r => r.name === (r0 ? r0.name : a.staff));
+    if (!a.in_at || !st || !st.start_time) return null;
+    const p = v => String(v).split(':').map(Number);
+    const ihm = p(a.in_at), shm = p(st.start_time);
+    const d = (ihm[0] * 60 + (ihm[1] || 0)) - (shm[0] * 60 + (shm[1] || 0));
+    return d > 0 ? d : 0;
+  }
+  /* [FIX 174] transparent per-record attendance point effect */
+  function attPoints(f, a) {
+    if (a.status === 'late') {
+      const m = lateMinutes(f, a);
+      if (m == null) return { pts: -1, detail: 'late (no time-in recorded) −1' };
+      const pts = -Math.round((m / 60) * 100) / 100; /* −1 pt per hour, prorated */
+      return { pts, detail: 'late ' + Math.floor(m / 60) + 'h ' + (m % 60) + 'm → ' + pts };
+    }
+    if (a.status === 'absent') return { pts: -3, detail: 'absent −3' };
+    if (a.status === 'early_in') return { pts: 0.25, detail: 'early-in +0.25' };
+    if (a.status === 'early_out_notdone') return { pts: -1, detail: 'early-out w/o work −1' };
+    if (a.status === 'cancelled_day_off') return { pts: 1, detail: 'cancelled day-off +1' };
+    return { pts: 0, detail: ATT_STATUS[a.status] ? ATT_STATUS[a.status][0] : (a.status || '') };
+  }
+  window.arsAttPoints = attPoints;
+  window.arsLateMinutes = lateMinutes;
 
   window.openAttendance = function () {
     const f = F0();
@@ -570,17 +604,20 @@
     document.getElementById('attModal')?.remove();
     document.body.insertAdjacentHTML('beforeend', `<div class="due-modal-bg open" id="attModal" style="z-index:99999999!important" onclick="if(event.target===this)this.remove()">
       <div class="reminder-modal" style="max-width:600px;width:96%;text-align:left">
-        <div class="modal-top"><div><div class="eyebrow" style="color:#ffd98a;letter-spacing:.12em;font-weight:800">🕐 ATTENDANCE LEDGER</div><h2>Daily time discipline</h2><small class="muted">Late −0.5 · Early-in +0.25 · Early-out w/o work −1 · Cancelled day-off +1 · Day-off neutral (keeps streak)</small></div><button class="close-reminder" onclick="document.getElementById('attModal').remove()">×</button></div>
+        <div class="modal-top"><div><div class="eyebrow" style="color:#ffd98a;letter-spacing:.12em;font-weight:800">🕐 ATTENDANCE LEDGER</div><h2>Daily time discipline</h2><small class="muted">Late −1 pt/hr · Early-in +0.25 · Early-out w/o work −1 · Absent −3 · Cancelled day-off +1 · Day-off neutral (keeps streak)</small></div><button class="close-reminder" onclick="document.getElementById('attModal').remove()">×</button></div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
           <input type="date" value="${date}" onchange="window.__attDate=this.value;openAttendance()">
         </div>
-        ${recs.map(a => `<div class="wo-row"><div class="wo-row-top"><b>${esc(a.staff)}</b><span class="wo-pri" style="border-color:#ffd98a55;background:#ffd98a18;color:#ffd98a">${ATT_STATUS[a.status] ? ATT_STATUS[a.status][0] : a.status}</span></div>
+        ${recs.map(a => { const ap = attPoints(f, a); const lm = a.status === 'late' ? lateMinutes(f, a) : null; return `<div class="wo-row"><div class="wo-row-top"><b>${esc(a.staff)}</b><span class="wo-pri" style="border-color:#ffd98a55;background:#ffd98a18;color:#ffd98a">${ATT_STATUS[a.status] ? ATT_STATUS[a.status][0] : a.status}</span><span class="wo-pri" style="border-color:${ap.pts < 0 ? '#ff5c6855' : ap.pts > 0 ? '#57d48d55' : '#94a3b855'};background:${ap.pts < 0 ? '#ff5c6818' : ap.pts > 0 ? '#57d48d18' : '#94a3b818'};color:${ap.pts < 0 ? '#ff5c68' : ap.pts > 0 ? '#57d48d' : '#94a3b8'}">${ap.pts > 0 ? '+' : ''}${ap.pts} pts</span></div>
+          <small class="muted">🕒 Time-in ${esc(a.in_at || '—')} · Time-out ${esc(a.out_at || '—')}${lm != null ? ' · ⏰ ' + Math.floor(lm / 60) + 'h ' + (lm % 60) + 'm late' : ''}</small>
           ${a.note ? `<small class="muted">${esc(a.note)}</small>` : ''}
-          <div class="wo-actions"><button class="btn ghost small" onclick="attEdit('${esc(a.id)}')">✎ Edit</button><button class="btn ghost small delete-action" onclick="attDelete('${esc(a.id)}')">🗑</button></div></div>`).join('') || '<small class="muted">No attendance records for this date.</small>'}
+          <div class="wo-actions"><button class="btn ghost small" onclick="attEdit('${esc(a.id)}')">✎ Edit</button><button class="btn ghost small delete-action" onclick="attDelete('${esc(a.id)}')">🗑</button></div></div>`; }).join('') || '<small class="muted">No attendance records for this date.</small>'}
         <form onsubmit="attSave(event)" style="margin-top:10px;border-top:1px dashed var(--line);padding-top:10px">
           <div class="reminder-fields">
             <div class="field full"><label>Staff</label><select name="staff">${staffRoster(f).map(r => `<option>${esc(r.name)}</option>`).join('')}</select></div>
-            <div class="field full"><label>Status</label><select name="status">${Object.entries(ATT_STATUS).map(([k, v]) => `<option value="${k}">${v[0]} (${v[1] > 0 ? '+' : ''}${v[1]} pts)</option>`).join('')}</select></div>
+            <div class="field full"><label>Status</label><select name="status">${Object.entries(ATT_STATUS).map(([k]) => `<option value="${k}">${ATT_OPT[k] || k}</option>`).join('')}</select></div>
+            <div class="field"><label>🕒 Time-in</label><input name="in_at" type="time"></div>
+            <div class="field"><label>🕒 Time-out</label><input name="out_at" type="time"></div>
             <div class="field full"><label>Note (optional)</label><input name="note" placeholder="e.g. 30 min late — traffic"></div>
           </div>
           <div class="due-actions"><button class="btn">💾 Save attendance</button></div>
@@ -596,7 +633,10 @@
     const id = 'ATT-' + normName(staff).replace(/[^a-z0-9]/g, '') + '-' + date;
     f.attendance = Array.isArray(f.attendance) ? f.attendance : [];
     const i = f.attendance.findIndex(a => a.id === id);
+    const inAt = String(d.get('in_at') || '').trim(), outAt = String(d.get('out_at') || '').trim();
     const rec = { id, staff, date, status: d.get('status'), note: String(d.get('note') || '').trim() };
+    if (inAt) rec.in_at = inAt; if (outAt) rec.out_at = outAt;
+    if (rec.status === 'late') { const lm = lateMinutes(f, rec); if (lm != null) rec.late_min = lm; }
     if (i >= 0) f.attendance[i] = rec; else f.attendance.push(rec);
     if (typeof save === 'function') save();
     try { const fid = window.__arsActiveFarmId || (typeof farmId !== 'undefined' ? farmId : null); if (fid && window.ARSCloud && ARSCloud.upsertCommerceRows) ARSCloud.upsertCommerceRows(fid, [Object.assign({ _et: 'att_rec' }, rec)]).catch(() => {}); } catch (e) {}
@@ -606,7 +646,7 @@
   window.attEdit = function (id) {
     const f = F0(); const a = (f.attendance || []).find(x => x.id === id); if (!a) return;
     window.__attDate = a.date; window.openAttendance();
-    setTimeout(() => { const m = document.getElementById('attModal'); if (!m) return; m.querySelector('[name=staff]').value = a.staff; m.querySelector('[name=status]').value = a.status; m.querySelector('[name=note]').value = a.note || ''; }, 50);
+    setTimeout(() => { const m = document.getElementById('attModal'); if (!m) return; m.querySelector('[name=staff]').value = a.staff; m.querySelector('[name=status]').value = a.status; m.querySelector('[name=note]').value = a.note || ''; if (m.querySelector('[name=in_at]')) m.querySelector('[name=in_at]').value = a.in_at || ''; if (m.querySelector('[name=out_at]')) m.querySelector('[name=out_at]').value = a.out_at || ''; }, 50);
   };
   window.attDelete = function (id) {
     const f = F0();
@@ -673,7 +713,7 @@
         </div>
         ${scored.map((r, i) => `<div class="wo-row">
           <div class="wo-row-top"><b>#${i + 1} ${esc(r.name)}</b><span class="wo-pri" style="border-color:#ffd98a55;background:#ffd98a18;color:#ffd98a">₱${r.peso.toLocaleString('en-PH')}</span><small class="muted">${(r.share * 100).toFixed(1)}% share</small></div>
-          <div class="wo-row-meta"><span>🏅 ${woPtsFmt(r.pts)} pts</span><span>⏱ ${Math.round(r.onT * 100)}% on-time</span><span>🛡 ${Math.round(r.ver * 100)}% verified</span><span>📅 ${r.streak}d streak</span><span>✔ ${r.closed} closed</span></div>
+          <div class="wo-row-meta"><span>🏅 ${woPtsFmt(r.pts)} pts</span><span>⏱ ${Math.round(r.onT * 100)}% on-time</span><span>🛡 ${Math.round(r.ver * 100)}% verified</span><span>🕐 ${r.att ? (r.att.attPts > 0 ? '+' : '') + (r.att.attPts || 0) + ' att pts' + (r.att.absent ? ' · ' + r.att.absent + ' absent' : '') + (r.att.late ? ' · ' + r.att.late + ' late' : '') : '±0 att pts'}</span><span>📅 ${r.streak}d streak</span><span>✔ ${r.closed} closed</span></div>
           <div class="wo-actions"><button class="btn ghost small" onclick="printIncSlip('${esc(r.name).replace(/'/g, "\\'")}')">🖨 Slip</button></div>
         </div>`).join('') || '<div class="empty" style="padding:16px">No closed work orders in this month yet.</div>'}
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px"><span class="muted" style="font-size:11px;align-self:center">Allocated ₱${allocated.toLocaleString('en-PH')} of ₱${(+st.budget || 0).toLocaleString('en-PH')} · unallocated ₱${((+st.budget || 0) - allocated).toLocaleString('en-PH')}</span><button class="btn ghost small" onclick="printIncReport()">🖨 Print full incentive report</button></div>
@@ -702,7 +742,8 @@
     L.push({ t: 'JUSTIFIED BY:' });
     L.push({ t: clean(' Points: ' + woPtsFmt(r.pts)) });
     L.push({ t: clean(' On-time: ' + Math.round(r.onT * 100) + '%  Verified: ' + Math.round(r.ver * 100) + '%') });
-    if (r.att) L.push({ t: clean(' Attendance: late ' + r.att.late + ' · early-in ' + r.att.earlyIn + ' · early-out(no work) ' + r.att.eon + ' · day-off ' + r.att.off + ' · cancel-off ' + r.att.coff) });
+    if (r.att) L.push({ t: clean(' Attendance: late ' + r.att.late + ' · absent ' + (r.att.absent || 0) + ' · early-in ' + r.att.earlyIn + ' · early-out(no work) ' + r.att.eon + ' · day-off ' + r.att.off + ' · cancel-off ' + r.att.coff) });
+    if (r.att && r.att.attPts) L.push({ t: clean(' Attendance adj: ' + (r.att.attPts > 0 ? '+' : '') + r.att.attPts + ' pts (late -1 per hr, absent -3)') });
     L.push({ t: clean(' Closed WOs: ' + r.closed + '  Streak: ' + r.streak + 'd') });
     L.push({ t: clean(' Share: ' + (r.share * 100).toFixed(1) + '% of P' + (+st.budget).toLocaleString('en-PH')) });
     L.push({ t: sep });
@@ -728,7 +769,7 @@
     L.push({ t: clean('Budget P' + (+st.budget).toLocaleString('en-PH') + ' / ' + N + ' staff'), b: 1 });
     L.push({ t: sep });
     scored.forEach(r => { L.push({ t: clean(r.name), b: 1 }); L.push({ t: clean('  pts ' + woPtsFmt(r.pts) + ' onT ' + Math.round(r.onT * 100) + '% ver ' + Math.round(r.ver * 100) + '%') });
-      if (r.att) L.push({ t: clean('  att: L' + r.att.late + ' EI' + r.att.earlyIn + ' EO' + r.att.eon + ' off' + r.att.off) }); L.push({ t: clean('  share ' + (r.share * 100).toFixed(1) + '%  =  P' + r.peso.toLocaleString('en-PH')), b: 1 }); });
+      if (r.att) L.push({ t: clean('  att: L' + r.att.late + ' ABS' + (r.att.absent || 0) + ' EI' + r.att.earlyIn + ' EO' + r.att.eon + ' off' + r.att.off + ' adj' + (r.att.attPts || 0)) }); L.push({ t: clean('  share ' + (r.share * 100).toFixed(1) + '%  =  P' + r.peso.toLocaleString('en-PH')), b: 1 }); });
     L.push({ t: sep });
     L.push({ t: clean('TOTAL: P' + scored.reduce((a, r) => a + r.peso, 0).toLocaleString('en-PH')) });
     L.push({ t: ctr('Formula: equal%+perf% (60/20/20)'), c: 1 });
@@ -808,19 +849,21 @@
       if (monthKey && String(a.date || '').slice(0, 7) !== monthKey) return;
       if (!monthKey && new Date(a.date + 'T00:00:00').getTime() < cut) return;
       const r0 = resolveStaff(f, a.staff);
-      const s = map[r0 ? r0.name : (a.staff || 'Unassigned')];
-      if (!s) return;
-      s.att = s.att || { late: 0, earlyIn: 0, eod: 0, eon: 0, off: 0, coff: 0 };
+      const who = r0 ? r0.name : (a.staff || 'Unassigned');
+      const s = map[who] || (map[who] = { name: who, shift: r0 ? r0.shift : '', hours: r0 ? r0.hours : '', pts: 0, closed: 0, onTime: 0, late: 0, reopened: 0, verified: 0, heavy: 0, openPts: 0, perDay: {} });
+      s.att = s.att || { late: 0, earlyIn: 0, eod: 0, eon: 0, off: 0, coff: 0, absent: 0, attPts: 0 };
+      s.att.attPts = Math.round((s.att.attPts + attPoints(f, a).pts) * 100) / 100; /* FIX 174 */
       if (a.status === 'late') s.att.late++;
       else if (a.status === 'early_in') s.att.earlyIn++;
       else if (a.status === 'early_out_done') s.att.eod++;
       else if (a.status === 'early_out_notdone') s.att.eon++;
+      else if (a.status === 'absent') s.att.absent++;
       else if (a.status === 'day_off') { s.att.off++; s.dayOff = s.dayOff || {}; s.dayOff[a.date] = true; }
       else if (a.status === 'cancelled_day_off') s.att.coff++;
     });
     Object.values(map).forEach(s => {
       if (!s.att) return;
-      const adj = s.att.earlyIn * 0.25 + s.att.coff * 1 - s.att.late * 0.5 - s.att.eon * 1;
+      const adj = s.att.attPts; /* FIX 174: late −1/hr · absent −3 · early-in +0.25 … */
       s.pts = Math.max(0, Math.round((s.pts + adj) * 10) / 10);
       s.attAdj = adj;
     });
@@ -890,7 +933,7 @@
         <div class="dash-section-title" style="margin:14px 0 6px">LEADERBOARD · tap a card for the full profile</div>
         ${rows.map((r, i) => `<div class="wo-row" style="cursor:pointer" onclick="openPerfCenter('${esc(r.name).replace(/'/g, "\\'")}')">
           <div class="wo-row-top"><b>#${i + 1} ${esc(r.name)}</b>${r.shift ? `<span class="wo-pri" style="border-color:#57d48d55;background:#57d48d18;color:#57d48d">${({day:'☀️',night:'🌙',split:'🌓',flex:'🕑'})[r.shift] || '🕑'} ${r.shift}</span>` : ''}<span class="wo-pri" style="border-color:#ffd98a55;background:#ffd98a18;color:#ffd98a">${woPtsFmt(r.pts)} pts</span></div>
-          <div class="wo-row-meta"><span>✔ ${r.closed} closed</span><span>⏱ ${r.closed ? Math.round(r.onTime / r.closed * 100) : 0}% on-time</span><span>🛡 ${r.verified} verified</span><span>↩ ${r.reopened} reopened</span><span>🏋 ${r.heavy} heavy pts</span>${r.att ? `<span>🕐 L${r.att.late} · EI${r.att.earlyIn} · EO${r.att.eon}</span>` : ''}</div>
+          <div class="wo-row-meta"><span>✔ ${r.closed} closed</span><span>⏱ ${r.closed ? Math.round(r.onTime / r.closed * 100) : 0}% on-time</span><span>🛡 ${r.verified} verified</span><span>↩ ${r.reopened} reopened</span><span>🏋 ${r.heavy} heavy pts</span>${r.att ? `<span>🕐 L${r.att.late} · EI${r.att.earlyIn} · EO${r.att.eon} · ABS${r.att.absent || 0} · ${r.att.attPts > 0 ? '+' : ''}${r.att.attPts || 0} pts</span>` : ''}</div>
           <div style="height:8px;border-radius:5px;background:rgba(145,207,202,.10);margin:6px 0 4px"><div style="width:${Math.round(r.pts / maxPts * 100)}%;height:100%;border-radius:5px;background:linear-gradient(90deg,#13b9ad,#57d48d)"></div></div>
           <div>${staffBadges(r).map(b => `<span class="wo-pri" style="margin-right:6px;border-color:#57d48d55;background:#57d48d18;color:#57d48d">${b[0]} ${b[1]}</span>`).join('') || '<small class="muted">No badges yet this month.</small>'}</div>
         </div>`).join('') || ''}
