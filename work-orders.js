@@ -384,7 +384,7 @@
     const rec = editId ? staffRoster(f).find(x => x.id === editId) : null;
     if (rec) {
       const oldName = rec.name;
-      Object.assign(rec, { name, shift: d.get('shift'), hours: String(d.get('hours') || '').trim(), start_time: d.get('start_time') || '', active: d.get('active') === 'on' });
+      Object.assign(rec, { name, shift: d.get('shift'), hours: String(d.get('hours') || '').trim(), start_time: d.get('start_time') || '', end_time: d.get('end_time') || '', active: d.get('active') === 'on' });
       if (oldName !== name) {
         rec.aliases = [...new Set([...(rec.aliases || []), oldName])];
         let n = 0;
@@ -393,7 +393,7 @@
         toast('🔁 ' + n + ' work orders re-linked to ' + name + '.');
       }
     }
-    else staffRoster(f).push({ id: 'STF-' + Date.now().toString(36).toUpperCase(), name, shift: d.get('shift'), hours: String(d.get('hours') || '').trim(), active: true });
+    else staffRoster(f).push({ id: 'STF-' + Date.now().toString(36).toUpperCase(), name, shift: d.get('shift'), hours: String(d.get('hours') || '').trim(), start_time: d.get('start_time') || '', end_time: d.get('end_time') || '', active: true });
     if (typeof save === 'function') save();
     staffSync(f);
     document.getElementById('staffRecModal')?.remove();
@@ -433,6 +433,7 @@
               <div class="field"><label>Shift type</label><select name="shift"><option value="day" ${edit?.shift === 'day' ? 'selected' : ''}>☀️ Day shift</option><option value="night" ${edit?.shift === 'night' ? 'selected' : ''}>🌙 Night shift</option><option value="split" ${edit?.shift === 'split' ? 'selected' : ''}>🌓 Split / broken schedule</option><option value="flex" ${(!edit || edit.shift === 'flex') ? 'selected' : ''}>🕑 Flexible</option></select></div>
               <div class="field"><label>Shift hours (free text)</label><input name="hours" value="${esc(edit?.hours || '')}" placeholder="e.g. 6am-6pm · also 9pm-2am"></div>
               <div class="field"><label>Shift start time (for late detection)</label><input type="time" name="start_time" value="${esc(edit?.start_time || '')}"><small class="field-hint">15-min grace; blank = always on-time</small></div>
+              <div class="field"><label>Shift end time (extension points)</label><input type="time" name="end_time" value="${esc(edit?.end_time || '')}"><small class="field-hint">+1 pt/hr stayed past · blank = day 6pm / night 6am</small></div>
               <div class="field full"><label style="display:flex;gap:8px"><input type="checkbox" name="active" ${(!edit || edit.active !== false) ? 'checked' : ''} style="width:auto"> Active</label></div>
             </div>
             <div class="due-actions"><button type="button" class="btn ghost" onclick="document.getElementById('staffFormWrap').style.display='none'">Cancel</button><button class="btn">💾 Save staff</button></div>
@@ -579,19 +580,51 @@
     const d = (ihm[0] * 60 + (ihm[1] || 0)) - (shm[0] * 60 + (shm[1] || 0));
     return d > 0 ? d : 0;
   }
-  /* [FIX 174] transparent per-record attendance point effect */
+  /* [FIX 175] minutes stayed past the shift end (overtime extension).
+     Night shifts cross midnight: if the end is before the start, both the
+     end and any time-out earlier than the start belong to the next day. */
+  function extensionMinutes(f, a) {
+    if (typeof a.ext_min === 'number' && a.ext_min >= 0) return a.ext_min;
+    const r0 = window.resolveStaff ? resolveStaff(f, a.staff) : null;
+    const st = staffRoster(f).find(r => r.name === (r0 ? r0.name : a.staff));
+    const end = st && (st.end_time || ({ day: '18:00', night: '06:00' })[st.shift]);
+    if (!a.out_at || !st || !end) return null; /* split/flex need an explicit end */
+    const p = v => String(v).split(':').map(Number);
+    const o = p(a.out_at), e = p(end);
+    let outM = o[0] * 60 + (o[1] || 0), endM = e[0] * 60 + (e[1] || 0);
+    if (st.start_time) {
+      const t = p(st.start_time), sM = t[0] * 60 + (t[1] || 0);
+      if (endM <= sM) { if (outM <= sM) outM += 1440; endM += 1440; }
+    }
+    const d = outM - endM;
+    return d > 0 ? d : 0;
+  }
+  window.arsExtensionMinutes = extensionMinutes;
+
+  /* [FIX 174/175] transparent per-record attendance point effect:
+     late −1/hr · absent −3 · early-in +0.25 · early-out w/o work −1 ·
+     cancelled day-off +1 · EXTENSION +1/hr stayed past shift end */
   function attPoints(f, a) {
+    let base;
     if (a.status === 'late') {
       const m = lateMinutes(f, a);
-      if (m == null) return { pts: -1, detail: 'late (no time-in recorded) −1' };
-      const pts = -Math.round((m / 60) * 100) / 100; /* −1 pt per hour, prorated */
-      return { pts, detail: 'late ' + Math.floor(m / 60) + 'h ' + (m % 60) + 'm → ' + pts };
+      if (m == null) base = { pts: -1, detail: 'late (no time-in recorded) −1' };
+      else {
+        const pts = -Math.round((m / 60) * 100) / 100; /* −1 pt per hour, prorated */
+        base = { pts, detail: 'late ' + Math.floor(m / 60) + 'h ' + (m % 60) + 'm → ' + pts };
+      }
     }
-    if (a.status === 'absent') return { pts: -3, detail: 'absent −3' };
-    if (a.status === 'early_in') return { pts: 0.25, detail: 'early-in +0.25' };
-    if (a.status === 'early_out_notdone') return { pts: -1, detail: 'early-out w/o work −1' };
-    if (a.status === 'cancelled_day_off') return { pts: 1, detail: 'cancelled day-off +1' };
-    return { pts: 0, detail: ATT_STATUS[a.status] ? ATT_STATUS[a.status][0] : (a.status || '') };
+    else if (a.status === 'absent') base = { pts: -3, detail: 'absent −3' };
+    else if (a.status === 'early_in') base = { pts: 0.25, detail: 'early-in +0.25' };
+    else if (a.status === 'early_out_notdone') base = { pts: -1, detail: 'early-out w/o work −1' };
+    else if (a.status === 'cancelled_day_off') base = { pts: 1, detail: 'cancelled day-off +1' };
+    else base = { pts: 0, detail: ATT_STATUS[a.status] ? ATT_STATUS[a.status][0] : (a.status || '') };
+    const em = extensionMinutes(f, a);
+    if (em != null && em > 15) {
+      const b = Math.round((em / 60) * 100) / 100; /* +1 pt per hour extended */
+      return { pts: Math.round((base.pts + b) * 100) / 100, ext: em, detail: base.detail + ' · extended ' + Math.floor(em / 60) + 'h ' + (em % 60) + 'm → +' + b };
+    }
+    return base;
   }
   window.arsAttPoints = attPoints;
   window.arsLateMinutes = lateMinutes;
@@ -604,12 +637,12 @@
     document.getElementById('attModal')?.remove();
     document.body.insertAdjacentHTML('beforeend', `<div class="due-modal-bg open" id="attModal" style="z-index:99999999!important" onclick="if(event.target===this)this.remove()">
       <div class="reminder-modal" style="max-width:600px;width:96%;text-align:left">
-        <div class="modal-top"><div><div class="eyebrow" style="color:#ffd98a;letter-spacing:.12em;font-weight:800">🕐 ATTENDANCE LEDGER</div><h2>Daily time discipline</h2><small class="muted">Late −1 pt/hr · Early-in +0.25 · Early-out w/o work −1 · Absent −3 · Cancelled day-off +1 · Day-off neutral (keeps streak)</small></div><button class="close-reminder" onclick="document.getElementById('attModal').remove()">×</button></div>
+        <div class="modal-top"><div><div class="eyebrow" style="color:#ffd98a;letter-spacing:.12em;font-weight:800">🕐 ATTENDANCE LEDGER</div><h2>Daily time discipline</h2><small class="muted">Late −1 pt/hr · Extension +1 pt/hr · Early-in +0.25 · Early-out w/o work −1 · Absent −3 · Cancelled day-off +1 · Day-off neutral (keeps streak)</small></div><button class="close-reminder" onclick="document.getElementById('attModal').remove()">×</button></div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
           <input type="date" value="${date}" onchange="window.__attDate=this.value;openAttendance()">
         </div>
         ${recs.map(a => { const ap = attPoints(f, a); const lm = a.status === 'late' ? lateMinutes(f, a) : null; return `<div class="wo-row"><div class="wo-row-top"><b>${esc(a.staff)}</b><span class="wo-pri" style="border-color:#ffd98a55;background:#ffd98a18;color:#ffd98a">${ATT_STATUS[a.status] ? ATT_STATUS[a.status][0] : a.status}</span><span class="wo-pri" style="border-color:${ap.pts < 0 ? '#ff5c6855' : ap.pts > 0 ? '#57d48d55' : '#94a3b855'};background:${ap.pts < 0 ? '#ff5c6818' : ap.pts > 0 ? '#57d48d18' : '#94a3b818'};color:${ap.pts < 0 ? '#ff5c68' : ap.pts > 0 ? '#57d48d' : '#94a3b8'}">${ap.pts > 0 ? '+' : ''}${ap.pts} pts</span></div>
-          <small class="muted">🕒 Time-in ${esc(a.in_at || '—')} · Time-out ${esc(a.out_at || '—')}${lm != null ? ' · ⏰ ' + Math.floor(lm / 60) + 'h ' + (lm % 60) + 'm late' : ''}</small>
+          <small class="muted">🕒 Time-in ${esc(a.in_at || '—')} · Time-out ${esc(a.out_at || '—')}${lm != null ? ' · ⏰ ' + Math.floor(lm / 60) + 'h ' + (lm % 60) + 'm late' : ''}${ap.ext ? ' · 🌙 extended ' + Math.floor(ap.ext / 60) + 'h ' + (ap.ext % 60) + 'm' : ''}</small>
           ${a.note ? `<small class="muted">${esc(a.note)}</small>` : ''}
           <div class="wo-actions"><button class="btn ghost small" onclick="attEdit('${esc(a.id)}')">✎ Edit</button><button class="btn ghost small delete-action" onclick="attDelete('${esc(a.id)}')">🗑</button></div></div>`; }).join('') || '<small class="muted">No attendance records for this date.</small>'}
         <form onsubmit="attSave(event)" style="margin-top:10px;border-top:1px dashed var(--line);padding-top:10px">
@@ -743,7 +776,8 @@
     L.push({ t: clean(' Points: ' + woPtsFmt(r.pts)) });
     L.push({ t: clean(' On-time: ' + Math.round(r.onT * 100) + '%  Verified: ' + Math.round(r.ver * 100) + '%') });
     if (r.att) L.push({ t: clean(' Attendance: late ' + r.att.late + ' · absent ' + (r.att.absent || 0) + ' · early-in ' + r.att.earlyIn + ' · early-out(no work) ' + r.att.eon + ' · day-off ' + r.att.off + ' · cancel-off ' + r.att.coff) });
-    if (r.att && r.att.attPts) L.push({ t: clean(' Attendance adj: ' + (r.att.attPts > 0 ? '+' : '') + r.att.attPts + ' pts (late -1 per hr, absent -3)') });
+    if (r.att && r.att.attPts) L.push({ t: clean(' Attendance adj: ' + (r.att.attPts > 0 ? '+' : '') + r.att.attPts + ' pts (late -1/hr, absent -3, extend +1/hr)') });
+    if (r.att && r.att.ext) L.push({ t: clean(' Extended duty: ' + r.att.ext + ' shift(s) stayed past end') });
     L.push({ t: clean(' Closed WOs: ' + r.closed + '  Streak: ' + r.streak + 'd') });
     L.push({ t: clean(' Share: ' + (r.share * 100).toFixed(1) + '% of P' + (+st.budget).toLocaleString('en-PH')) });
     L.push({ t: sep });
@@ -769,7 +803,7 @@
     L.push({ t: clean('Budget P' + (+st.budget).toLocaleString('en-PH') + ' / ' + N + ' staff'), b: 1 });
     L.push({ t: sep });
     scored.forEach(r => { L.push({ t: clean(r.name), b: 1 }); L.push({ t: clean('  pts ' + woPtsFmt(r.pts) + ' onT ' + Math.round(r.onT * 100) + '% ver ' + Math.round(r.ver * 100) + '%') });
-      if (r.att) L.push({ t: clean('  att: L' + r.att.late + ' ABS' + (r.att.absent || 0) + ' EI' + r.att.earlyIn + ' EO' + r.att.eon + ' off' + r.att.off + ' adj' + (r.att.attPts || 0)) }); L.push({ t: clean('  share ' + (r.share * 100).toFixed(1) + '%  =  P' + r.peso.toLocaleString('en-PH')), b: 1 }); });
+      if (r.att) L.push({ t: clean('  att: L' + r.att.late + ' ABS' + (r.att.absent || 0) + ' EI' + r.att.earlyIn + ' EO' + r.att.eon + ' off' + r.att.off + (r.att.ext ? ' EXT' + r.att.ext : '') + ' adj' + (r.att.attPts || 0)) }); L.push({ t: clean('  share ' + (r.share * 100).toFixed(1) + '%  =  P' + r.peso.toLocaleString('en-PH')), b: 1 }); });
     L.push({ t: sep });
     L.push({ t: clean('TOTAL: P' + scored.reduce((a, r) => a + r.peso, 0).toLocaleString('en-PH')) });
     L.push({ t: ctr('Formula: equal%+perf% (60/20/20)'), c: 1 });
@@ -852,7 +886,9 @@
       const who = r0 ? r0.name : (a.staff || 'Unassigned');
       const s = map[who] || (map[who] = { name: who, shift: r0 ? r0.shift : '', hours: r0 ? r0.hours : '', pts: 0, closed: 0, onTime: 0, late: 0, reopened: 0, verified: 0, heavy: 0, openPts: 0, perDay: {} });
       s.att = s.att || { late: 0, earlyIn: 0, eod: 0, eon: 0, off: 0, coff: 0, absent: 0, attPts: 0 };
-      s.att.attPts = Math.round((s.att.attPts + attPoints(f, a).pts) * 100) / 100; /* FIX 174 */
+      const apv = attPoints(f, a); /* FIX 174/175 */
+      s.att.attPts = Math.round((s.att.attPts + apv.pts) * 100) / 100;
+      if (apv.ext) s.att.ext = (s.att.ext || 0) + 1;
       if (a.status === 'late') s.att.late++;
       else if (a.status === 'early_in') s.att.earlyIn++;
       else if (a.status === 'early_out_done') s.att.eod++;
@@ -933,7 +969,7 @@
         <div class="dash-section-title" style="margin:14px 0 6px">LEADERBOARD · tap a card for the full profile</div>
         ${rows.map((r, i) => `<div class="wo-row" style="cursor:pointer" onclick="openPerfCenter('${esc(r.name).replace(/'/g, "\\'")}')">
           <div class="wo-row-top"><b>#${i + 1} ${esc(r.name)}</b>${r.shift ? `<span class="wo-pri" style="border-color:#57d48d55;background:#57d48d18;color:#57d48d">${({day:'☀️',night:'🌙',split:'🌓',flex:'🕑'})[r.shift] || '🕑'} ${r.shift}</span>` : ''}<span class="wo-pri" style="border-color:#ffd98a55;background:#ffd98a18;color:#ffd98a">${woPtsFmt(r.pts)} pts</span></div>
-          <div class="wo-row-meta"><span>✔ ${r.closed} closed</span><span>⏱ ${r.closed ? Math.round(r.onTime / r.closed * 100) : 0}% on-time</span><span>🛡 ${r.verified} verified</span><span>↩ ${r.reopened} reopened</span><span>🏋 ${r.heavy} heavy pts</span>${r.att ? `<span>🕐 L${r.att.late} · EI${r.att.earlyIn} · EO${r.att.eon} · ABS${r.att.absent || 0} · ${r.att.attPts > 0 ? '+' : ''}${r.att.attPts || 0} pts</span>` : ''}</div>
+          <div class="wo-row-meta"><span>✔ ${r.closed} closed</span><span>⏱ ${r.closed ? Math.round(r.onTime / r.closed * 100) : 0}% on-time</span><span>🛡 ${r.verified} verified</span><span>↩ ${r.reopened} reopened</span><span>🏋 ${r.heavy} heavy pts</span>${r.att ? `<span>🕐 L${r.att.late} · EI${r.att.earlyIn} · EO${r.att.eon} · ABS${r.att.absent || 0}${r.att.ext ? ' · EXT' + r.att.ext : ''} · ${r.att.attPts > 0 ? '+' : ''}${r.att.attPts || 0} pts</span>` : ''}</div>
           <div style="height:8px;border-radius:5px;background:rgba(145,207,202,.10);margin:6px 0 4px"><div style="width:${Math.round(r.pts / maxPts * 100)}%;height:100%;border-radius:5px;background:linear-gradient(90deg,#13b9ad,#57d48d)"></div></div>
           <div>${staffBadges(r).map(b => `<span class="wo-pri" style="margin-right:6px;border-color:#57d48d55;background:#57d48d18;color:#57d48d">${b[0]} ${b[1]}</span>`).join('') || '<small class="muted">No badges yet this month.</small>'}</div>
         </div>`).join('') || ''}

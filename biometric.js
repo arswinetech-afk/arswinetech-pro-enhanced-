@@ -172,6 +172,9 @@
     }
     if (!rec.out_at) {
       rec.out_at = hm; rec.note = (rec.note || '') + ' · time-out ' + hm + ' via ' + via;
+      /* FIX 175: reward overtime — minutes stayed past the shift end */
+      const extM = (() => { const end = st.end_time || ({ day: '18:00', night: '06:00' })[st.shift]; if (!end) return 0; const q = v => String(v).split(':').map(Number); const [oh, om] = q(hm), [eh, em] = q(end); let oM = oh * 60 + (om || 0), eM = eh * 60 + (em || 0); if (st.start_time) { const [sh, sm] = q(st.start_time); const sM = sh * 60 + (sm || 0); if (eM <= sM) { if (oM <= sM) oM += 1440; eM += 1440; } } return Math.max(0, oM - eM); })();
+      if (extM > 15) { rec.ext_min = extM; rec.note += ' · extended ' + Math.floor(extM / 60) + 'h ' + (extM % 60) + 'm'; }
       if (typeof save === 'function') save();
       try { const fid = window.__arsActiveFarmId || (typeof farmId !== 'undefined' ? farmId : null); if (fid && window.ARSCloud && ARSCloud.upsertCommerceRows) ARSCloud.upsertCommerceRows(fid, [Object.assign({ _et: 'att_rec' }, rec)]).catch(() => {}); } catch (e) {}
       if (window.toast) toast('🏁 TIME-OUT — ' + st.name + ' · ' + hm);
