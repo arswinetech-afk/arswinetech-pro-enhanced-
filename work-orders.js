@@ -88,7 +88,7 @@
       <div class="reminder-modal" style="max-width:720px;width:96%;text-align:left">
         <div class="modal-top"><div><div class="eyebrow" style="color:#f0b64b;letter-spacing:.12em;font-weight:800">📋 WORK ORDER CENTER</div><h2>All work orders</h2><small class="muted">Open first, sorted by due date · tap status to move through the pipeline</small></div><button class="close-reminder" onclick="document.getElementById('woListModal').remove()">×</button></div>
         <div style="display:flex;gap:8px;margin:4px 0 12px;flex-wrap:wrap"><button class="btn" onclick="openWOForm()">＋ Create New W.O.</button><button class="btn ghost" onclick="openPerfCenter()">🏆 Staff Performance</button><button class="btn ghost" onclick="openWoTemplates()">🔁 Daily Templates</button>
-        <button class="btn" style="background:#0e7f6f" onclick="window.arsOpenKiosk && window.arsOpenKiosk()">🕐 Time In/Out (Face/PIN)</button></div>
+        <button class="btn" style="background:#0e7f6f" onclick="window.arsOpenKiosk && window.arsOpenKiosk()">🕐 Time In/Out (Face/PIN)</button><button class="btn ghost" onclick="window.woDedupeTwins()">🧹 Dedupe twins</button></div>
         <div style="margin:0 0 8px"><input id="woSearch" class="search" style="width:100%" placeholder="🔍 Search staff / task / WO id…" oninput="window.woSearchInput(this.value)"></div>
         <div style="display:flex;gap:6px;overflow-x:auto;padding-bottom:8px">${[...new Set(wos(f).map(x => { const r = window.resolveStaff ? resolveStaff(f, x.assignee) : null; return r ? r.name : (x.assignee || '').trim(); }).filter(Boolean))].map(n => `<button type="button" class="wo-pri wo-chip" data-name="${esc(n)}" style="white-space:nowrap;border-color:rgba(145,207,202,.3);background:rgba(145,207,202,.08);color:#c9f5ef" onclick="window.woChipFilter('${esc(n).replace(/'/g, "\'")}')">👤 ${esc(n)}</button>`).join('')}</div>
         <div style="display:flex;gap:6px;overflow-x:auto;padding-bottom:8px">${[['openall','📂 OPEN'],['crit','🚨 CRIT/OVERDUE'],['in_progress','▶ IN PROGRESS'],['pending_review','📋 PENDING REVIEW'],['blocked','⛔ BLOCKED'],['closed7','✔ CLOSED 7D']].map(([k, l]) => `<button type="button" class="wo-pri wo-schip" data-k="${k}" style="white-space:nowrap;border-color:rgba(145,207,202,.3);background:rgba(145,207,202,.08);color:#c9f5ef" onclick="window.woStatusPick('${k}')">${l}</button>`).join('')}</div>
@@ -173,7 +173,7 @@
     if (d.get('repeat') === 'daily') {
       const tpls = Array.isArray(f.woTemplates) ? f.woTemplates : (f.woTemplates = []);
       const tpl = (saved.template_id ? tpls.find(t => t.id === saved.template_id) : null) || tpls.find(t => t.active && normName(t.title) === normName(saved.title) && normName(t.assignee || '') === normName(saved.assignee || '')); /* dedupe: no twin templates */
-      const rec = { id: saved.template_id || 'TPL-' + Date.now().toString(36).toUpperCase(), title: saved.title, details: saved.details, priority: saved.priority, difficulty: saved.difficulty || 'routine', assignee: saved.assignee, location: saved.location, due_time: d.get('due_time') || '18:00', active: true, last_gen: '' };
+      const rec = { id: saved.template_id || 'TPL-' + Date.now().toString(36).toUpperCase(), title: saved.title, details: saved.details, priority: saved.priority, difficulty: saved.difficulty || 'routine', assignee: saved.assignee, location: saved.location, due_time: d.get('due_time') || '18:00', active: true }; /* FIX 177: never reset last_gen on edit — it spawned OPEN twins */
       if (tpl) Object.assign(tpl, rec); else tpls.push(rec);
       saved.template_id = rec.id;
       try { const fid = window.__arsActiveFarmId || (typeof farmId !== 'undefined' ? farmId : null); if (fid && window.ARSCloud && ARSCloud.upsertCommerceRows) ARSCloud.upsertCommerceRows(fid, [Object.assign({ _et: 'wo_template' }, rec)]).catch(() => {}); } catch (e) {}
@@ -452,12 +452,17 @@
 
   /* [FIX 166] RECURRING DAILY TASKS — templates spawn a fresh WO each morning. */
   const localTodayStr = () => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
+  const localDayOf = iso => { const d = new Date(iso); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
   window.arsGenRecurring = function () {
     const f = F0();
     const tpls = Array.isArray(f.woTemplates) ? f.woTemplates : [];
     const today = localTodayStr();
     let created = 0;
+    let touched = 0;
     tpls.filter(t => t.active && t.last_gen !== today).forEach(t => {
+      /* [FIX 177] the flag alone spawned twins after edits — check REAL work orders */
+      const exists = wos(f).some(w => w.template_id === t.id && w.due && localDayOf(w.due) === today);
+      if (exists) { t.last_gen = today; touched++; return; }
       const due = new Date(today + 'T' + (t.due_time || '18:00')).toISOString();
       const wo = { id: 'WO-' + Date.now().toString(36).toUpperCase() + Math.random().toString(36).slice(2, 4).toUpperCase(), title: t.title, details: t.details, priority: t.priority, difficulty: t.difficulty || 'routine', assignee: t.assignee, location: t.location, due, status: 'open', created_at: new Date().toISOString(), template_id: t.id };
       wos(f).unshift(wo);
@@ -465,10 +470,10 @@
       created++;
       arsWOSync([wo]);
     });
-    if (created) {
+    if (created || touched) {
       if (typeof save === 'function') save();
       try { const fid = window.__arsActiveFarmId || (typeof farmId !== 'undefined' ? farmId : null); if (fid && window.ARSCloud && ARSCloud.upsertCommerceRows) ARSCloud.upsertCommerceRows(fid, tpls.map(t => Object.assign({ _et: 'wo_template' }, t))).catch(() => {}); } catch (e) {}
-      if (window.toast) toast('🔁 ' + created + ' daily task' + (created > 1 ? 's' : '') + ' generated for today.');
+      if (created && window.toast) toast('🔁 ' + created + ' daily task' + (created > 1 ? 's' : '') + ' generated for today.');
     }
   };
 
@@ -1051,6 +1056,31 @@
   window.openWOListFiltered = function (k) {
     window.__woStatusFilter = k;
     window.openWOList();
+  };
+  /* [FIX 177] clean up twin WOs spawned by the old flag bug: same template +
+     same local due day = twins; keep the one with the most progress. */
+  window.woDedupeTwins = function () {
+    const f = F0();
+    const groups = {};
+    wos(f).forEach(w => {
+      if (!w.template_id || !w.due) return;
+      const k = w.template_id + '|' + localDayOf(w.due);
+      (groups[k] = groups[k] || []).push(w);
+    });
+    const rank = w => (w.status === 'closed' ? 2 : w.status === 'in_progress' || w.status === 'pending_review' ? 1 : 0);
+    const killed = [];
+    Object.values(groups).forEach(g => {
+      if (g.length < 2) return;
+      g.slice().sort((a, b) => rank(b) - rank(a) || String(a.created_at || '').localeCompare(String(b.created_at || ''))).slice(1).forEach(w => killed.push(w));
+    });
+    if (!killed.length) { toast('ℹ No duplicate twin work orders found.'); return; }
+    if (!confirm('Remove ' + killed.length + ' duplicate twin work order(s)? The copy with progress (started/closed) is kept; the extra OPEN twin is deleted.')) return;
+    f.workOrders = wos(f).filter(w => !killed.includes(w));
+    if (typeof save === 'function') save();
+    killed.forEach(w => { try { const fid = window.__arsActiveFarmId || (typeof farmId !== 'undefined' ? farmId : null); if (fid && window.ARSCloud && ARSCloud.deleteCommerceRow) ARSCloud.deleteCommerceRow(fid, 'work_order', w.id).catch(() => {}); } catch (e) {} });
+    window.openWOList();
+    if (typeof renderAll === 'function') renderAll();
+    toast('🧹 Removed ' + killed.length + ' twin work order(s).');
   };
 
   window.woToggleLine = function (id, idx, on) {
