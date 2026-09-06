@@ -47,12 +47,12 @@
         <button class="btn ghost" onclick="openPerfCenter()">🏆 Staff Performance</button>
       </div></div>
       <div class="wo-grid">
-        <div class="wo-box"><small>TOTAL OPEN WOs</small><b class="${s.open ? 'wo-warn' : ''}">${s.open}</b></div>
-        <div class="wo-box"><small>CRITICAL / OVERDUE</small><b class="${s.criticalOverdue ? 'wo-bad' : ''}">${s.criticalOverdue}</b></div>
-        <div class="wo-box"><small>IN PROGRESS</small><b>${s.inProgress}</b></div>
-        <div class="wo-box"><small>PENDING REVIEW</small><b>${s.pending}</b></div>
-        <div class="wo-box"><small>BLOCKED</small><b class="${s.blocked ? 'wo-bad' : ''}">${s.blocked}</b></div>
-        <div class="wo-box"><small>CLOSED · 7 DAYS</small><b class="wo-ok">${s.closed7}</b></div>
+        <div class="wo-box" style="cursor:pointer" title="Tap to view these work orders" onclick="window.openWOListFiltered('openall')"><small>TOTAL OPEN WOs</small><b class="${s.open ? 'wo-warn' : ''}">${s.open}</b></div>
+        <div class="wo-box" style="cursor:pointer" title="Tap to view these work orders" onclick="window.openWOListFiltered('crit')"><small>CRITICAL / OVERDUE</small><b class="${s.criticalOverdue ? 'wo-bad' : ''}">${s.criticalOverdue}</b></div>
+        <div class="wo-box" style="cursor:pointer" title="Tap to view these work orders" onclick="window.openWOListFiltered('in_progress')"><small>IN PROGRESS</small><b>${s.inProgress}</b></div>
+        <div class="wo-box" style="cursor:pointer" title="Tap to view these work orders" onclick="window.openWOListFiltered('pending_review')"><small>PENDING REVIEW</small><b>${s.pending}</b></div>
+        <div class="wo-box" style="cursor:pointer" title="Tap to view these work orders" onclick="window.openWOListFiltered('blocked')"><small>BLOCKED</small><b class="${s.blocked ? 'wo-bad' : ''}">${s.blocked}</b></div>
+        <div class="wo-box" style="cursor:pointer" title="Tap to view these work orders" onclick="window.openWOListFiltered('closed7')"><small>CLOSED · 7 DAYS</small><b class="wo-ok">${s.closed7}</b></div>
       </div>
       <div class="wo-pris">${chip('critical')}${chip('high')}${chip('medium')}${chip('low')}</div>
       <div class="wo-urgent">
@@ -91,12 +91,13 @@
         <button class="btn" style="background:#0e7f6f" onclick="window.arsOpenKiosk && window.arsOpenKiosk()">🕐 Time In/Out (Face/PIN)</button></div>
         <div style="margin:0 0 8px"><input id="woSearch" class="search" style="width:100%" placeholder="🔍 Search staff / task / WO id…" oninput="window.woSearchInput(this.value)"></div>
         <div style="display:flex;gap:6px;overflow-x:auto;padding-bottom:8px">${[...new Set(wos(f).map(x => { const r = window.resolveStaff ? resolveStaff(f, x.assignee) : null; return r ? r.name : (x.assignee || '').trim(); }).filter(Boolean))].map(n => `<button type="button" class="wo-pri wo-chip" data-name="${esc(n)}" style="white-space:nowrap;border-color:rgba(145,207,202,.3);background:rgba(145,207,202,.08);color:#c9f5ef" onclick="window.woChipFilter('${esc(n).replace(/'/g, "\'")}')">👤 ${esc(n)}</button>`).join('')}</div>
+        <div style="display:flex;gap:6px;overflow-x:auto;padding-bottom:8px">${[['openall','📂 OPEN'],['crit','🚨 CRIT/OVERDUE'],['in_progress','▶ IN PROGRESS'],['pending_review','📋 PENDING REVIEW'],['blocked','⛔ BLOCKED'],['closed7','✔ CLOSED 7D']].map(([k, l]) => `<button type="button" class="wo-pri wo-schip" data-k="${k}" style="white-space:nowrap;border-color:rgba(145,207,202,.3);background:rgba(145,207,202,.08);color:#c9f5ef" onclick="window.woStatusPick('${k}')">${l}</button>`).join('')}</div>
         ${act.length ? act.map(w => {
           const late = w.status !== 'closed' && w.due && new Date(w.due).getTime() < now();
           const exp = woExpanded.has(w.id);
           const rs0 = window.resolveStaff ? resolveStaff(f, w.assignee) : null;
           const sN = rs0 ? rs0.name : (w.assignee || '');
-          return `<div class="wo-row" data-staff="${esc(sN)}" data-q="${esc((w.title + ' ' + (w.id || '') + ' ' + (w.assignee || '') + ' ' + (w.location || '')).toLowerCase())}">
+          return `<div class="wo-row" data-st="${w.status}" data-sec="act" data-crit="${(w.priority === 'critical' || late) ? '1' : '0'}" data-staff="${esc(sN)}" data-q="${esc((w.title + ' ' + (w.id || '') + ' ' + (w.assignee || '') + ' ' + (w.location || '')).toLowerCase())}">
             <div class="wo-row-top"><span class="wo-pri" style="border-color:${PRI[w.priority][1]}55;background:${PRI[w.priority][1]}18;color:${PRI[w.priority][1]}">${PRI[w.priority][0]}</span>${w.template_id ? '<span class="wo-pri" style="border-color:#ffd98a55;background:#ffd98a18;color:#ffd98a">🔁 daily</span>' : ''}<b>${esc(w.title)}</b><small class="muted">${esc(w.id)}</small></div>
             <div class="wo-row-meta"><span>👤 ${esc(w.assignee || 'Unassigned')}</span><span>📍 ${esc(w.location || '—')}</span><span class="${late ? 'wo-bad' : ''}">🗓 ${fmtDue(w.due)}</span><span>Status: <b>${ST[w.status]}</b></span></div>
             <button type="button" class="btn ghost small" style="margin:6px 0 0" onclick="woExpand('${w.id}')">${exp ? '▴ Collapse' : '▾ Expand'}</button>
@@ -117,10 +118,11 @@
             </div>
           </div>`;
         }).join('') : (list.length ? '<small class="muted" style="display:block;padding:6px 0">All current tasks are in the closed history below.</small>' : '<div class="empty" style="padding:20px">No work orders yet — create the first one for your team.</div>')}
-        ${hist.length ? `<button type="button" class="btn ghost small" style="margin:12px 0 6px" onclick="const el=document.getElementById('woHistoryWrap');el.style.display=el.style.display==='none'?'':'none';this.textContent=el.style.display==='none'?'📚 Show closed history (${hist.length})':'📚 Hide closed history'">📚 Show closed history (${hist.length})</button><div id="woHistoryWrap" style="display:none">${hist.map(hh => { const r0 = window.resolveStaff ? resolveStaff(f, hh.assignee) : null; const hN = r0 ? r0.name : (hh.assignee || ''); return `<div class="wo-row" data-staff="${esc(hN)}" data-q="${esc((hh.title + ' ' + (hh.id || '') + ' ' + (hh.assignee || '')).toLowerCase())}"><div class="wo-row-top"><span class="wo-pri" style="border-color:#57d48d55;background:#57d48d18;color:#57d48d">✔ CLOSED</span><b>${esc(hh.title)}</b><small class="muted">${esc(hh.id)}</small></div><div class="wo-row-meta"><span>👤 ${esc(hh.assignee || '—')}</span><span>🗓 ${fmtDue(hh.due)}</span><span>🏅 ${woPtsFmt(woPoints(hh).total)} pts</span></div></div>`; }).join('')}</div>` : ''}
+        ${hist.length ? `<button type="button" class="btn ghost small" style="margin:12px 0 6px" onclick="const el=document.getElementById('woHistoryWrap');el.style.display=el.style.display==='none'?'':'none';this.textContent=el.style.display==='none'?'📚 Show closed history (${hist.length})':'📚 Hide closed history'">📚 Show closed history (${hist.length})</button><div id="woHistoryWrap" style="display:none">${hist.map(hh => { const r0 = window.resolveStaff ? resolveStaff(f, hh.assignee) : null; const hN = r0 ? r0.name : (hh.assignee || ''); return `<div class="wo-row" data-st="closed" data-sec="hist" data-crit="0" data-staff="${esc(hN)}" data-q="${esc((hh.title + ' ' + (hh.id || '') + ' ' + (hh.assignee || '')).toLowerCase())}"><div class="wo-row-top"><span class="wo-pri" style="border-color:#57d48d55;background:#57d48d18;color:#57d48d">✔ CLOSED</span><b>${esc(hh.title)}</b><small class="muted">${esc(hh.id)}</small></div><div class="wo-row-meta"><span>👤 ${esc(hh.assignee || '—')}</span><span>🗓 ${fmtDue(hh.due)}</span><span>🏅 ${woPtsFmt(woPoints(hh).total)} pts</span></div></div>`; }).join('')}</div>` : ''}
       </div></div>`);
     if (window.__woStaff) { const si = document.getElementById('woSearch'); if (si) si.value = window.__woStaff; }
     window.woPaintChips();
+    window.woPaintStatusChips();
     window.woFilterList((document.getElementById('woSearch') || {}).value || '');
   };
 
@@ -1007,9 +1009,17 @@
   window.woFilterList = function (term) {
     const t = String(term || '').toLowerCase().trim();
     const s = (window.__woStaff || '').toLowerCase();
+    const sf = window.__woStatusFilter || ''; /* FIX 176: dashboard card bucket */
     document.querySelectorAll('#woListModal .wo-row').forEach(row => {
       let ok = true;
-      if (s) ok = (row.getAttribute('data-staff') || '').toLowerCase() === s;
+      if (sf) {
+        const st = row.getAttribute('data-st') || '', sec = row.getAttribute('data-sec') || '';
+        ok = sf === 'openall' ? st !== 'closed'
+          : sf === 'crit' ? (row.getAttribute('data-crit') === '1' && st !== 'closed')
+          : sf === 'closed7' ? (st === 'closed' && sec === 'act')
+          : st === sf;
+      }
+      if (ok && s) ok = (row.getAttribute('data-staff') || '').toLowerCase() === s;
       if (ok && t) ok = (row.getAttribute('data-q') || '').includes(t);
       row.style.display = ok ? '' : 'none';
     });
@@ -1022,6 +1032,25 @@
     if (inp) inp.value = on ? '' : n;
     window.woPaintChips();
     window.woFilterList(inp ? inp.value : '');
+  };
+  /* [FIX 176] dashboard cards open the list pre-filtered to their bucket */
+  window.woPaintStatusChips = function () {
+    const k = window.__woStatusFilter || '';
+    document.querySelectorAll('#woListModal .wo-schip').forEach(c => {
+      const on = c.getAttribute('data-k') === k;
+      c.style.background = on ? '#0e7f6f' : 'rgba(145,207,202,.08)';
+      c.style.color = on ? '#fff' : '#c9f5ef';
+      c.style.borderColor = on ? '#0e7f6f' : 'rgba(145,207,202,.3)';
+    });
+  };
+  window.woStatusPick = function (k) {
+    window.__woStatusFilter = (window.__woStatusFilter === k) ? '' : k;
+    window.woPaintStatusChips();
+    window.woFilterList((document.getElementById('woSearch') || {}).value || '');
+  };
+  window.openWOListFiltered = function (k) {
+    window.__woStatusFilter = k;
+    window.openWOList();
   };
 
   window.woToggleLine = function (id, idx, on) {
