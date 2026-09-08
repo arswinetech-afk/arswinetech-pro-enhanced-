@@ -2352,7 +2352,7 @@
   }
 
   function resellerAccountTotals(f, reseller) {
-    const txs = resellerTransactionsFor(f, reseller);
+    const txs = resellerTransactionsFor(f, reseller).filter(tx => !tx.voided); /* FIX 180 */
     const billed = txs.reduce((sum, tx) => sum + Math.max(0, +(tx.total_amount || 0)), 0);
     const discounts = txs.reduce((sum, tx) => sum + resellerTxDiscount(tx), 0);
     const paid = txs.reduce((sum, tx) => sum + Math.max(0, +(tx.paid_amount || 0)), 0);
@@ -2386,13 +2386,15 @@
       pays.push({
         date: String(t.date || t.created_at || '').slice(0, 10),
         amount: Math.max(0, (num(t.amount) || 0)),
-        method: (String(t.description || '').match(/\(([^)]+)\)/) || [])[1] || 'payment'
+        method: (String(t.description || '').match(/\(([^)]+)\)/) || [])[1] || 'payment',
+        id: t.id, src: 'modal' /* FIX 180: editable */
       });
       (t.payment_allocations || []).forEach(a => { allocByTx[a.tx_id] = (allocByTx[a.tx_id] || 0) + (num(a.amount) || 0); });
     });
     resellerTransactionsFor(f, r).forEach(tx => {
+      if (tx.voided) return; /* FIX 180 */
       const initial = Math.max(0, (num(tx.paid_amount) || 0)) - (allocByTx[tx.id] || 0);
-      if (initial > 0.005) pays.push({ date: String(tx.date || tx.timestamp || '').slice(0, 10), amount: initial, method: 'paid at dispatch' });
+      if (initial > 0.005) pays.push({ date: String(tx.date || tx.timestamp || '').slice(0, 10), amount: initial, method: 'paid at dispatch', src: 'dispatch', tx_id: tx.id });
     });
     return pays.sort((a, b) => String(a.date).localeCompare(String(b.date)));
   }
@@ -2411,7 +2413,7 @@
     ensureResellerData();
     const f = F();
     const resellers = f.semenResellers || [];
-    const txs = f.semenResellerTx || [];
+    const txs = (f.semenResellerTx || []).filter(x => !x.voided); /* FIX 180 */
 
     // Calculate Summary Metrics
     const totalDispatched = txs.reduce((acc, tx) => acc + (tx.lines || []).reduce((la, l) => la + (+l.qty || 0), 0), 0);
@@ -2548,6 +2550,7 @@
         <div class="reseller-tx-top">
           <div>
             ${hasReturn ? `<span class="blinking-tag-return">🔄 Returned &amp; Replaced</span> ` : ''}
+            ${tx.voided ? '<span class="blinking-tag-return" style="border-color:#dc2626;color:#dc2626">🚫 VOID</span> ' : ''}
             <b style="color:var(--ink)">Pickup #${escH(tx.id)}</b>
             <small class="muted" style="display:block;margin-top:2px">🗓 ${escH(when)}${tx.notes ? ' · Note: ' + escH(tx.notes) : ''}</small>
             ${tx.sync_status === 'pending' ? '<small class="reseller-sync-pending">☁ Pending cloud verification — safely retained on this device</small>' : ''}
@@ -2581,6 +2584,7 @@
           <button type="button" class="btn ghost small" onclick="openResellerPaymentModal('${r.id}', '${tx.id}')">💰 Payment</button>
           <button type="button" class="btn ghost small" onclick="openEditResellerTxModal('${tx.id}')">✎ Edit</button>
           <button type="button" class="btn ghost small delete-action" onclick="deleteResellerTx('${tx.id}')">🗑 Delete</button>
+          ${tx.voided ? `<button type="button" class="btn ghost small" onclick="arsReinstateResellerTx('${tx.id}')">▶ Reinstate</button>` : `<button type="button" class="btn ghost small" style="border:1px solid #dc262655;color:#fca5a5" onclick="arsVoidResellerTx('${tx.id}')">🚫 Void</button>`}
         </div>
       </div>
     `;
@@ -3527,6 +3531,105 @@
       </div>
     `);
   }
+  /* ═══ [FIX 180] VOID / REINSTATE PICKUPS + EDIT PAYMENTS ═══
+     Void = cancel the sale with an audit trail: totals ignore it, payments
+     tied to it are reversed & voided, the row keeps a 🚫 VOID stamp. */
+  function resellerTxAllocTotal(f, txId) {
+    return (f.transactions || []).reduce((s, t) => s + ((t.payment_allocations || []).filter(a => a.tx_id === txId).reduce((q, a) => q + (num(a.amount) || 0), 0)), 0);
+  }
+  function resellerUiRefresh(rId) {
+    if (typeof save === 'function') save();
+    if (document.getElementById('resellerStatementModal')) window.openResellerStatement && window.openResellerStatement(rId);
+    if (typeof renderAll === 'function') renderAll();
+  }
+  window.arsVoidResellerTx = function (txId) {
+    const f = F(); const tx = (f.semenResellerTx || []).find(x => x.id === txId);
+    if (!tx || tx.voided) return;
+    const reason = prompt('Void pickup #' + txId + '?\nThis cancels the sale, reverses its payments and keeps a VOID stamp for audit.\n\nReason (required):');
+    if (reason === null) return;
+    if (!String(reason).trim()) { toast('⚠ A reason is required to void a pickup.'); return; }
+    tx.void_snapshot = { total_amount: tx.total_amount, paid_amount: tx.paid_amount, discount_amount: tx.discount_amount || 0 }; /* FIX 180: snapshot BEFORE reversing */
+    const voidedPayIds = [];
+    (f.transactions || []).forEach(t => {
+      if (!t || t.reseller_id !== tx.reseller_id || !Array.isArray(t.payment_allocations)) return;
+      const hit = (t.payment_allocations || []).find(a => a.tx_id === tx.id);
+      if (!hit) return;
+      tx.paid_amount = Math.max(0, +(tx.paid_amount || 0) - (num(hit.amount) || 0));
+      t.status = 'voided'; t.void_reason = 'Pickup #' + txId + ' voided: ' + reason; voidedPayIds.push(t.id);
+    });
+    tx.void_payment_ids = voidedPayIds;
+    tx.voided = true; tx.voided_at = new Date().toISOString(); tx.void_reason = String(reason).trim();
+    tx.paid_amount = 0; tx.discount_amount = 0;
+    recalculateResellerTx(tx);
+    resellerUiRefresh(tx.reseller_id);
+    toast('🚫 Pickup #' + txId + ' voided.' + (voidedPayIds.length ? ' ' + voidedPayIds.length + ' payment(s) reversed.' : ''));
+  };
+  window.arsReinstateResellerTx = function (txId) {
+    const f = F(); const tx = (f.semenResellerTx || []).find(x => x.id === txId);
+    if (!tx || !tx.voided) return;
+    if (!confirm('Reinstate pickup #' + txId + '? It returns to the reseller\'s balance exactly as before.')) return;
+    if (tx.void_snapshot) {
+      tx.total_amount = tx.void_snapshot.total_amount;
+      tx.paid_amount = tx.void_snapshot.paid_amount;
+      tx.discount_amount = tx.void_snapshot.discount_amount;
+    }
+    (tx.void_payment_ids || []).forEach(pid => { const t = (f.transactions || []).find(x => x.id === pid); if (t) { delete t.status; delete t.void_reason; } });
+    delete tx.voided; delete tx.voided_at; delete tx.void_snapshot; delete tx.void_payment_ids;
+    recalculateResellerTx(tx);
+    resellerUiRefresh(tx.reseller_id);
+    toast('▶ Pickup #' + txId + ' reinstated.');
+  };
+
+  /* Edit any dated payment: modal payments re-allocate FIFO; dispatch rows
+     adjust the pickup's paid-at-dispatch portion. */
+  window.arsEditResellerPayment = function (resellerId, src, payId, txId) {
+    const f = F(); const r = (f.semenResellers || []).find(x => x.id === resellerId); if (!r) return;
+    let cur = 0, curDate = '';
+    if (src === 'dispatch') {
+      const tx = (f.semenResellerTx || []).find(x => x.id === txId); if (!tx) return;
+      cur = Math.max(0, (num(tx.paid_amount) || 0) - resellerTxAllocTotal(f, txId));
+      curDate = String(tx.date || '').slice(0, 10);
+    } else {
+      const t = (f.transactions || []).find(x => x.id === payId); if (!t) return;
+      cur = num(t.amount) || 0; curDate = String(t.date || '').slice(0, 10);
+    }
+    document.getElementById('resellerPayEditModal')?.remove();
+    document.body.insertAdjacentHTML('beforeend', `<div class="due-modal-bg open" id="resellerPayEditModal" style="z-index:99999999!important" onclick="if(event.target===this)this.remove()">
+      <form class="reminder-modal" style="max-width:420px;width:94%;text-align:left" onsubmit="arsSaveResellerPaymentEdit(event,'${r.id}','${src}','${payId}','${txId}')">
+        <div class="modal-top"><div><div class="eyebrow" style="color:var(--ok);font-weight:800">✎ CORRECT PAYMENT</div><h2>${src === 'dispatch' ? 'Paid at dispatch' : 'Recorded payment'}</h2><small class="muted">${escH(r.name)} · was ${peso(cur)}</small></div><button type="button" class="close-reminder" onclick="document.getElementById('resellerPayEditModal').remove()">×</button></div>
+        <div class="reminder-fields">
+          <div class="field"><label>Correct amount ₱</label><input name="amount" type="number" min="0" step="0.01" value="${cur}" required class="suggest-input"></div>
+          <div class="field"><label>Date</label><input name="date" type="date" value="${curDate}" class="suggest-input"></div>
+        </div>
+        <div class="due-actions"><button type="button" class="btn ghost" onclick="document.getElementById('resellerPayEditModal').remove()">Cancel</button><button class="btn">💾 Save correction</button></div>
+      </form></div>`);
+  };
+  window.arsSaveResellerPaymentEdit = function (ev, resellerId, src, payId, txId) {
+    ev.preventDefault();
+    const f = F(); const r = (f.semenResellers || []).find(x => x.id === resellerId); if (!r) return;
+    const d = new FormData(ev.target);
+    const newAmt = Math.max(0, parseFloat(d.get('amount') || 0) || 0);
+    const newDate = String(d.get('date') || '').slice(0, 10);
+    if (src === 'dispatch') {
+      const tx = (f.semenResellerTx || []).find(x => x.id === txId); if (!tx || tx.voided) return;
+      tx.paid_amount = resellerTxAllocTotal(f, txId) + newAmt;
+      if (newDate) tx.date = newDate;
+      recalculateResellerTx(tx);
+    } else {
+      const t = (f.transactions || []).find(x => x.id === payId); if (!t) return;
+      (t.payment_allocations || []).forEach(a => { const tx = (f.semenResellerTx || []).find(x => x.id === a.tx_id); if (tx && !tx.voided) { tx.paid_amount = Math.max(0, +(tx.paid_amount || 0) - (num(a.amount) || 0)); recalculateResellerTx(tx); } });
+      const account = resellerAccountTotals(f, r);
+      const ordered = sortResellerTransactions(account.txs.filter(tx => resellerTxBalance(tx) > 0));
+      let rem = newAmt; const allocs = [];
+      ordered.forEach(tx => { if (rem <= 0) return; const applied = Math.min(resellerTxBalance(tx), rem); if (applied <= 0) return; tx.paid_amount = (+(tx.paid_amount || 0)) + applied; recalculateResellerTx(tx); rem -= applied; allocs.push({ tx_id: tx.id, amount: applied }); });
+      if (rem > 0.005) { const all = sortResellerTransactions(account.txs); const last = all[all.length - 1]; if (last) { last.paid_amount = (+(last.paid_amount || 0)) + rem; recalculateResellerTx(last); allocs.push({ tx_id: last.id, amount: rem }); rem = 0; } }
+      t.amount = newAmt; if (newDate) t.date = newDate; t.payment_allocations = allocs; t.edited_at = new Date().toISOString();
+    }
+    document.getElementById('resellerPayEditModal')?.remove();
+    resellerUiRefresh(resellerId);
+    toast('✏️ Payment corrected.');
+  };
+
   window.openResellerPaymentModal = openResellerPaymentModal;
 
   window.saveResellerPayment = function(e, resellerId, txId) {
@@ -3892,7 +3995,7 @@
     if (!r) return;
 
     const account = resellerAccountTotals(f, r);
-    const rTxs = sortResellerTransactions(account.txs); /* FIX 179: oldest -> newest */
+    const rTxs = sortResellerTransactions(resellerTransactionsFor(f, r)); /* FIX 180: VOID rows stay visible for audit */
     const rBilled = account.billed;
     const rDiscounts = account.discounts;
     const rPaid = account.paid;
@@ -3926,17 +4029,17 @@
             ${rTxs.map(tx => `
               <div style="font-size:11.5px;padding:4px 0;border-bottom:1px dashed var(--line)">
                 <div style="display:flex;justify-content:space-between">
-                  <span>${fmtDate(tx.date)} · #${escH(tx.id)}</span>
-                  <b>${peso(tx.total_amount)}</b>
+                  <span>${tx.voided ? '<b style="color:#dc2626">🚫 VOID</b> · ' : ''}${fmtDate(tx.date)} · #${escH(tx.id)}</span>
+                  <b style="${tx.voided ? 'text-decoration:line-through;opacity:.6' : ''}">${peso(tx.voided && tx.void_snapshot ? tx.void_snapshot.total_amount : tx.total_amount)}</b>
                 </div>
                 ${resellerTxDiscount(tx) > 0 ? `<small style="display:block;color:var(--ok)">Discount / readjustment: −${peso(resellerTxDiscount(tx))}</small>` : ''}
-                <small class="muted">Paid to date: ${peso(tx.paid_amount || 0)} · Bal: ${peso(resellerTxBalance(tx))}</small>
+                <small class="muted">Paid to date: ${peso(tx.voided && tx.void_snapshot ? tx.void_snapshot.paid_amount : (tx.paid_amount || 0))} · Bal: ${peso(tx.voided ? 0 : resellerTxBalance(tx))}${tx.void_reason ? ' · Reason: ' + escH(tx.void_reason) : ''}</small>
               </div>
             `).join('') || '<p class="muted">No transactions on file.</p>'}
 
             ${(() => { /* [FIX 95] actual dated payments section */
               const pays = resellerPaymentHistory(f, r);
-              return pays.length ? `<div class="rc-rule"></div><div style="font-size:11px;font-weight:bold;margin-bottom:6px">PAYMENTS RECEIVED (ACTUAL DATES):</div>${pays.map(p => `<div style="font-size:11.5px;padding:4px 0;border-bottom:1px dashed var(--line)"><div style="display:flex;justify-content:space-between"><span>${fmtDate(p.date)} · ${escH(p.method)}</span><b style="color:var(--ok)">${peso(p.amount)}</b></div></div>`).join('')}` : '';
+              return pays.length ? `<div class="rc-rule"></div><div style="font-size:11px;font-weight:bold;margin-bottom:6px">PAYMENTS RECEIVED (ACTUAL DATES):</div>${pays.map(p => `<div style="font-size:11.5px;padding:4px 0;border-bottom:1px dashed var(--line)"><div style="display:flex;justify-content:space-between"><span>${fmtDate(p.date)} · ${escH(p.method)}</span><b style="color:var(--ok)">${peso(p.amount)}</b></div><div class="no-print" style="text-align:right;margin-top:2px"><button type="button" class="btn ghost small" style="padding:2px 8px" onclick="arsEditResellerPayment('${r.id}','${p.src || 'modal'}','${p.id || ''}','${p.tx_id || ''}')">✎ Edit payment</button></div></div>`).join('')}` : '';
             })()}
 
             ${adjustments.length ? `<div class="rc-rule"></div><div style="font-size:11px;font-weight:bold;margin-bottom:6px">DISCOUNTS / READJUSTMENTS:</div>${adjustments.map(adj => `<div style="font-size:11.5px;padding:4px 0;border-bottom:1px dashed var(--line)"><div style="display:flex;justify-content:space-between"><span>${fmtDate(adj.date)} · ${escH(adj.type === 'discount_readjustment' ? 'Discount / Readjustment' : 'Adjustment')}</span><b style="color:var(--ok)">−${peso(adj.amount)}</b></div><small class="muted">Reason: ${escH(adj.reason || '—')}</small></div>`).join('')}` : ''}
