@@ -2357,12 +2357,12 @@
     const discounts = txs.reduce((sum, tx) => sum + resellerTxDiscount(tx), 0);
     const paid = txs.reduce((sum, tx) => sum + Math.max(0, +(tx.paid_amount || 0)), 0);
     const netBilled = Math.max(0, billed - discounts);
-    /* [FIX 179] an invoice paid beyond its bill (e.g. ₱8,000 on ₱7,250) holds a
-       credit. Outstanding = netBilled − paid, so TOTAL BILLED − TOTAL COLLECTED
-       always equals OUTSTANDING on the statement. */
-    const over = txs.reduce((sm, tx) => sm + Math.max(0, (+(tx.paid_amount || 0) + resellerTxDiscount(tx)) - (+(tx.total_amount || 0))), 0);
+    /* [FIX 181] payments settle the OUTSTANDING BALANCE as a whole (not specific
+       pickups), and discounts/readjustments deduct from it:
+       OUTSTANDING = max(0, NET DUE − COLLECTED). The old overpayment-credit line
+       was removed — it confused more than it explained. */
     const balance = Math.max(0, netBilled - paid);
-    return { txs, billed, discounts, netBilled, paid, balance, over };
+    return { txs, billed, discounts, netBilled, paid, balance };
   }
 
   function sortResellerTransactions(txs) {
@@ -4050,8 +4050,8 @@
               <div style="display:flex;justify-content:space-between"><span>DISCOUNTS / READJUSTMENTS:</span><b style="color:var(--ok)">−${peso(rDiscounts)}</b></div>
               <div style="display:flex;justify-content:space-between"><span>NET AMOUNT DUE:</span><b>${peso(rNetBilled)}</b></div>
               <div style="display:flex;justify-content:space-between"><span>TOTAL COLLECTED:</span><b style="color:var(--ok)">${peso(rPaid)}</b></div>
-              ${account.over > 0 ? `<div style="display:flex;justify-content:space-between"><span>LESS: OVERPAYMENT CREDIT:</span><b style="color:var(--ok)">−${peso(account.over)}</b></div>` : ''}
               <div style="display:flex;justify-content:space-between"><span>OUTSTANDING BALANCE:</span><b style="color:${rBal > 0 ? 'var(--warn)' : 'var(--ok)'}">${peso(rBal)}</b></div>
+              <small class="muted" style="display:block;text-align:right">= NET AMOUNT DUE − TOTAL COLLECTED · discounts already deducted</small>
             </div>
           </div>
 
