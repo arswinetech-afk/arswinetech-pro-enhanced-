@@ -4043,4 +4043,4 @@ function saveFarmProfile(e) {
 window.saveFarmProfile = saveFarmProfile;
 
 /* [FIX 146b] release stamp printed on thermal slips for diagnostics */
-window.ARS_RELEASE = 'v217 (2026-09-07)';
+window.ARS_RELEASE = 'v218 (2026-09-08)';

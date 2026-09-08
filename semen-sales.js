@@ -2356,8 +2356,13 @@
     const billed = txs.reduce((sum, tx) => sum + Math.max(0, +(tx.total_amount || 0)), 0);
     const discounts = txs.reduce((sum, tx) => sum + resellerTxDiscount(tx), 0);
     const paid = txs.reduce((sum, tx) => sum + Math.max(0, +(tx.paid_amount || 0)), 0);
-    const balance = txs.reduce((sum, tx) => sum + resellerTxBalance(tx), 0);
-    return { txs, billed, discounts, netBilled: Math.max(0, billed - discounts), paid, balance };
+    const netBilled = Math.max(0, billed - discounts);
+    /* [FIX 179] an invoice paid beyond its bill (e.g. ₱8,000 on ₱7,250) holds a
+       credit. Outstanding = netBilled − paid, so TOTAL BILLED − TOTAL COLLECTED
+       always equals OUTSTANDING on the statement. */
+    const over = txs.reduce((sm, tx) => sm + Math.max(0, (+(tx.paid_amount || 0) + resellerTxDiscount(tx)) - (+(tx.total_amount || 0))), 0);
+    const balance = Math.max(0, netBilled - paid);
+    return { txs, billed, discounts, netBilled, paid, balance, over };
   }
 
   function sortResellerTransactions(txs) {
@@ -3449,7 +3454,7 @@
     if (!r) { toast('Reseller profile not found.'); return; }
 
     const account = resellerAccountTotals(f, r);
-    const rTxs = account.txs;
+    const rTxs = sortResellerTransactions(account.txs); /* FIX 179: oldest -> newest */
     const rBilled = account.billed;
     const rDiscounts = account.discounts;
     const rPaid = account.paid;
@@ -3887,7 +3892,7 @@
     if (!r) return;
 
     const account = resellerAccountTotals(f, r);
-    const rTxs = account.txs;
+    const rTxs = sortResellerTransactions(account.txs); /* FIX 179: oldest -> newest */
     const rBilled = account.billed;
     const rDiscounts = account.discounts;
     const rPaid = account.paid;
@@ -3898,8 +3903,13 @@
     document.getElementById('resellerStatementModal')?.remove();
 
     document.body.insertAdjacentHTML('beforeend', `
-      <div class="drill-bg" id="resellerStatementModal" style="z-index:9999999!important">
-        <div class="semen-receipt-wrap">
+      <div class="drill-bg" id="resellerStatementModal" style="z-index:9999999!important;display:flex;flex-direction:column;padding:0">
+        <div class="no-print" style="flex:0 0 auto;display:flex;gap:8px;align-items:center;padding:10px 12px;background:rgba(7,22,27,.97);border-bottom:1px solid var(--line)">
+          <button type="button" class="btn ghost small" onclick="document.getElementById('resellerStatementModal').remove()">← Back</button>
+          <b style="flex:1;text-align:center;font-size:13px;color:#e8fffb">📜 ${escH(r.name)} · Balance ${peso(rBal)}</b>
+          <button type="button" class="btn ghost small" onclick="document.getElementById('resellerStatementModal').remove()">✕</button>
+        </div>
+        <div class="semen-receipt-wrap" style="flex:1 1 auto;overflow:auto;width:100%;padding:14px 10px">
           <div class="sale-receipt">
             <div class="rc-farm">${escH(f.name || 'RM\'s Hog Farm')}</div>
             <div class="rc-tag">STATEMENT OF ACCOUNT · RESELLER</div>
@@ -3937,14 +3947,9 @@
               <div style="display:flex;justify-content:space-between"><span>DISCOUNTS / READJUSTMENTS:</span><b style="color:var(--ok)">−${peso(rDiscounts)}</b></div>
               <div style="display:flex;justify-content:space-between"><span>NET AMOUNT DUE:</span><b>${peso(rNetBilled)}</b></div>
               <div style="display:flex;justify-content:space-between"><span>TOTAL COLLECTED:</span><b style="color:var(--ok)">${peso(rPaid)}</b></div>
+              ${account.over > 0 ? `<div style="display:flex;justify-content:space-between"><span>LESS: OVERPAYMENT CREDIT:</span><b style="color:var(--ok)">−${peso(account.over)}</b></div>` : ''}
               <div style="display:flex;justify-content:space-between"><span>OUTSTANDING BALANCE:</span><b style="color:${rBal > 0 ? 'var(--warn)' : 'var(--ok)'}">${peso(rBal)}</b></div>
             </div>
-          </div>
-
-          <div class="due-actions no-print" style="justify-content:center;margin-top:14px">
-            <button type="button" class="btn ghost" onclick="document.getElementById('resellerStatementModal').remove()">Close</button>
-            <button type="button" class="btn ghost" onclick="window.print()">🖨 Print / PDF</button>
-            <button type="button" class="btn" style="background:#0ea5e9;color:#fff" onclick="window.btPrintResellerStatement('${r.id}')">📶 Print via Bluetooth</button>
           </div>
 
           <!-- DIRECT BLUETOOTH PRINTER CONTROL PANEL -->
@@ -3958,6 +3963,11 @@
             </div>
             <p class="rc-hint" style="margin:0">💡 Connects directly to 58mm BLE POS thermal printers to stream this statement.</p>
           </div>
+        </div>
+        <div class="no-print" style="flex:0 0 auto;display:flex;gap:8px;justify-content:center;flex-wrap:wrap;padding:10px 12px;background:rgba(7,22,27,.97);border-top:1px solid var(--line)">
+          <button type="button" class="btn ghost" onclick="document.getElementById('resellerStatementModal').remove()">← Back</button>
+          <button type="button" class="btn ghost" onclick="window.print()">🖨 Print / PDF</button>
+          <button type="button" class="btn" style="background:#0ea5e9;color:#fff" onclick="window.btPrintResellerStatement('${r.id}')">📶 Print via Bluetooth</button>
         </div>
       </div>
     `);
@@ -4042,7 +4052,7 @@
     if (window.toast) toast(`🖨 Printing statement for ${r.name} on ${btDev?.name || "Bluetooth POS"}…`);
 
     try {
-      const rTxs = account.txs;
+      const rTxs = sortResellerTransactions(account.txs); /* FIX 179: oldest -> newest */
       const rBilled = account.billed;
       const rDiscounts = account.discounts;
       const rNetBilled = account.netBilled;
