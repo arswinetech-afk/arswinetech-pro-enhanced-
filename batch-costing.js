@@ -152,20 +152,44 @@
     const f = farm() || {};
     let medCost = 0;
     const medRows = [];
+    /* [FIX 183] source of truth = inventory MOVEMENTS — the exact matcher the
+       batch's Medication History uses (ref OR label contains the batch id),
+       because manually-typed batches store animal_ref 'batch:manual'. */
+    const norm = x => String(x == null ? '' : x).toLowerCase().trim();
+    const priceOf = med => med ? (num(med.unit_cost) || num(med.price_per_ml) || num(med.cost_per_ml) || num(med.unit_price) || num(med.price) || num(med.cost)) : 0;
+    const findMed = (id, name) => {
+      const list = f.medicines || [];
+      return list.find(m => m.id === id || m.item_name === name) ||
+        list.find(m => norm(m.item_name) === norm(name)) ||
+        list.find(m => norm(m.item_name) && norm(name) && (norm(m.item_name).includes(norm(name)) || norm(name).includes(norm(m.item_name))));
+    };
+    const seen = new Set();
+    (f.med_movements || []).forEach(v => {
+      if (v.kind !== 'treatment') return;
+      const ref = String(v.animal_ref || ''), label = String(v.animal_label || '');
+      if (!(ref === 'batch:' + b.id || label.includes(b.id))) return;
+      const med = findMed(v.med_id, v.item_name);
+      const qty = Math.abs(num(v.delta)) || (num(v.dose_per_head) * num(v.heads));
+      const unit = priceOf(med);
+      const unitName = (med && med.unit) || v.unit || 'ml';
+      if (v.treatment_id) seen.add(v.treatment_id);
+      const c = unit > 0 && qty > 0 ? unit * qty : 0;
+      if (c > 0) { medCost += c; medRows.push({ label: `${v.item_name} · ${qty} ${unitName} × ${money(unit)}`, cost: c }); }
+      else if (qty > 0) medRows.push({ label: `${v.item_name} · ${qty} ${unitName} — set "Cost per unit" in Medicine Inventory`, cost: 0 });
+    });
+    /* legacy treatment rows that have no movement twin */
     (f.treatments || []).forEach(t => {
-      /* [FIX 182] the inventory saves the category as its LABEL ('Piglet batch'),
-         so the old `=== 'batch'` check never matched and EVERY batch showed ₱0
-         medicines. Accept both forms and price = unit_cost × total units. */
-      const ref = String(t.animal_ref || '');
-      const isBatch = ref === 'batch:' + b.id && (t.category === 'batch' || t.category === 'Piglet batch' || ref.startsWith('batch:'));
-      if (!isBatch) return;
-      const med = (f.medicines || []).find(m => m.id === t.med_id || m.item_name === t.medicine_name || m.item_name === t.medicine);
-      const unitName = (med && med.unit) ? med.unit : 'ml';
-      const qty = num(t.dosage_ml);
-      const unit = med ? num(med.unit_cost) : 0;
-      const c = unit > 0 ? unit * qty : 0;
+      const ref = String(t.animal_ref || ''), label = String(t.animal_label || '');
+      const isBatch = ref === 'batch:' + b.id || label.includes(b.id) ||
+        ((t.category === 'batch' || t.category === 'Piglet batch') && (ref.includes(b.id) || label.includes(b.id)));
+      if (!isBatch || seen.has(t.id)) return;
+      const med = findMed(t.med_id, t.medicine_name || t.medicine);
+      const qty = num(t.dosage_ml) || (num(t.dose_per_head) * num(t.heads));
+      const unit = priceOf(med);
+      const unitName = (med && med.unit) || 'ml';
+      const c = unit > 0 && qty > 0 ? unit * qty : 0;
       if (c > 0) { medCost += c; medRows.push({ label: `${t.medicine_name || t.medicine} · ${qty} ${unitName} × ${money(unit)}`, cost: c }); }
-      else medRows.push({ label: `${t.medicine_name || t.medicine} · ${qty} ${unitName} — set "Cost per unit" in Medicine Inventory`, cost: 0 });
+      else if (qty > 0) medRows.push({ label: `${t.medicine_name || t.medicine} · ${qty} ${unitName} — set "Cost per unit" in Medicine Inventory`, cost: 0 });
     });
     let direct = 0;
     const directRows = [];
