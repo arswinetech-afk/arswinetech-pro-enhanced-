@@ -156,6 +156,7 @@
        batch's Medication History uses (ref OR label contains the batch id),
        because manually-typed batches store animal_ref 'batch:manual'. */
     const norm = x => String(x == null ? '' : x).toLowerCase().trim();
+    const unitFmt = v => '₱' + (Math.round(num(v) * 100) / 100).toLocaleString('en-PH', { maximumFractionDigits: 2 }); /* FIX 184: exact unit price, no misleading rounding */
     const priceOf = med => med ? (num(med.unit_cost) || num(med.price_per_ml) || num(med.cost_per_ml) || num(med.unit_price) || num(med.price) || num(med.cost)) : 0;
     const findMed = (id, name) => {
       const list = f.medicines || [];
@@ -174,7 +175,7 @@
       const unitName = (med && med.unit) || v.unit || 'ml';
       if (v.treatment_id) seen.add(v.treatment_id);
       const c = unit > 0 && qty > 0 ? unit * qty : 0;
-      if (c > 0) { medCost += c; medRows.push({ label: `${v.item_name} · ${qty} ${unitName} × ${money(unit)}`, cost: c }); }
+      if (c > 0) { medCost += c; medRows.push({ label: `${v.item_name} · ${qty} ${unitName} × ${unitFmt(unit)}`, cost: c }); }
       else if (qty > 0) medRows.push({ label: `${v.item_name} · ${qty} ${unitName} — set "Cost per unit" in Medicine Inventory`, cost: 0 });
     });
     /* legacy treatment rows that have no movement twin */
@@ -188,7 +189,7 @@
       const unit = priceOf(med);
       const unitName = (med && med.unit) || 'ml';
       const c = unit > 0 && qty > 0 ? unit * qty : 0;
-      if (c > 0) { medCost += c; medRows.push({ label: `${t.medicine_name || t.medicine} · ${qty} ${unitName} × ${money(unit)}`, cost: c }); }
+      if (c > 0) { medCost += c; medRows.push({ label: `${t.medicine_name || t.medicine} · ${qty} ${unitName} × ${unitFmt(unit)}`, cost: c }); }
       else if (qty > 0) medRows.push({ label: `${t.medicine_name || t.medicine} · ${qty} ${unitName} — set "Cost per unit" in Medicine Inventory`, cost: 0 });
     });
     let direct = 0;
