@@ -5987,9 +5987,12 @@ html, body, .shell, .main {
 .bc-panel .bc-tags{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
 .bc-panel .bc-tags .tag{font-size:10.5px;white-space:normal;text-align:left}
 .bc-panel .table-wrap{display:block;max-width:100%;overflow-x:auto;margin:6px 0}
-.bc-panel table.table{min-width:400px;width:100%;font-size:12px}
+.bc-panel table.table{min-width:340px;width:100%;font-size:12px}
 .bc-panel table.table th{padding:7px 9px;white-space:nowrap}
-.bc-panel table.table td{padding:7px 9px;white-space:normal;word-break:break-word}
+.bc-panel table.table th:last-child{text-align:right}
+/* [FIX 184] money cells never wrap mid-number; labels wrap instead */
+.bc-panel table.table td{padding:7px 9px;white-space:normal;word-break:normal;overflow-wrap:break-word}
+.bc-panel table.table td:last-child{white-space:nowrap;text-align:right;font-variant-numeric:tabular-nums}
 .bc-panel small{display:block;margin-top:4px}
 #batchCostPanel,#priceFeedbackBox,#editBatchCostPanel{min-width:0;max-width:100%}
 .reminder-fields>.field,.reminder-fields>.field.full,.res-lines-box{min-width:0;max-width:100%}
