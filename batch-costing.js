@@ -153,14 +153,19 @@
     let medCost = 0;
     const medRows = [];
     (f.treatments || []).forEach(t => {
-      const isBatch = t.category === 'batch' && String(t.animal_ref || '') === 'batch:' + b.id;
-      const sowOrOther = false;
-      if (!isBatch && sowOrOther) return;
+      /* [FIX 182] the inventory saves the category as its LABEL ('Piglet batch'),
+         so the old `=== 'batch'` check never matched and EVERY batch showed ₱0
+         medicines. Accept both forms and price = unit_cost × total units. */
+      const ref = String(t.animal_ref || '');
+      const isBatch = ref === 'batch:' + b.id && (t.category === 'batch' || t.category === 'Piglet batch' || ref.startsWith('batch:'));
       if (!isBatch) return;
       const med = (f.medicines || []).find(m => m.id === t.med_id || m.item_name === t.medicine_name || m.item_name === t.medicine);
+      const unitName = (med && med.unit) ? med.unit : 'ml';
+      const qty = num(t.dosage_ml);
       const unit = med ? num(med.unit_cost) : 0;
-      const c = unit > 0 ? unit * num(t.dosage_ml) : 0;
-      if (c > 0) { medCost += c; medRows.push({ label: `${t.medicine_name || t.medicine} · ${num(t.dosage_ml)} ml`, cost: c }); }
+      const c = unit > 0 ? unit * qty : 0;
+      if (c > 0) { medCost += c; medRows.push({ label: `${t.medicine_name || t.medicine} · ${qty} ${unitName} × ${money(unit)}`, cost: c }); }
+      else medRows.push({ label: `${t.medicine_name || t.medicine} · ${qty} ${unitName} — set "Cost per unit" in Medicine Inventory`, cost: 0 });
     });
     let direct = 0;
     const directRows = [];
