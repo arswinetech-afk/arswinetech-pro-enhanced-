@@ -81,7 +81,33 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
   const url = new URL(event.request.url);
-  if (url.origin !== self.location.origin) return;
+
+  // ITEM #3: the farm logo now lives in Supabase Storage (cross-origin). Cache
+  // it so staff keep their farm badge while offline. Replaced logos use a new
+  // ?v= URL and therefore cache-miss; the cache stays bounded because these
+  // entries live in CACHE_NAME, which activate() purges on every release.
+  const isCrossOriginLogo =
+    url.origin !== self.location.origin &&
+    url.pathname.includes('/storage/v1/object/public/');
+  if (url.origin !== self.location.origin && !isCrossOriginLogo) return;
+
+  if (isCrossOriginLogo) {
+    event.respondWith(
+      caches.match(event.request).then((cached) => {
+        if (cached) return cached;
+        return fetch(event.request, { mode: 'cors' })
+          .then((response) => {
+            if (response && response.ok) {
+              const copy = response.clone();
+              caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
+            }
+            return response;
+          })
+          .catch(() => cached || new Response('', { status: 504 }));
+      })
+    );
+    return;
+  }
 
   const fromNetworkThenCache = () =>
     fetch(event.request)

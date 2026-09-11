@@ -637,7 +637,13 @@ function save() {
     window.__arsLastSavedFarmById = window.__arsLastSavedFarmById || {};
     window.__arsLastSavedFarmById[activeId] = JSON.parse(JSON.stringify(currentFarm));
   }
-  STORE.setItem('arswine-db-v1', JSON.stringify(DB));
+  // Quota-safe persistence: DB carries the base64 farm logo inline, which can
+  // push this blob past the ~5 MB localStorage limit. An unguarded setItem
+  // throws QuotaExceededError and aborts save() before the cloud push is
+  // scheduled — losing the edit locally. Fall back to a direct write only if
+  // the cloud client (which owns the helper) never loaded.
+  if (window.ARSPersistDbSafely) window.ARSPersistDbSafely();
+  else { try { STORE.setItem('arswine-db-v1', JSON.stringify(DB)); } catch (_) {} }
   deviceWrite(DB);
   // cloud-sync.js schedules a dirty-record push after save(). It is blocked
   // until a verified farm context and cloud baseline are ready.

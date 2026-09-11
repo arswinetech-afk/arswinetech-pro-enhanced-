@@ -237,10 +237,19 @@
     try {
       isSyncingInProgress = true;
       updateSyncIndicator('syncing', 'Refreshing cloud...');
-      const res = await ARSCloud.pullFarm(fId);
+      // Background polls only need to know *whether* the cloud changed. Passing
+      // ifChanged lets the client answer that with a ~200-byte probe and skip
+      // the full farm download (previously every 18s, logo blob included).
+      const res = await ARSCloud.pullFarm(fId, { ifChanged: true });
       lastPullTimestamp = Date.now();
       if (!res || res.success === false) {
         updateSyncIndicator('error', 'Sync blocked', res?.reason || 'Cloud refresh failed; local data was not marked current.');
+        return;
+      }
+      if (res.skipped || res.unchanged) {
+        // Nothing changed remotely: keep the last verified state, and skip the
+        // renderAll() pass that used to rebuild every page section each poll.
+        updateSyncIndicator('synced', 'Synced', `✓ Up to date · ${res.count ?? 0} records, no remote changes.`);
         return;
       }
       if (window.applyCustomLogo) window.applyCustomLogo();

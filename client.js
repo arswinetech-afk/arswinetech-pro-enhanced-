@@ -95,6 +95,31 @@ window.ARSCloud = (() => {
     try { return JSON.parse(JSON.stringify(value)); } catch (_) { return value; }
   }
 
+  /* PERSISTENCE FIX: window.DB carries the base64 farm logo inline, so the
+     serialized blob can pass the ~5 MB localStorage quota. An unguarded
+     setItem throws QuotaExceededError, which aborts the caller's save path and
+     silently loses local persistence. Retry once without the logo blobs (they
+     are kept separately under ars-farm-logo-<farmId>) before giving up. */
+  function persistDbSafely() {
+    if (!window.STORE) return false;
+    try {
+      window.STORE.setItem('arswine-db-v1', JSON.stringify(window.DB));
+      return true;
+    } catch (error) {
+      try {
+        const slim = JSON.parse(JSON.stringify(window.DB || {}));
+        Object.values(slim).forEach((farm) => {
+          if (farm && typeof farm === 'object') { delete farm.logo; delete farm.logo_url; }
+        });
+        window.STORE.setItem('arswine-db-v1', JSON.stringify(slim));
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+  }
+  window.ARSPersistDbSafely = persistDbSafely;
+
   function readPersistedSession() {
     const store = storage();
     let saved = null;
@@ -579,20 +604,55 @@ window.ARSCloud = (() => {
     return window.DB[farmId];
   }
 
-  async function listFarmRows(farmId) {
+  const ROW_SELECT = 'farm_id,entity_type,local_id,payload,updated_at';
+  /* Values safe to inline into a PostgREST `in.(…)` list without quoting.
+     Anything outside this charset falls back to the unscoped read rather than
+     risking a malformed filter. */
+  const SCOPABLE_VALUE = /^[A-Za-z0-9._-]+$/;
+
+  async function listFarmRows(farmId, options = {}) {
     const rows = [];
     let offset = 0;
     let expectedTotal = null;
+    const filters = [`farm_id=eq.${encodeURIComponent(farmId)}`];
+
+    // EGRESS FIX 1: the recurring background pull re-reads every row of the
+    // farm, including the base64 farm-logo blob stored in app_records. A caller
+    // that already holds a logo can exclude it; the baseline pull still asks
+    // for it so a fresh device always receives the image once.
+    (options.excludeEntityTypes || []).forEach((type) => {
+      if (type) filters.push(`entity_type=neq.${encodeURIComponent(type)}`);
+    });
+
+    // EGRESS FIX 2: the write preflight only ever looks up the rows it is about
+    // to write, so it can be narrowed to those keys instead of the whole farm.
+    // The cross-product of the two `in.()` filters is a strict superset of the
+    // exact (entity_type, local_id) pairs in play, so conflict detection sees
+    // every row it saw before — plus a few it ignores.
+    if (options.entityTypes && options.entityTypes.length) {
+      filters.push(`entity_type=in.(${options.entityTypes.map(encodeURIComponent).join(',')})`);
+    }
+    if (options.localIds && options.localIds.length) {
+      filters.push(`local_id=in.(${options.localIds.map(encodeURIComponent).join(',')})`);
+    }
+
     for (let page = 0; page < MAX_PAGES; page++) {
       // The live production table is a legacy app_records table without an id
       // column. The unique farm/entity/local key is sufficient for stable
       // pagination and keeps reads compatible with both schemas.
-      const path = `/rest/v1/app_records?farm_id=eq.${encodeURIComponent(farmId)}&select=farm_id,entity_type,local_id,payload,updated_at&order=entity_type.asc,local_id.asc&limit=${PAGE_SIZE}&offset=${offset}`;
-      const result = await requestWithMeta(path, { headers: { Prefer: 'count=exact' } }, { requireAuth: true });
+      //
+      // EGRESS FIX 3: `Prefer: count=exact` makes Postgres run a full COUNT over
+      // the filtered set. It is only needed on the first page to verify the
+      // read was complete, so later pages now skip it.
+      const wantCount = page === 0;
+      const path = `/rest/v1/app_records?${filters.join('&')}&select=${ROW_SELECT}&order=entity_type.asc,local_id.asc&limit=${PAGE_SIZE}&offset=${offset}`;
+      const result = await requestWithMeta(path, wantCount ? { headers: { Prefer: 'count=exact' } } : {}, { requireAuth: true });
       const batch = Array.isArray(result.body) ? result.body : [];
-      const range = result.response.headers.get('content-range') || '';
-      const totalMatch = range.match(/\/(\d+|\*)$/);
-      if (totalMatch && totalMatch[1] !== '*') expectedTotal = Number(totalMatch[1]);
+      if (wantCount) {
+        const range = result.response.headers.get('content-range') || '';
+        const totalMatch = range.match(/\/(\d+|\*)$/);
+        if (totalMatch && totalMatch[1] !== '*') expectedTotal = Number(totalMatch[1]);
+      }
       rows.push(...batch);
       offset += batch.length;
       if (!batch.length || batch.length < PAGE_SIZE || (expectedTotal !== null && rows.length >= expectedTotal)) break;
@@ -602,6 +662,57 @@ window.ARSCloud = (() => {
     }
     if (rows.length >= MAX_PAGES * PAGE_SIZE) throw new Error('Cloud read exceeded safe pagination limit.');
     return { rows, expectedTotal: expectedTotal ?? rows.length };
+  }
+
+  /* EGRESS FIX 4 — change detector.
+     pullFarm() rebuilds the whole local farm bucket from the cloud (see the
+     `Object.keys(entityMap).forEach` reset below), so it cannot simply request
+     "rows changed since X": a partial row set would wipe every record that did
+     not change. Remote DELETEs would also be invisible to such a query.
+
+     Instead, poll a ~200-byte version probe first. It returns the newest
+     updated_at and the row count for the farm. If both are unchanged since the
+     last verified pull, the full download is skipped entirely. Comparing with
+     strict equality (not `>`) means a row count that drops because another
+     device deleted a record still forces a full reconciliation. */
+  const lastFarmVersion = new Map(); // farmId -> { maxUpdatedAt, total }
+  const lastLogoVersion = new Map(); // farmId -> logo row updated_at last applied
+
+  async function probeFarmVersion(farmId) {
+    const path = `/rest/v1/app_records?farm_id=eq.${encodeURIComponent(farmId)}` +
+      `&select=updated_at&order=updated_at.desc&limit=1`;
+    const result = await requestWithMeta(path, { headers: { Prefer: 'count=exact' } }, { requireAuth: true });
+    const batch = Array.isArray(result.body) ? result.body : [];
+    const range = result.response.headers.get('content-range') || '';
+    const totalMatch = range.match(/\/(\d+|\*)$/);
+    const total = totalMatch && totalMatch[1] !== '*' ? Number(totalMatch[1]) : null;
+
+    // A second, ~150-byte probe for the logo row alone. This lets a device that
+    // already holds a logo detect that ANOTHER device replaced it, so the logo
+    // can be re-fetched on exactly the polls where it changed (and skipped on
+    // the other 99%). Keeps multi-staff logo updates propagating without
+    // re-downloading the blob on every poll.
+    let logoUpdatedAt = null;
+    try {
+      const lr = await requestWithMeta(
+        `/rest/v1/app_records?farm_id=eq.${encodeURIComponent(farmId)}` +
+        `&entity_type=eq.farm_logo&select=updated_at&order=updated_at.desc&limit=1`,
+        {}, { requireAuth: true });
+      const lb = Array.isArray(lr.body) ? lr.body : [];
+      logoUpdatedAt = lb.length ? (lb[0].updated_at || null) : null;
+    } catch (_) { logoUpdatedAt = null; }
+
+    return {
+      maxUpdatedAt: batch.length ? (batch[0].updated_at || null) : null,
+      total,
+      logoUpdatedAt
+    };
+  }
+
+  function sameFarmVersion(a, b) {
+    if (!a || !b) return false;
+    if (a.total === null || b.total === null) return false;
+    return a.total === b.total && String(a.maxUpdatedAt) === String(b.maxUpdatedAt);
   }
 
   function buildRows(farmId, farm, onlyKeys = null) {
@@ -645,10 +756,22 @@ window.ARSCloud = (() => {
     const logoData = farm.logo || farm.logo_url || (window.STORE && STORE.getItem('ars-farm-logo-' + farmId)) || null;
     if (logoData) {
       const key = rowKey(farmId, 'farm_logo', 'logo');
-      if (!onlyKeys || onlyKeys.has(key)) rowsMap.set(key, {
-        farm_id: String(farmId), entity_type: 'farm_logo', local_id: 'logo',
-        payload: { dataUrl: logoData, updated_at: new Date().toISOString() }, updated_by: null
-      });
+      if (!onlyKeys || onlyKeys.has(key)) {
+        // ITEM #3: when the image lives in Storage, sync only the tiny
+        // reference (url+v). Only a raw data: URL still goes in the payload,
+        // preserving the legacy path for projects without the bucket.
+        const ref = (farm.logo_storage && farm.logo_storage.url) ? farm.logo_storage : null;
+        const isDataUrl = String(logoData).startsWith('data:');
+        const payload = ref
+          ? { url: ref.url, v: ref.v || null, updated_at: new Date().toISOString() }
+          : isDataUrl
+            ? { dataUrl: logoData, updated_at: new Date().toISOString() }
+            : { url: logoData, v: ref?.v || null, updated_at: new Date().toISOString() };
+        rowsMap.set(key, {
+          farm_id: String(farmId), entity_type: 'farm_logo', local_id: 'logo',
+          payload, updated_by: null
+        });
+      }
     }
     if (farm.feedPlan && typeof farm.feedPlan === 'object') {
       const key = rowKey(farmId, 'feed_plan', 'config');
@@ -707,7 +830,19 @@ window.ARSCloud = (() => {
     // after this device's baseline, do not overwrite it silently.
     let serverRows;
     try {
-      serverRows = (await listFarmRows(farmId)).rows;
+      // EGRESS FIX 2 (continued): this preflight only ever looks up the rows it
+      // is about to write (see the `serverMap.get(key)` loop below), yet it used
+      // to download the entire farm — including the logo blob — on every save.
+      // Narrow it to the keys actually being written. The (entity_type ×
+      // local_id) cross-product is a superset of the exact pairs in `rows`, so
+      // every row the old full read could have matched is still fetched.
+      const types = [...new Set(rows.map(row => String(row.entity_type)))];
+      const ids = [...new Set(rows.map(row => String(row.local_id)))];
+      const scoppable = rows.length > 0
+        && rows.length <= 150
+        && types.every(v => SCOPABLE_VALUE.test(v))
+        && ids.every(v => SCOPABLE_VALUE.test(v));
+      serverRows = (await listFarmRows(farmId, scoppable ? { entityTypes: types, localIds: ids } : {})).rows;
     } catch (error) {
       return { success: false, reason: `Cloud preflight failed: ${error.message}` };
     }
@@ -756,6 +891,71 @@ window.ARSCloud = (() => {
     }
   }
 
+  /* ── ITEM #3: Supabase Storage-backed farm logos ─────────────────────────
+     The image bytes move out of app_records (a JSONB column) into a Storage
+     bucket. Because several staff devices share one farm, the object path is
+     deterministic per farm (`farm-logos/<farmId>/logo`) so every device reads
+     and writes the SAME object; a `?v=` version token busts caches when the
+     logo is replaced. app_records carries only a ~200-byte reference row
+     `{ url, v, updated_at }`, which is what propagates the change to the other
+     devices through the normal sync.
+
+     Every path degrades gracefully to the legacy base64 row if the bucket or
+     its RLS policy is not yet provisioned, so the app never breaks mid-rollout. */
+  const LOGO_BUCKET = 'farm-logos';
+  const LOGO_MIGRATION_FLAG = (farmId) => `ars-logo-migrated-${farmId}`;
+
+  function logoObjectPath(farmId) {
+    return `${LOGO_BUCKET}/${encodeURIComponent(String(farmId))}/logo`;
+  }
+  function logoPublicUrl(farmId, version) {
+    const base = `${c.url}/storage/v1/object/public/${LOGO_BUCKET}/${encodeURIComponent(String(farmId))}/logo`;
+    return version ? `${base}?v=${encodeURIComponent(version)}` : base;
+  }
+  function dataUrlMeta(dataUrl) {
+    const match = /^data:([^;,]+)?(;base64)?,/.exec(dataUrl || '');
+    const type = (match && match[1]) || 'image/png';
+    const comma = (dataUrl || '').indexOf(',');
+    return { type, data: (dataUrl || '').slice(comma + 1) };
+  }
+  function dataUrlToBlob(dataUrl) {
+    const { type, data } = dataUrlMeta(dataUrl);
+    const bin = (typeof atob === 'function')
+      ? atob(data)
+      : Buffer.from(data, 'base64').toString('binary');
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new Blob([bytes], { type });
+  }
+  function storeLogoSafely(farmId, value) {
+    if (!window.STORE || !value) return;
+    try { window.STORE.setItem('ars-farm-logo-' + farmId, value); } catch (_) {}
+  }
+
+  /* Upload the image bytes to Storage. Returns { url, v } on success or null so
+     the caller can fall back to the legacy base64 row. Never throws. */
+  async function uploadLogoToStorage(farmId, dataUrl) {
+    try {
+      await ensureFreshSession(true);
+      const version = new Date().toISOString();
+      const blob = dataUrlToBlob(dataUrl);
+      const { type } = dataUrlMeta(dataUrl);
+      const res = await rawRequest(`/storage/v1/object/${logoObjectPath(farmId)}`, {
+        method: 'POST',
+        body: blob,
+        headers: {
+          'Content-Type': type,
+          'x-upsert': 'true',
+          'cache-control': 'public, max-age=31536000, immutable'
+        }
+      }, true);
+      if (!res.response.ok) return null;
+      return { url: logoPublicUrl(farmId, version), v: version };
+    } catch (_) {
+      return null;
+    }
+  }
+
   async function saveFarmLogo(farmId, dataUrl) {
     if (!farmId || !dataUrl) return { success: false, reason: 'A farm ID and image are required.' };
     if (window.__arsCloudBaselineReady !== true || window.arsContextReady !== true) {
@@ -763,12 +963,57 @@ window.ARSCloud = (() => {
     }
     const farm = window.DB && window.DB[farmId];
     if (!farm) return { success: false, reason: 'The verified farm bucket is unavailable.' };
+
+    // ITEM #3: put the bytes in Storage and sync only a small reference row.
+    // If Storage is not provisioned for this project, fall back to the legacy
+    // base64 row so the feature keeps working.
+    const uploaded = await uploadLogoToStorage(farmId, dataUrl);
+    if (uploaded) {
+      farm.logo_storage = { url: uploaded.url, v: uploaded.v };
+      farm.logo = uploaded.url;
+      farm.logo_url = uploaded.url;
+      storeLogoSafely(farmId, uploaded.url);
+      if (window.STORE) window.STORE.setItem(LOGO_MIGRATION_FLAG(farmId), uploaded.v);
+    } else {
+      farm.logo = dataUrl;
+      farm.logo_url = dataUrl;
+      delete farm.logo_storage;
+      storeLogoSafely(farmId, dataUrl);
+    }
+
     const key = rowKey(farmId, 'farm_logo', 'logo');
     dirtyVersions.set(key, (dirtyVersions.get(key) || 0) + 1);
     localMutationVersion++;
     const result = await pushFarm(farmId, farm, { dirtyOnly: true });
-    if (result.success && window.STORE) window.STORE.setItem('ars-farm-logo-' + farmId, dataUrl);
-    return result;
+    return result.success
+      ? { ...result, storage: Boolean(uploaded) }
+      : result;
+  }
+
+  /* One-time, per-device migration of a legacy base64 farm_logo row to Storage.
+     Runs in the background after a pull that still returned a dataUrl. Safe
+     across devices: it uploads the same bytes and rewrites the row to the small
+     reference form, which then propagates via normal sync. Idempotent via a
+     localStorage flag and never blocks the pull. */
+  function scheduleLogoMigration(farmId, dataUrl) {
+    if (!dataUrl || !dataUrl.startsWith('data:image/')) return;
+    if (window.STORE && window.STORE.getItem(LOGO_MIGRATION_FLAG(farmId))) return;
+    if (!navigator.onLine || window.__arsCloudBaselineReady !== true) return;
+    setTimeout(async () => {
+      const uploaded = await uploadLogoToStorage(farmId, dataUrl);
+      if (!uploaded) return;
+      const farm = window.DB && window.DB[farmId];
+      if (!farm) return;
+      farm.logo_storage = { url: uploaded.url, v: uploaded.v };
+      farm.logo = uploaded.url;
+      farm.logo_url = uploaded.url;
+      storeLogoSafely(farmId, uploaded.url);
+      if (window.STORE) window.STORE.setItem(LOGO_MIGRATION_FLAG(farmId), uploaded.v);
+      const key = rowKey(farmId, 'farm_logo', 'logo');
+      dirtyVersions.set(key, (dirtyVersions.get(key) || 0) + 1);
+      localMutationVersion++;
+      await pushFarm(farmId, farm, { dirtyOnly: true }).catch(() => {});
+    }, 1500);
   }
 
   async function syncFarmRecord(farmId, entityType, payload) {
@@ -823,6 +1068,32 @@ window.ARSCloud = (() => {
     }
     const readVersion = localMutationVersion;
 
+    // EGRESS FIX 4 (continued): background polls opt in with { ifChanged: true }.
+    // Explicit/user-driven pulls omit it and always do the full, authoritative
+    // read — so no existing caller changes behaviour.
+    let probe = null;
+    let logoExcluded = false;
+    if (options.ifChanged === true) {
+      probe = await probeFarmVersion(farmId);
+      if (sameFarmVersion(lastFarmVersion.get(String(farmId)) || null, probe)) {
+        return {
+          success: true,
+          unchanged: true,
+          skipped: true,
+          count: probe.total,
+          reason: 'No remote changes since the last verified pull.'
+        };
+      }
+      // MULTI-DEVICE: a device that already holds a logo must still learn when
+      // another staff device replaces it. The probe carries the logo row's own
+      // updated_at; we only exclude the logo when it is unchanged AND we have a
+      // local copy. A changed logo (or no local copy) forces it to be fetched.
+      const existing = window.DB && window.DB[String(farmId)];
+      const hasLocalLogo = Boolean(existing && (existing.logo || existing.logo_url));
+      const logoChanged = (probe.logoUpdatedAt ?? null) !== (lastLogoVersion.get(String(farmId)) ?? null);
+      logoExcluded = hasLocalLogo && !logoChanged && options.includeLogo !== true;
+    }
+
     try {
       const f = ensureFarmObject(farmId);
       const localBefore = clone(f);
@@ -835,7 +1106,7 @@ window.ARSCloud = (() => {
         // The app-record pull remains authoritative for records; retain the
         // existing local label only if the farm metadata endpoint is unavailable.
       }
-      const result = await listFarmRows(farmId);
+      const result = await listFarmRows(farmId, logoExcluded ? { excludeEntityTypes: ['farm_logo'] } : {});
       // A local save may happen while the network read is in flight. Re-check
       // before replacing the local bucket so an older response cannot restore
       // a pre-deduction semen quantity (or any other pending edit).
@@ -845,6 +1116,7 @@ window.ARSCloud = (() => {
       const rows = result.rows;
       const bucket = {};
       let pulledLogo = null;
+      let pulledLogoStorage = null;
       let pulledFeedPlan = null;
       let pulledSettings = null;
       const nextVersions = new Map();
@@ -867,7 +1139,19 @@ window.ARSCloud = (() => {
         const key = rowKey(farmId, row.entity_type, row.local_id);
         nextVersions.set(key, { updated_at: row.updated_at || payload.updated_at || row.created_at || null });
 
-        if (row.entity_type === 'farm_logo' && payload.dataUrl) { pulledLogo = payload.dataUrl; return; }
+        // ITEM #3: the logo row is either a small Storage reference ({url,v})
+        // or a legacy base64 blob ({dataUrl}). Both set pulledLogo (the
+        // displayable src); only the legacy form also keeps a big string.
+        if (row.entity_type === 'farm_logo' && (payload.url || payload.dataUrl)) {
+          if (payload.url) {
+            pulledLogo = payload.url;
+            pulledLogoStorage = { url: payload.url, v: payload.v || null };
+          } else {
+            pulledLogo = payload.dataUrl;
+            scheduleLogoMigration(farmId, payload.dataUrl);
+          }
+          return;
+        }
         if (row.entity_type === 'feed_plan') {
           // Keep the canonical config row if an older deployment left an
           // additional feed_plan row behind. Never delete the extra row here;
@@ -898,9 +1182,16 @@ window.ARSCloud = (() => {
       if (pulledLogo) {
         f.logo = pulledLogo;
         f.logo_url = pulledLogo;
+        if (pulledLogoStorage) f.logo_storage = pulledLogoStorage;
+        else delete f.logo_storage;
+      } else if (logoExcluded) {
+        // The logo row was deliberately not requested this cycle, so its absence
+        // says nothing about the cloud. Keep the copy this device already has
+        // rather than deleting a logo that still exists upstream.
       } else {
         delete f.logo;
         delete f.logo_url;
+        delete f.logo_storage;
       }
       if (pulledFeedPlan) f.feedPlan = pulledFeedPlan;
       else delete f.feedPlan;
@@ -914,13 +1205,23 @@ window.ARSCloud = (() => {
         delete f.reminderSettings;
       }
       if (window.STORE) {
-        window.STORE.setItem('arswine-db-v1', JSON.stringify(window.DB));
-        if (pulledLogo) window.STORE.setItem('ars-farm-logo-' + farmId, pulledLogo);
-        else window.STORE.removeItem('ars-farm-logo-' + farmId);
+        persistDbSafely();
+        // storeLogoSafely never throws: a large legacy dataUrl must not be able
+        // to blow the localStorage quota out of a successful pull.
+        if (pulledLogo) storeLogoSafely(farmId, pulledLogo);
+        else if (!logoExcluded) window.STORE.removeItem('ars-farm-logo-' + farmId);
         window.STORE.setItem('ars-last-cloud-sync', new Date().toISOString());
       }
       if (window.deviceWrite) window.deviceWrite(window.DB);
       if (window.sanitizeFarm) window.sanitizeFarm(f);
+
+      // EGRESS FIX 4 (continued): only remember this version once the pull was
+      // actually applied. Recording it earlier would let a failed pull mark the
+      // farm "current" and cause the next poll to skip a read it still needed.
+      if (probe) {
+        lastFarmVersion.set(String(farmId), probe);
+        lastLogoVersion.set(String(farmId), probe.logoUpdatedAt ?? null);
+      }
 
       dirtyKeysForFarm(farmId).forEach(key => dirtyVersions.delete(key));
       Array.from(cloudVersions.keys()).filter(key => key.startsWith(`${farmId}:::`)).forEach(key => cloudVersions.delete(key));
