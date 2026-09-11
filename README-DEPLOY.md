@@ -45,3 +45,11 @@ match `index.html` / `sw.js` (`css/`, `js/`, `supabase/`, `assets/`, `icons/`).
   the app's own service worker handles offline caching.
 * Auth, RLS and all farm data stay in **your** Supabase project — nothing is
   stored on Cloudflare beyond the static files.
+* This source folder is intentionally **flat**. Build the deploy layout with
+  `bash qa/build-deploy-layout.sh` (outputs `dist/`, bumps the service-worker
+  cache name, and fails loudly if any `index.html`/`sw.js` reference is missing).
+* **Optional — farm logos in Storage:** run `qa/supabase-storage-setup.sql` once
+  in the Supabase SQL editor. Logos then live in a `farm-logos` bucket (public
+  read, member-only write) and `app_records` carries only a tiny `{url,v}`
+  reference instead of a base64 blob. The app falls back to the legacy base64
+  row automatically until the bucket exists, so this is safe to apply anytime.
