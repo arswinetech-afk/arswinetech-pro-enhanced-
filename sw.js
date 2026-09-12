@@ -5,7 +5,7 @@
 //     script could run against a brand-new index.html (old JS + new DOM = boot crashes).
 //   • Icons / images / fonts      → cache-first (content rarely changes).
 //   • Bump CACHE_NAME on every release; activate() purges older caches.
-const CACHE_NAME = 'arswinetech-pro-v229-undo-returned-qty-2026-09-12';
+const CACHE_NAME = 'arswinetech-pro-v230-reseller-order-links-2026-09-12';
 const APP_SHELL = [
   './',
   './index.html',
@@ -97,6 +97,11 @@ self.addEventListener('fetch', (event) => {
   /* [FIX 124] sync head probes must always reach the edge live — never
      serve them from the offline cache (stale head = broken sync). */
   if (url.pathname === '/ars-head') return;
+  /* [FIX 188] a reseller's order link is not the app. It must load live (a farm may have
+     paused the link or changed prices a minute ago) and it must never be answered from the
+     farm shell cache — nor fall back to index.html when offline, which would hand a
+     reseller the login screen instead of an honest network error. */
+  if (url.pathname === '/order.html' || url.pathname === '/js/order-page.js') return;
 
   const fromNetworkThenCache = () =>
     fetch(event.request)

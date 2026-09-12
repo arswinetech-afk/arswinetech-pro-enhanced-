@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b1f23">
+<meta name="robots" content="noindex, nofollow">
+<title>Place an order — ARSwineTech</title>
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     [FIX 188] RESELLER ORDER PAGE — public, no login, no account.
+     Opened only from a per-reseller link the farm hands out
+     (Reseller Center → a reseller → 🛒 Order link).
+
+     Deliberately self-contained: its own <style>, not the app's stylesheet, so a
+     future CSS change in the app can never break a reseller's link, and the app's
+     service worker deliberately does not cache this page (see sw.js [FIX 188]).
+
+     It holds no data of its own. Everything comes from three SECURITY DEFINER RPCs
+     installed by supabase/reseller_orders.sql, which are also the only way in:
+       ars_order_shop(text)      → whose link this is
+       ars_order_catalog(text)   → what is on offer, priced from your stock
+       ars_place_order(...)      → the request (prices/quantities re-checked there)
+       ars_order_status(text)    → this link's recent orders, for the status strip
+     ───────────────────────────────────────────────────────────────────────── -->
+<link rel="icon" href="data:,">
+<style>
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:linear-gradient(160deg,#0e2a2e,#071619 65%);color:#eafaf8;min-height:100vh;padding-bottom:104px}
+  .wrap{max-width:620px;margin:0 auto;padding:16px 14px 0}
+  .brand{display:flex;align-items:center;gap:10px;padding:6px 0 2px}
+  .brand .dot{width:34px;height:34px;border-radius:11px;background:#0f8b8d;display:grid;place-items:center;font-size:17px;flex:0 0 auto}
+  .brand small{display:block;font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:#7fb7b1;font-weight:800}
+  .brand b{font-size:16px;letter-spacing:-.2px}
+  .who{margin:14px 0 4px;padding:12px 13px;border-radius:14px;background:rgba(15,62,63,.5);border:1px solid rgba(110,200,255,.22);font-size:13px;line-height:1.5}
+  .who b{font-size:15px}
+  .who span{color:#9dc3bf;display:block;margin-top:3px;font-size:11.5px}
+  h2{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:#7ce8da;margin:20px 0 8px;font-weight:800}
+  .card{display:flex;gap:11px;align-items:center;padding:11px 12px;border-radius:14px;background:rgba(255,255,255,.045);border:1px solid rgba(190,251,244,.14);margin-bottom:9px}
+  .card .pic{width:44px;height:44px;border-radius:12px;flex:0 0 auto;display:grid;place-items:center;font-size:21px;background:linear-gradient(140deg,#12474c,#0a2b2f);border:1px solid rgba(110,200,255,.2)}
+  .card .mid{flex:1 1 auto;min-width:0}
+  .card b{display:block;font-size:14px;letter-spacing:-.2px}
+  .card em{display:block;font-style:normal;font-size:11.5px;color:#9dc3bf;margin-top:2px;overflow-wrap:anywhere}
+  .card .left{display:inline-block;margin-top:4px;font-size:10.5px;font-weight:800;color:#7ce8da;background:rgba(64,220,200,.13);border-radius:99px;padding:2px 8px}
+  .card .left.low{color:#f0b64b;background:rgba(240,182,75,.14)}
+  .qty{flex:0 0 auto;display:flex;align-items:center;gap:6px}
+  .qty button{width:36px;height:36px;border-radius:11px;border:1px solid rgba(190,251,244,.22);background:#0d3237;color:#eafaf8;font-size:19px;line-height:1;font-weight:800;cursor:pointer}
+  .qty button:active{transform:scale(.94)}
+  .qty button:disabled{opacity:.35;cursor:not-allowed}
+  .qty input{width:44px;height:36px;text-align:center;border-radius:11px;border:1px solid rgba(190,251,244,.22);background:#08252a;color:#eafaf8;font-size:15px;font-weight:800}
+  .price{flex:0 0 auto;text-align:right;font-size:12.5px;font-weight:800;color:#b7e9c7}
+  .price small{display:block;font-weight:600;color:#9dc3bf;font-size:10.5px}
+  .field{display:block;margin-top:12px;font-size:11px;font-weight:800;letter-spacing:.04em;color:#9dc3bf;text-transform:uppercase}
+  .field input,.field textarea{width:100%;margin-top:5px;padding:11px 12px;border-radius:12px;border:1px solid rgba(190,251,244,.2);background:#08252a;color:#eafaf8;font-size:15px;font-family:inherit;text-transform:none;letter-spacing:0;font-weight:500}
+  .field textarea{min-height:64px;resize:vertical}
+  .orders{list-style:none;margin:0;padding:0}
+  .orders li{display:flex;justify-content:space-between;gap:8px;align-items:center;padding:9px 11px;border-radius:12px;background:rgba(255,255,255,.04);border:1px solid rgba(190,251,244,.1);margin-bottom:7px;font-size:12.5px}
+  .chip{font-size:10px;font-weight:900;letter-spacing:.06em;text-transform:uppercase;padding:3px 8px;border-radius:99px;white-space:nowrap}
+  .chip.pending{color:#f0b64b;background:rgba(240,182,75,.15)}
+  .chip.accepted{color:#b7e9c7;background:rgba(87,212,141,.14)}
+  .chip.declined{color:#ffbdc3;background:rgba(255,120,130,.14)}
+  .bar{position:fixed;left:0;right:0;bottom:0;padding:11px 14px calc(11px + env(safe-area-inset-bottom));background:rgba(6,20,23,.93);backdrop-filter:blur(10px);border-top:1px solid rgba(110,200,255,.2);display:grid;gap:9px}
+  .bar .row{display:flex;justify-content:space-between;align-items:baseline;gap:10px;font-size:12.5px;color:#9dc3bf}
+  .bar .row b{font-size:19px;color:#eafaf8}
+  .go{width:100%;padding:14px;border-radius:14px;border:0;background:#0f8b8d;color:#04221f;font-size:15.5px;font-weight:900;letter-spacing:.02em;cursor:pointer}
+  .go:disabled{opacity:.45;cursor:not-allowed}
+  .note{font-size:11.5px;color:#9dc3bf;line-height:1.5}
+  .err{padding:12px 13px;border-radius:12px;background:rgba(132,28,42,.34);border:1px solid rgba(255,128,140,.32);color:#ffbdc3;font-size:13px;line-height:1.5;margin:12px 0}
+  .ok{padding:14px;border-radius:14px;background:rgba(23,84,60,.4);border:1px solid rgba(87,212,141,.34);font-size:13px;line-height:1.55;margin:12px 0}
+  .ok h3{margin:0 0 6px;font-size:17px}
+  .sk{height:64px;border-radius:14px;background:rgba(255,255,255,.05);margin-bottom:9px;animation:p 1.1s ease-in-out infinite}
+  @keyframes p{50%{opacity:.45}}
+  [hidden]{display:none!important}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="brand">
+    <div class="dot">🐖</div>
+    <div><small>ARSwinetech · Reseller ordering</small><b id="farmName">Loading…</b></div>
+  </div>
+
+  <div id="shop" class="who" hidden></div>
+  <div id="msg"></div>
+
+  <div id="main" hidden>
+    <h2>Choose your bottles</h2>
+    <div id="list"><div class="sk"></div><div class="sk"></div><div class="sk"></div></div>
+
+    <h2>When &amp; anything we should know</h2>
+    <label class="field">Pick-up date wanted
+      <input type="date" id="needBy" min="">
+    </label>
+    <label class="field">Note for the farm
+      <textarea id="note" maxlength="240" placeholder="e.g. pick up by 8 AM, bring the ice gel box"></textarea>
+    </label>
+
+    <h2>My recent orders</h2>
+    <ul class="orders" id="mine"></ul>
+  </div>
+</div>
+
+<div class="bar" id="bar" hidden>
+  <div class="row"><span id="basket">Nothing picked yet</span><b id="sum">₱0.00</b></div>
+  <button class="go" id="send" disabled>Place order</button>
+  <div class="note" id="hint">Prices are today's batch price and the farm confirms every order — nothing is charged yet.</div>
+</div>
+
+<script src="supabase/config.js"></script>
+<script src="js/order-page.js"></script>
+<script>ArsOrderPage.init();</script>
+</body>
+</html>

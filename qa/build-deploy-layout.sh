@@ -12,7 +12,7 @@ mkdir -p "$OUT/css" "$OUT/supabase" "$OUT/assets" "$OUT/icons"
 rm -rf "$OUT/js"; mkdir -p "$OUT/js"
 
 # root files
-for f in index.html manifest.webmanifest sw.js register-sw.js _headers _worker.js README-DEPLOY.md README-EDGE.md; do
+for f in index.html order.html manifest.webmanifest sw.js register-sw.js _headers _worker.js README-DEPLOY.md README-EDGE.md; do
   cp "$REPO/$f" "$OUT/$f"
 done
 

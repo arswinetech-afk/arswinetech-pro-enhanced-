@@ -8,5 +8,12 @@
 /*.css
   Cache-Control: no-cache, must-revalidate
 
+/* [FIX 188] the reseller order page: the shell must never go stale on a reseller's
+   phone. It holds no data — prices and stock are fetched every time — so a saved copy
+   would only ever show yesterday's catalogue. */
+/order.html
+  Cache-Control: no-cache, must-revalidate
+  X-Robots-Tag: noindex, nofollow
+
 /manifest.webmanifest
   Cache-Control: no-cache, must-revalidate

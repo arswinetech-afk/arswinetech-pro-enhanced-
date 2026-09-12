@@ -41,6 +41,11 @@ window.ARSCloud = (() => {
     semenResellers: 'semen_reseller',
     semenResellerTx: 'semen_reseller_tx',
     semenResellerAdjustments: 'semen_reseller_adjustment',
+    /* [FIX 188] reseller order links (…/order.html?k=token): the link row holds the token,
+       the order row is the reseller's request. Both are plain farm records, so they reach
+       every device on the heartbeat the sync already does — no second transport. */
+    semenResellerOrderLinks: 'semen_reseller_order_link',
+    semenResellerOrders: 'semen_reseller_order',
     feedTrials: 'feed_trial',
     feedOrders: 'feed_order',
     boars: 'boar',

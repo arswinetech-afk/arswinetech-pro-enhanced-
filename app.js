@@ -471,6 +471,8 @@ function sanitizeFarm(f) {
   if (!Array.isArray(f.semenResellers)) f.semenResellers = [];
   if (!Array.isArray(f.semenResellerTx)) f.semenResellerTx = [];
   if (!Array.isArray(f.semenResellerAdjustments)) f.semenResellerAdjustments = [];
+  if (!Array.isArray(f.semenResellerOrders)) f.semenResellerOrders = [];
+  if (!Array.isArray(f.semenResellerOrderLinks)) f.semenResellerOrderLinks = [];
   if (!Array.isArray(f.feedTrials)) f.feedTrials = [];
   if (!Array.isArray(f.feedOrders)) f.feedOrders = [];
   if (!Array.isArray(f.boars)) f.boars = [];

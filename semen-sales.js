@@ -2313,6 +2313,10 @@
     if (!Array.isArray(f.semenResellers)) f.semenResellers = [];
     if (!Array.isArray(f.semenResellerTx)) f.semenResellerTx = [];
     if (!Array.isArray(f.semenResellerAdjustments)) f.semenResellerAdjustments = [];
+    /* [FIX 188] reseller order links and the requests they bring. Plain farm records, so
+       the sync, the backup and the tombstone rules already cover them. */
+    if (!Array.isArray(f.semenResellerOrders)) f.semenResellerOrders = [];
+    if (!Array.isArray(f.semenResellerOrderLinks)) f.semenResellerOrderLinks = [];
 
     // Filter out any tombstoned items. [FIX M9] reservation numbers (and legacy
     // customer names written into the shared list by older builds) never hide a
@@ -2440,7 +2444,7 @@
           <!-- KPI Summary Grid -->
           <div class="reseller-kpi-grid">
             <div class="reseller-kpi-box">
-              <small>Registered Resellers</small>
+              <small>Registered Resellers${resellerOrderBadgeHTML()}</small>
               <b>${resellers.length} Accounts</b>
             </div>
             <div class="reseller-kpi-box">
@@ -2523,6 +2527,7 @@
           <!-- Quick Action Buttons for this Reseller -->
           <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
             <button type="button" class="btn small" onclick="openResellerPickupModal('${r.id}')">＋ Record Pickup</button>
+            <button type="button" class="btn small ghost" onclick="window.arsShowResellerOrderLink('${r.id}')">🛒 Order link</button>
             <button type="button" class="btn small ghost" onclick="openResellerPaymentModal('${r.id}')">💰 Log Payment</button>
             <button type="button" class="btn small ghost" onclick="openResellerStatement('${r.id}')">📜 Statement</button>
             <button type="button" class="btn small ghost" onclick="window.btPrintResellerStatement('${r.id}')">🖨 Print BLE Statement</button>
@@ -2783,6 +2788,11 @@
   /* ── Record Semen Pickup / Consignment Modal ── */
   let activePickupLines = [];
 
+  /* [FIX 188] an accepted order is carried into the pick-up form exactly once: the form
+     prefills from it and the carry is cleared, so a later manual pick-up is never silently
+     dressed up as somebody's order. */
+  let pendingPickupPrefill = null;
+
   function openResellerPickupModal(preResellerId = '') {
     ensureResellerData();
     const f = F();
@@ -2792,6 +2802,9 @@
     activePickupLines = [
       { boar: '', breed: '', semen_batch_no: '', qty: 1, rate: 350, amount: 350 }
     ];
+    if (pendingPickupPrefill && Array.isArray(pendingPickupPrefill.lines) && pendingPickupPrefill.lines.length) {
+      activePickupLines = pendingPickupPrefill.lines.map(l => ({ ...l }));   /* already clamped to today's stock */
+    }
 
     document.getElementById('resellerPickupModal')?.remove();
 
@@ -2805,6 +2818,7 @@
             </div>
             <button type="button" class="close-reminder" onclick="document.getElementById('resellerPickupModal').remove()">×</button>
           </div>
+          ${pickupOrderStripHTML()}
 
           <div class="reminder-fields" style="text-align:left">
             <!-- 1. Select Reseller -->
@@ -2877,6 +2891,17 @@
     `);
 
     renderPickupLines();
+
+    /* [FIX 188] the order's note and wanted date are copied in so the office does not
+       retype them; both stay editable, and saving is still what records anything. */
+    if (pendingPickupPrefill) {
+      const pre = pendingPickupPrefill;
+      const noteEl = document.querySelector('#resellerPickupModal [name="notes"]');
+      if (noteEl && pre.note) noteEl.value = String(pre.note).slice(0, 240);
+      const whenEl = document.getElementById('resellerPickupTime');
+      if (whenEl && /^\d{4}-\d{2}-\d{2}$/.test(String(pre.needBy || ''))) whenEl.value = pre.needBy + 'T12:00';
+      pendingPickupPrefill = null;
+    }
 
     if (preResellerId) {
       const r = (f.semenResellers || []).find(x => x.id === preResellerId);
@@ -4964,4 +4989,458 @@
   window.statementTextLines = statementTextLines;
   window.escPosStatementBytes = escPosStatementBytes;
   
+  /* ═══════════════════════════════════════════════════════════════════════════
+     [FIX 188] RESELLER ORDER LINKS — a reseller places an order from their phone,
+     the farm gets a badge on "Registered Resellers" in this hub.
+
+     Three rules shaped this feature:
+
+     • An order is a REQUEST. It never moves a bottle, a balance or an invoice.
+       Accept re-derives the lines from TODAY's stock (arsResellerOrderPickupLines)
+       and hands them to the existing Record Semen Pickup form, so the office still
+       confirms price and quantity, and saveResellerPickup still validates stock the
+       way it always has.
+     • The public half (order.html + js/order-page.js) holds no rights. It talks to
+       the SECURITY DEFINER RPCs in supabase/reseller_orders.sql, which recompute
+       every price and quantity from your inventory. A tampered page cannot set its
+       own rate — the client sends item keys and counts, nothing else.
+     • Links and orders are ordinary farm records (semenResellerOrderLinks /
+       semenResellerOrders), so they reach every device on the sync heartbeat that
+       already runs, live in the farm backup, and need no key, no second transport
+       and no extra polling.
+
+     Sheets here use this app's own modal shell (.due-modal-bg > .due-modal
+     .reseller-hub-wrap with the hub's inline z-index) — see the note above
+     openResellerReturnReplaceModal for what happens when that is ignored.
+     ═══════════════════════════════════════════════════════════════════════════ */
+
+  /* One honest line above the dispatch form: this pickup came from a reseller's link,
+     and what was changed to fit today's stock. No number here is one the page decided. */
+  function pickupOrderStripHTML() {
+    const pre = pendingPickupPrefill;
+    if (!pre) return '';
+    const asked = (pre.lines || []).length;
+    return `<div class="reseller-settlement-preview" style="margin:12px 0 0">🛒 From <b>${escH(pre.reseller_name || 'a reseller order')}</b>’s order link — ${asked} item${asked === 1 ? '' : 's'}, filled from today's stock at today's price.${pre.shortfall ? ` <b style="color:#f0b64b">Stock moved since they ordered: ${escH(pre.shortfall)}.</b>` : ''} Nothing is recorded until you press Save.</div>`;
+  }
+
+  const ORDER_PENDING = 'pending';
+  const uidToken = () => (window.crypto && crypto.randomUUID)
+    ? crypto.randomUUID()
+    : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+        const r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+      });
+  const orderLinkUrl = token => `${String(location.origin || '').replace(/\/$/, '')}/order.html?k=${encodeURIComponent(token)}`;
+  const orderStatusOf = o => String((o && o.status) || ORDER_PENDING).toLowerCase();
+
+  /* "just now / 8 min ago / 3 h ago / Sep 12" — how long to wait before nudging a
+     reseller is the office's call, so the age has to be readable at a glance. */
+  function orderAgo(iso) {
+    const t = Date.parse(iso || '');
+    if (!t) return '';
+    const mins = Math.round((Date.now() - t) / 60000);
+    if (mins < 1) return 'just now';
+    if (mins < 60) return mins + ' min ago';
+    const hrs = Math.round(mins / 60);
+    if (hrs < 24) return hrs + ' h ago';
+    return new Date(t).toLocaleDateString('en-PH', { month: 'short', day: 'numeric' });
+  }
+
+  function resellerOrderBucket() { ensureResellerData(); return (F().semenResellerOrders || []).slice(); }
+
+  /* The badge counts what nobody has looked at. Marking an order seen is not a
+     decision: it stays pending until Accepted or Declined, so a queue can never be
+     cleared just by acknowledging it. */
+  function unseenResellerOrders() {
+    return resellerOrderBucket().filter(o => orderStatusOf(o) === ORDER_PENDING && !o.seen_at)
+      .sort((a, b) => String(b.placed_at || '').localeCompare(String(a.placed_at || '')));
+  }
+  function pendingResellerOrders() {
+    return resellerOrderBucket().filter(o => orderStatusOf(o) === ORDER_PENDING)
+      .sort((a, b) => String(b.placed_at || '').localeCompare(String(a.placed_at || '')));
+  }
+
+  /* peso() in this app rounds to whole pesos, which is fine on a receipt footer but not
+     when a batch is priced with centavos — an inbox that says ₱351 against a ₱350.50
+     batch is the kind of one-peso drift that ends a month of balancing. Exact here. */
+  const orderMoney = n => {
+    const v = +n || 0;
+    return new Intl.NumberFormat('en-PH', {
+      style: 'currency', currency: 'PHP',
+      minimumFractionDigits: v % 1 ? 2 : 0, maximumFractionDigits: 2
+    }).format(v);
+  };
+
+  function orderLineRowsHTML(lines) {
+    return (lines || []).map(l => `<div class="reseller-line-item">
+        <span><b>${escH(l.boar || 'Semen')}</b>${l.semen_batch_no ? ` <small class="muted">(${escH(l.semen_batch_no)})</small>` : ''}
+          <small class="muted"> · ${+l.qty || 0} × ${orderMoney(+l.rate || 0)}</small></span>
+        <b>${orderMoney((+l.qty || 0) * (+l.rate || 0))}</b>
+      </div>`).join('');
+  }
+
+  function orderCardHTML(o, actionable) {
+    const st = orderStatusOf(o);
+    const chip = st === ORDER_PENDING
+      ? (o.seen_at ? '<span class="tag">seen · waiting</span>' : '<span class="blinking-tag-return">🛒 new</span>')
+      : `<span class="tag">${st === 'accepted' ? '✓ accepted' : st === 'declined' ? '✕ declined' : escH(st)}</span>`;
+    const bottles = +(o.bottles || (o.lines || []).reduce((a, l) => a + (+l.qty || 0), 0)) || 0;
+    const total = o.total !== undefined ? +o.total : +((o.lines || []).reduce((a, l) => a + (+l.qty || 0) * (+l.rate || 0), 0)).toFixed(2);
+    return `<div class="adj-card" data-order="${escH(o.id)}">
+      <div class="adj-card-title">
+        <span><b style="font-size:13.5px;text-transform:none;letter-spacing:0">${escH(o.reseller_name || 'Reseller')}</b>
+          · ${bottles} bottle${bottles === 1 ? '' : 's'} · <b style="text-transform:none;letter-spacing:0">${orderMoney(total)}</b></span>
+        <span>${chip}${o.placed_at ? ` <small class="muted" style="margin-left:6px">${escH(orderAgo(o.placed_at))}</small>` : ''}</span>
+      </div>
+      ${orderLineRowsHTML(o.lines)}
+      ${o.need_by ? `<small class="field-hint">🗓 wants it ${escH(o.need_by)}</small>` : ''}
+      ${o.note ? `<small class="field-hint">💬 “${escH(o.note)}”</small>` : ''}
+      ${Array.isArray(o.clamped) && o.clamped.length ? `<small class="field-hint" style="color:#f0b64b">Their link asked for more than stock allowed — the counts above are what is available now.</small>` : ''}
+      ${o.decision_note ? `<small class="field-hint">Farm note: ${escH(o.decision_note)}</small>` : ''}
+      ${actionable ? `<div class="due-actions" style="justify-content:flex-start;margin-top:9px;flex-wrap:wrap">
+        <button type="button" class="btn ghost small" style="background:var(--ok);color:#fff;border:0" onclick="window.acceptResellerOrder('${escH(o.id)}')">✓ Accept &amp; create pick-up</button>
+        ${o.seen_at ? '' : `<button type="button" class="btn ghost small" onclick="window.markResellerOrderSeen('${escH(o.id)}')">👁 Seen</button>`}
+        <button type="button" class="btn ghost small" style="color:var(--danger)" onclick="window.declineResellerOrder('${escH(o.id)}')">✕ Decline</button>
+      </div>` : ''}
+    </div>`;
+  }
+
+  /* ── the inbox sheet (what the badge opens) ───────────────────────────────── */
+  function openResellerOrderInbox() {
+    ensureResellerData();
+    const all = resellerOrderBucket();
+    const pending = pendingResellerOrders();
+    const handled = all.filter(o => orderStatusOf(o) !== ORDER_PENDING)
+      .sort((a, b) => String(b.decided_at || b.placed_at || '').localeCompare(String(a.decided_at || a.placed_at || '')))
+      .slice(0, 8);
+
+    document.getElementById('resellerOrderInbox')?.remove();
+    document.body.insertAdjacentHTML('beforeend', `
+      <div class="due-modal-bg" id="resellerOrderInbox" style="z-index:9999998!important">
+        <div class="due-modal reseller-hub-wrap" style="text-align:left">
+          <div class="modal-top">
+            <div>
+              <div class="eyebrow" style="color:var(--teal2);font-weight:800">🛒 Order-link requests</div>
+              <h2>${pending.length ? pending.length + ' order' + (pending.length > 1 ? 's' : '') + ' waiting' : 'Nothing waiting'}</h2>
+              <p class="muted">Requests only — no bottle and no balance moves until you save a pick-up. Prices are re-read from today's batch price, so a change you made after they ordered is honoured.</p>
+            </div>
+            <button type="button" class="close-reminder" onclick="closeResellerModal('resellerOrderInbox')">×</button>
+          </div>
+
+          ${pending.length ? pending.map(o => orderCardHTML(o, true)).join('')
+            : `<div class="adj-card">No pending orders right now. When a reseller sends one from their link it lands here, and the badge on “Registered Resellers” lights up.</div>`}
+
+          ${handled.length ? `<div class="adj-card">
+            <div class="adj-card-title"><span>Handled recently</span></div>
+            ${handled.map(o => orderCardHTML(o, false)).join('')}
+          </div>` : ''}
+
+          <div class="due-actions" style="margin-top:14px">
+            <button type="button" class="btn ghost" onclick="closeResellerModal('resellerOrderInbox')">Close</button>
+            ${pending.some(o => !o.seen_at) ? `<button type="button" class="btn ghost" onclick="window.markAllResellerOrdersSeen()">👁 Mark all as seen</button>` : ''}
+            <button type="button" class="btn ghost" onclick="window.openResellerOrderLinkAdmin()">🔗 Links</button>
+          </div>
+        </div>
+      </div>
+    `);
+  }
+  window.openResellerOrderInbox = openResellerOrderInbox;
+
+  function patchOrder(orderId, changes, msg) {
+    ensureResellerData();
+    const f = F();
+    const list = (f.semenResellerOrders || []).slice();
+    const idx = list.findIndex(o => String(o.id) === String(orderId));
+    if (idx < 0) { toast('That order is no longer here.'); return false; }
+    list[idx] = { ...list[idx], ...changes, updated_at: new Date().toISOString() };
+    f.semenResellerOrders = list;
+    save();
+    renderAll();
+    if (msg) toast(msg);
+    return true;
+  }
+  /* The hub behind the inbox carries the badge, so every decision re-renders both:
+     openSemenResellerHub() rebuilds the hub, then the inbox goes back on top of it. */
+  function refreshOrderUI() {
+    openSemenResellerHub();
+    openResellerOrderInbox();
+  }
+
+  window.markResellerOrderSeen = function (orderId) {
+    if (patchOrder(orderId, { seen_at: new Date().toISOString(), status: ORDER_PENDING })) refreshOrderUI();
+  };
+
+  window.markAllResellerOrdersSeen = function () {
+    ensureResellerData();
+    const f = F(), now = new Date().toISOString();
+    let n = 0;
+    const list = (f.semenResellerOrders || []).slice();
+    list.forEach(o => { if (orderStatusOf(o) === ORDER_PENDING && !o.seen_at) { o.seen_at = now; n++; } });
+    f.semenResellerOrders = list;
+    save(); renderAll();
+    toast(`👁 ${n} order${n === 1 ? '' : 's'} marked seen — still waiting for your decision.`);
+    refreshOrderUI();
+  };
+
+  window.declineResellerOrder = function (orderId) {
+    const o = resellerOrderBucket().find(x => String(x.id) === String(orderId));
+    if (!o) { toast('That order is no longer here.'); return; }
+    const why = window.prompt(`Tell ${o.reseller_name || 'the reseller'} why this order was declined (optional).\nThey see it on their order link.`, '');
+    if (why === null) return;                       /* cancelled: decide nothing */
+    if (patchOrder(orderId, {
+      status: 'declined', decided_at: new Date().toISOString(),
+      decision_note: String(why || '').slice(0, 240), seen_at: o.seen_at || new Date().toISOString()
+    }, `✕ Order declined${why ? ' with your note' : ''} — it shows on their link.`)) refreshOrderUI();
+  };
+
+  /* Map an order onto the pick-up form's line shape. Stock and price are read NOW —
+     what the reseller's page showed is only what they asked for. */
+  window.arsResellerOrderPickupLines = function (order) {
+    const f = F();
+    const lots = f.semen || [];
+    const lines = [], short = [];
+    ((order && order.lines) || []).forEach(l => {
+      const lot = lots.find(s => (String(l.semen_id || '') !== '' && String(s.id || '') === String(l.semen_id || ''))
+        || (String(l.semen_batch_no || '') !== '' && String(s.semen_batch_no || '') === String(l.semen_batch_no || '')));
+      const want = Math.max(0, Math.floor(+l.qty || 0));
+      const have = lot ? Math.max(0, +((lot.available_bottles !== undefined ? lot.available_bottles : lot.bottles) ?? 0)) : 0;
+      const qty = Math.min(want, have);
+      const rate = lot ? +(lot.price_per_dose ?? lot.price ?? l.rate ?? 0) : +l.rate || 0;
+      if (!lot) short.push(`${l.boar || l.semen_batch_no || 'a batch'} is no longer in the inventory`);
+      else if (qty < want) short.push(`${lot.boar_name || lot.boar || l.boar}: asked ${want}, only ${have} left`);
+      if (qty <= 0) return;
+      lines.push({
+        boar: (lot && (lot.boar_name || lot.boar)) || l.boar || '',
+        breed: (lot && lot.breed) || l.breed || '',
+        semen_batch_no: (lot && lot.semen_batch_no) || l.semen_batch_no || '',
+        qty, rate, amount: +(qty * rate).toFixed(2),
+        semen_id: (lot && lot.id) || l.semen_id || ''
+      });
+    });
+    return { lines, shortfall: short.join(' · ') };
+  };
+
+  window.acceptResellerOrder = function (orderId) {
+    const o = resellerOrderBucket().find(x => String(x.id) === String(orderId));
+    if (!o) { toast('That order is no longer here.'); return; }
+    if (orderStatusOf(o) !== ORDER_PENDING) { toast('That order was already ' + orderStatusOf(o) + '.'); return; }
+    const res = window.arsResellerOrderPickupLines(o);
+    if (!res.lines.length) {
+      toast(`⚠ Nothing in that order is in stock any more — decline it so ${o.reseller_name || 'the reseller'} is told on their link.`);
+      return;
+    }
+    patchOrder(orderId, {
+      status: 'accepted', decided_at: new Date().toISOString(), accepted_at: new Date().toISOString(),
+      accepted_lines: res.lines, seen_at: o.seen_at || new Date().toISOString(),
+      decision_note: res.shortfall ? `Accepted short: ${res.shortfall}` : ''
+    });
+    pendingPickupPrefill = {
+      orderId: o.id, reseller_name: o.reseller_name || 'Reseller', lines: res.lines,
+      shortfall: res.shortfall || '', needBy: o.need_by || '',
+      note: [o.note, res.shortfall ? `Short: ${res.shortfall}` : ''].filter(Boolean).join(' — ')
+    };
+    closeResellerModal('resellerOrderInbox');
+    openSemenResellerHub();
+    openResellerPickupModal(o.reseller_id || '');
+    toast(`✓ Order accepted — confirm the pick-up below. Nothing is recorded until you save it${res.shortfall ? ' (some bottles were short)' : ''}.`);
+  };
+
+  /* ── the link itself ──────────────────────────────────────────────────────── */
+  function activeOrderLink(resellerId) {
+    ensureResellerData();
+    return (F().semenResellerOrderLinks || []).find(x => String(x.reseller_id) === String(resellerId) && x.active !== false) || null;
+  }
+  function linkOrderStats(linkId) {
+    const rows = resellerOrderBucket().filter(o => String(o.link_id) === String(linkId));
+    const last = rows.slice().sort((a, b) => String(b.placed_at || '').localeCompare(String(a.placed_at || '')))[0];
+    return { count: rows.length, pending: rows.filter(o => orderStatusOf(o) === ORDER_PENDING).length, lastAt: last && last.placed_at };
+  }
+
+  function createOrderLink(resellerId) {
+    ensureResellerData();
+    const f = F();
+    const r = (f.semenResellers || []).find(x => String(x.id) === String(resellerId));
+    if (!r) { toast('Reseller not found.'); return null; }
+    const now = new Date().toISOString();
+    const link = {
+      id: 'rsolink_' + uidToken().slice(0, 13),
+      token: uidToken(),
+      farm_id: String(f.farm_id || (typeof farmId !== 'undefined' ? farmId : '') || ''),
+      farm_name: f.name || f.farm_name || '',
+      reseller_id: r.id, reseller_name: r.name || '',
+      active: true, created_at: now, updated_at: now
+    };
+    /* the reseller's previous link is superseded, not deleted — orders already placed
+       through it still resolve to this reseller in the inbox */
+    f.semenResellerOrderLinks = [link].concat((f.semenResellerOrderLinks || [])
+      .filter(x => String(x.reseller_id) === String(resellerId) && x.active !== false)
+      .map(x => ({ ...x, active: false, superseded_at: now })));
+    save();
+    renderAll();
+    return link;
+  }
+
+  /* QR is a bonus, never a dependency: if the generator ever fails, the link is still
+     copyable and shareable. */
+  function arsOrderLinkQR(url) {
+    try {
+      if (typeof window.QRCode !== 'function') return '';
+      const type = url.length < 40 ? 3 : url.length < 70 ? 5 : url.length < 130 ? 8 : 12;
+      const qr = new window.QRCode(type, 'M');
+      qr.addData(url);
+      qr.make();
+      return qr.createSvgTag(3, 0);
+    } catch (_) { return ''; }
+  }
+
+  function orderLinkSheetHTML(r, link) {
+    const url = link ? orderLinkUrl(link.token) : '';
+    const stats = link ? linkOrderStats(link.id) : { count: 0, pending: 0, lastAt: '' };
+    const qr = link ? arsOrderLinkQR(url) : '';
+    return `
+      <div class="due-modal-bg" id="resellerOrderLinkModal" style="z-index:9999999!important">
+        <div class="due-modal" style="text-align:left;max-width:540px">
+          <div class="modal-top">
+            <div>
+              <div class="eyebrow" style="color:var(--teal2);font-weight:800">🛒 Order link</div>
+              <h2>${escH((r && r.name) || 'Reseller')}</h2>
+              <p class="muted">Send them this one link. They tap the bottles they want, see today's price and what is left, then press Place order — and this hub gets a badge. No account, no app, no password.</p>
+            </div>
+            <button type="button" class="close-reminder" onclick="closeResellerModal('resellerOrderLinkModal')">×</button>
+          </div>
+
+          ${link ? `
+            <label class="field" style="margin-top:12px">Their link (works on any phone)
+              <input class="suggest-input" type="text" id="orderLinkValue" readonly value="${escH(url)}" onclick="this.select()" style="font-size:12px;word-break:break-all"></label>
+            <div class="due-actions" style="margin-top:10px;flex-wrap:wrap">
+              <button type="button" class="btn ghost small" onclick="window.arsCopyOrderLink()">📋 Copy link</button>
+              <button type="button" class="btn ghost small" onclick="window.arsShareOrderLink()">💬 Send it</button>
+              <button type="button" class="btn ghost small" onclick="window.arsMakeOrderLink('${escH(r.id)}')">🔄 New link</button>
+              <button type="button" class="btn ghost small" style="color:var(--danger)" onclick="window.arsPauseOrderLink('${escH(r.id)}')">⏸ Pause link</button>
+            </div>
+            <div class="reseller-settlement-preview" style="margin-top:12px">
+              ${stats.count} order${stats.count === 1 ? '' : 's'} through this link · ${stats.pending} still pending${stats.lastAt ? ` · last one ${escH(orderAgo(stats.lastAt))}` : ''}
+              <br><small class="muted">“New link” replaces this one at once, so a leaked screenshot cannot keep bringing orders. Pause does the same without issuing another.</small>
+            </div>
+            ${qr ? `<div style="margin-top:12px;padding:12px;background:#fff;border-radius:14px;display:grid;place-items:center">${qr}<div style="color:#3b4a4d;font-size:10.5px;font-weight:700;text-align:center;padding-top:6px">They scan this with their camera</div></div>` : ''}
+          ` : `
+            <div class="reseller-settlement-preview" style="margin-top:12px">No active link for this reseller yet. One tap makes it — the address is random, only your farm sees what it brings, and nothing about this reseller's balance or history is published.</div>
+            <div class="due-actions" style="margin-top:12px">
+              <button type="button" class="btn ghost" onclick="closeResellerModal('resellerOrderLinkModal')">Cancel</button>
+              <button type="button" class="btn" style="background:var(--ok);color:#fff" onclick="window.arsMakeOrderLink('${escH(r.id)}')">🛒 Create their order link</button>
+            </div>
+          `}
+        </div>
+      </div>`;
+  }
+
+  function renderOrderLinkSheet(resellerId, link) {
+    ensureResellerData();
+    const f = F();
+    const r = (f.semenResellers || []).find(x => String(x.id) === String(resellerId));
+    document.getElementById('resellerOrderLinkModal')?.remove();
+    document.body.insertAdjacentHTML('beforeend', orderLinkSheetHTML(r, link));
+  }
+
+  window.arsShowResellerOrderLink = function (resellerId) {
+    renderOrderLinkSheet(resellerId, activeOrderLink(resellerId));
+  };
+
+  window.arsMakeOrderLink = function (resellerId) {
+    const link = createOrderLink(resellerId);
+    if (!link) return;
+    renderOrderLinkSheet(resellerId, link);
+    window.arsCopyOrderLink();
+    openSemenResellerHub();
+  };
+
+  window.arsPauseOrderLink = function (resellerId) {
+    if (!window.confirm('Pause this reseller’s order link?\n\nTheir page stops accepting new orders immediately. Orders already sent stay in your inbox.')) return;
+    ensureResellerData();
+    const f = F(), now = new Date().toISOString();
+    f.semenResellerOrderLinks = (f.semenResellerOrderLinks || []).map(x =>
+      String(x.reseller_id) === String(resellerId) && x.active !== false
+        ? { ...x, active: false, paused_at: now, updated_at: now } : x);
+    save(); renderAll();
+    toast('⏸ Order link paused.');
+    document.getElementById('resellerOrderLinkModal')?.remove();
+    openSemenResellerHub();
+  };
+
+  window.arsCopyOrderLink = function () {
+    const el = document.getElementById('orderLinkValue');
+    const t = el ? el.value : '';
+    if (!t) { toast('No link to copy yet.'); return; }
+    const done = '📋 Order link copied — paste it into Messenger or SMS.';
+    const fallback = () => {
+      try { el.focus(); el.select(); document.execCommand('copy'); toast(done); }
+      catch (e) { window.prompt('Copy it manually:', t); }
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(t).then(() => toast(done)).catch(fallback);
+    else fallback();
+  };
+
+  window.arsShareOrderLink = function () {
+    const el = document.getElementById('orderLinkValue');
+    const t = el ? el.value : '';
+    if (!t) return;
+    if (navigator.share) { navigator.share({ title: 'Semen order link', text: 'Place your order here:', url: t }).catch(() => {}); return; }
+    window.arsCopyOrderLink();
+  };
+
+  /* Every link in the farm, so "who still has one?" is answerable from one place. */
+  function openResellerOrderLinkAdmin() {
+    ensureResellerData();
+    const f = F();
+    const links = (f.semenResellerOrderLinks || []).slice()
+      .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+    const active = links.filter(l => l.active !== false).length;
+    document.getElementById('resellerOrderLinkAdmin')?.remove();
+    document.body.insertAdjacentHTML('beforeend', `
+      <div class="due-modal-bg" id="resellerOrderLinkAdmin" style="z-index:9999997!important">
+        <div class="due-modal reseller-hub-wrap" style="text-align:left">
+          <div class="modal-top">
+            <div>
+              <div class="eyebrow" style="color:var(--teal2);font-weight:800">🔗 Order links</div>
+              <h2>${active} active link${active === 1 ? '' : 's'}</h2>
+              <p class="muted">A link only ever lets that reseller send a request to you. It cannot see a balance, a history, or another farm.</p>
+            </div>
+            <button type="button" class="close-reminder" onclick="closeResellerModal('resellerOrderLinkAdmin')">×</button>
+          </div>
+          ${links.length ? links.map(l => {
+            const st = linkOrderStats(l.id);
+            return `<div class="adj-card">
+              <div class="adj-card-title">
+                <span><b style="text-transform:none;letter-spacing:0;font-size:13px">${escH(l.reseller_name || 'Reseller')}</b>
+                  · ${l.active === false ? '<span class="tag">paused</span>' : '<span class="tag">active</span>'}</span>
+                <span class="muted">${st.count} order${st.count === 1 ? '' : 's'}${st.pending ? ` · ${st.pending} pending` : ''}</span>
+              </div>
+              <small class="field-hint">made ${escH(orderAgo(l.created_at))}${st.lastAt ? ` · last order ${escH(orderAgo(st.lastAt))}` : ' · no orders yet'}</small>
+              <div class="due-actions" style="justify-content:flex-start;margin-top:8px;flex-wrap:wrap">
+                ${l.active === false
+                  ? `<button type="button" class="btn ghost small" onclick="window.arsMakeOrderLink('${escH(l.reseller_id)}')">🔄 New link</button>`
+                  : `<button type="button" class="btn ghost small" onclick="window.arsShowResellerOrderLink('${escH(l.reseller_id)}')">👁 Open</button>`}
+              </div>
+            </div>`;
+          }).join('') : `<div class="adj-card">No links yet. Make one from any reseller's row with 🛒 Order link.</div>`}
+          <div class="due-actions" style="margin-top:12px">
+            <button type="button" class="btn ghost" onclick="closeResellerModal('resellerOrderLinkAdmin')">Close</button>
+            <button type="button" class="btn ghost" onclick="closeResellerModal('resellerOrderLinkAdmin');openResellerOrderInbox()">🛒 Orders</button>
+          </div>
+        </div>
+      </div>
+    `);
+  }
+  window.openResellerOrderLinkAdmin = openResellerOrderLinkAdmin;
+
+  /* The badge itself, rendered into the Registered Resellers KPI box by the hub. */
+  function resellerOrderBadgeHTML() {
+    const unseen = unseenResellerOrders().length;
+    const waiting = pendingResellerOrders().length;
+    /* Seen orders still need a door: once the flashing badge is acknowledged there must
+       remain a quiet way back into the same queue, or a pending request is unreachable. */
+    if (!waiting) return '';
+    if (!unseen) return ` <button type="button" class="count-pill" onclick="window.openResellerOrderInbox()" title="${waiting} order${waiting === 1 ? '' : 's'} waiting for a decision" style="cursor:pointer;font-size:10.5px;text-transform:none;letter-spacing:0;padding:3px 9px">🛒 ${waiting} waiting</button>`;
+    return ` <button type="button" class="count-pill" onclick="window.openResellerOrderInbox()" title="${unseen} unseen order${unseen === 1 ? '' : 's'} from reseller links — ${waiting} waiting for a decision" style="background:#f59e0b;color:#3a2500;animation:returnBlinkPulse 1.2s infinite alternate;cursor:pointer;font-size:10.5px;text-transform:none;letter-spacing:0;padding:3px 9px">🛒 ${unseen} new order${unseen > 1 ? 's' : ''}</button>`;
+  }
+
 })();
