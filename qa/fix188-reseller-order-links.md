@@ -1,4 +1,4 @@
-# FIX 188 / FIX 189 — Reseller order links and the farm's order menu (v230 → v234)
+# FIX 188 / FIX 189 — Reseller order links and the farm's order menu (v230 → v235)
 
 > Your question: *"Is it possible to send a link where this link will have like an ordering
 > counter page, whereas the reseller can simply place their order and once they click
@@ -13,6 +13,42 @@
 > **v232** is that same build with a fixable install: pasting the SQL onto a farm that already
 > had v230 died with `42P13 cannot change return type of existing function`, because v231
 > changed what the catalogue function returns. Build `v232-reseller-sql-recreate-2026-09-12`.
+
+## v235 — the pick-up line now says which breed it is for
+
+Accepting an order opened Record Semen Pickup with four lines carrying the right counts and the
+right money (₱1,200 + ₱800 + ₱1,250 + ₱600 = ₱3,850 on their test order) — and four identical
+`— Choose Available Semen —` dropdowns. Nothing on the line said which breed it belonged to, so
+matching the order to the cooler was a memory exercise, and the farm was writing it into the
+caretaker note by hand (`Return: 2B1LW 2BD 3CDP`) to keep the lines straight.
+
+Each prefilled line now carries its own clue:
+
+- **above the picker**: `🛒 They asked for Duroc Pietrain · 5 bottles at ₱250`, and one of four
+  honest states — *the only lot of it in stock is BDD (5 left)* with a **Use it** button that
+  goes through the same handler as the dropdown; *3 lots of it in stock, ticked ✓ at the top of
+  the list*; *no Duroc Pietrain in stock right now — put any lot here, or accept now and collect
+  later*; or, once a lot is chosen, `✓ Duroc (BD) is that breed` / `⚠ you put B1 Large White on
+  this line instead (fine if that was the swap you meant)`.
+- **in the picker**: lots of the requested breed sort to the top and carry a `✓`. Nothing is
+  pre-selected — that stays your decision, and a dropdown that already picked a boar is how a
+  wrong lot quietly becomes an invoice.
+- **in the label**: `Semen Batch / Boar Line 3 — for Duroc Pietrain`, so the tab order itself
+  says what each row is for.
+
+Breed matching lives in one helper (`lotsForBreed`), normalised for punctuation and case, so
+"Largewhite" finds a lot recorded as "B1 Large White"/"Large White" and the inbox warning, the
+clue and the tick marks can never disagree with each other. `ordered_breed` rides along on the
+line and into the saved ledger line, which means the reseller's own history shows
+`Batch: BDD · 2 bottle(s) × ₱250 · 🛒 asked Duroc Pietrain` **only when you gave a different
+breed than the one requested** — a deliberate swap stays auditable, a matching fill stays quiet.
+
+While in there: the line's money row was a four-column grid
+(`minmax(85px) / minmax(105px) / minmax(95px) / auto`) inside a phone-width modal, which is what
+was clipping `Subtotal` and hanging the `✕` half off the right edge in the same screenshot. Qty
+and Price now share a two-column row and the subtotal sits under them, with the remove button
+labelled `✕ Remove line 3` instead of a bare ✕ in the gutter — same ids, same arithmetic, nothing
+to squeeze.
 
 ## v234 — five years of orders, and what a reseller's page is allowed to remember
 
@@ -201,8 +237,8 @@ revocable** · **Phase 1 now**.
 | `client.js` | `entityMap` += `semenResellerOrders: 'semen_reseller_order'`, `semenResellerOrderLinks: 'semen_reseller_order_link'`, `semenOrderBreeds: 'semen_order_breed'` — so orders, links and the menu sync, back up and restore like every other record (the menu must sync: the public page reads it from the cloud). |
 | `app.js` | `sanitizeFarm` initialises the three buckets, as it does for all the others. |
 | `sw.js` | `/order.html` and `/js/order-page.js` bypass the app cache (a reseller must never get yesterday's page, and offline must not hand them your login screen). |
-| `_headers`, `config.js` | `order.html` served `no-cache` + `X-Robots-Tag: noindex`; version `v234-reseller-order-history-2026-09-13`. |
-| `qa/build-deploy-layout.sh`, `qa/test-reseller-orders.mjs` | the page is copied into the deploy layout; 234 checks. |
+| `_headers`, `config.js` | `order.html` served `no-cache` + `X-Robots-Tag: noindex`; version `v235-pickup-breed-clue-2026-09-13`. |
+| `qa/build-deploy-layout.sh`, `qa/test-reseller-orders.mjs` | the page is copied into the deploy layout; 250 checks. |
 
 No `_worker.js` change is needed: it only special-cases `/ars-head` and otherwise falls
 through to `env.ASSETS.fetch(request)`, so `/order.html` is served as a static asset.
@@ -261,12 +297,15 @@ lists their own recent orders as `Waiting for the farm` / `Accepted — ready to
 
 ## Checks that ran
 
-`node qa/test-reseller-orders.mjs` → **234/234** (page arithmetic with no stock in it and the
+`node qa/test-reseller-orders.mjs` → **250/250** (page arithmetic with no stock in it and the
 999 cap; the payload that leaves the phone; the fake-browser end-to-end incl. an unpriced breed
 admitted as "Price confirmed by the farm"; link lifecycle incl. supersede and pause; the menu —
 seeded once, emptied stays emptied, duplicates refused, a draft line pruned on cancel, and a
 hub open that provably writes nothing; badge + per-reseller chip; accept honouring the menu price
-and leaving the batch blank; accept → prefilled form → choose a boar → save → **₱1,350 billed
+and leaving the batch blank; accept → prefilled form (each line labelled with the breed it is for, the only
+matching lot offered with one tap, a deliberate swap warned about, `ordered_breed` kept on the
+saved line so a swap reads as `🛒 asked …` in the reseller's history only when it differs) →
+choose a boar → save → **₱1,350 billed
 and 10 → 7 bottles**; the two refusals (no boar chosen, more than on hand); the pop-up incl.
 silent first run and never twice; every sheet's markup linted against `app.css`; the sync
 contract; the shipped files and the SQL's shape, incl. a lint that no jsonb loop variable is

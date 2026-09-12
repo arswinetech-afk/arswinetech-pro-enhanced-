@@ -491,6 +491,16 @@ async function bootOrderPage({ search, calls = [], barHeight, ...resp }) {
   const short = ctx.arsResellerOrderPickupLines(o);
   eq('[7] empty stock does NOT cut the request', short.lines[0].qty, 3);
   ok('[7] it only says so, so nobody promises bottles they cannot pull', /Duroc: none of this breed is in stock right now/.test(short.advisory), short.advisory);
+
+  /* the clue has to survive the case that matters most: a breed nobody can fill today */
+  const dbS = seed();
+  dbS.semenResellerOrders.push(order({ lines: [{ breed: 'Hamruc Pietrain', boar: 'Hamruc Pietrain', qty: 2, rate: 300 }], bottles: 2, total: 600 }));
+  const ctxS = bootApp(dbS);
+  ctxS.acceptResellerOrder('rsord_test1');
+  const cardS = String(ctxS.__el('pickupLinesWrap').innerHTML || '');
+  ok('[7] an unfillable breed says so on the line and offers any lot', /no Hamruc Pietrain in stock right now/.test(cardS) && /accept now and collect later/.test(cardS), (cardS.match(/They asked for[\s\S]{0,180}/) || [''])[0]);
+  ok('[7] its dropdown still lists every lot, unticked', /— Choose Available Semen —/.test(cardS) && (cardS.match(/✓ /g) || []).length === 0);
+  ok('[7] and “Largewhite” still matches a lot spelled “B1 Large White”-ish, not by luck', ctxS.arsResellerOrderPickupLines(order({ lines: [{ breed: 'Largewhite', boar: 'Largewhite', qty: 1, rate: 400 }] })).advisory === '');
 }
 
 /* ══ [8] the full chain: accept → prefilled form → pick a boar → save ════════ */
@@ -522,7 +532,19 @@ async function bootOrderPage({ search, calls = [], barHeight, ...resp }) {
   ok('[8] the qty box carries their count', /id="lineQty_0" value="3"/.test(linesHtml), (linesHtml.match(/id="lineQty_0"[^>]*/) || [''])[0]);
   ok('[8] the price box carries the menu price', /id="lineRate_0" value="450"/.test(linesHtml), (linesHtml.match(/id="lineRate_0"[^>]*/) || [''])[0]);
   ok('[8] no batch is pre-selected for them', /value="" selected|— Choose Available Semen —/.test(linesHtml));
-  ctx.onPickupBatchSelect(0, 'SEM-LW');                       /* the farm picks a Largewhite lot instead */
+  ok('[8] the money row no longer squeezes off a 360px phone', !/grid-template-columns:minmax\(85px,1fr\) minmax\(105px,1\.2fr\) minmax\(95px,1fr\) auto/.test(linesHtml) && /grid-template-columns:minmax\(0,1fr\) minmax\(0,1fr\)/.test(linesHtml));
+  ok('[8] and the remove tap is labelled, not a bare ✕ in the gutter', /✕ Remove line 1|✕ Remove line/.test(linesHtml) || !/delete-action/.test(linesHtml));
+  let card = String(ctx.__el('pickupLinesWrap').innerHTML || '');
+  ok('[8] the line says which breed they asked for', /They asked for <b[^>]*>Duroc<\/b> · 3 bottles at ₱450/.test(card), (card.match(/They asked for[\s\S]{0,120}/) || [''])[0]);
+  ok('[8] and the batch label names it too', /Semen Batch \/ Boar Line 1 <span class="muted"[^>]*>[^<]*— for Duroc/.test(card), (card.match(/Semen Batch[\s\S]{0,90}/) || [''])[0]);
+  ok('[8] the only lot of that breed is offered with one tap', /is the only lot of it[\s\S]{0,120}pickupLineUseLot\(0,'SEM-BD'\)/.test(card), (card.match(/only lot of it[\s\S]{0,180}/) || [''])[0]);
+  const savesBefore = ctx.__saves;
+  ctx.pickupLineUseLot(0, 'SEM-BD');
+  ok('[8] “Use it” selects that lot and prices stay the ordered ₱450', /id="lineRate_0"[^>]*value="450"/.test(String(ctx.__el('pickupLinesWrap').innerHTML)) && ctx.__saves === savesBefore, String(ctx.__el('lineRate_0').value));
+  ok('[8] and the line then confirms the match instead of nagging', /✓ Duroc \(BD\) is that breed/.test(String(ctx.__el('pickupLinesWrap').innerHTML)), (String(ctx.__el('pickupLinesWrap').innerHTML).match(/— <span style="color:var\(--ok\)">[\s\S]{0,80}/) || [''])[0]);
+  ctx.pickupLineUseLot(0, 'SEM-LW');                       /* the farm puts a Largewhite lot on a Duroc line */
+  card = String(ctx.__el('pickupLinesWrap').innerHTML);
+  ok('[8] a deliberate swap is named, not hidden', /⚠ you put B1 Large White on this line instead/.test(card), (card.match(/⚠[\s\S]{0,120}/) || [''])[0]);
   linesHtml = String(ctx.__el('pickupLinesWrap').innerHTML || '');
   ok('[8] picking a batch keeps the ordered ₱450, not the app default ₱350', /id="lineRate_0" value="450"/.test(linesHtml), (ctx.__el('lineRate_0') || {}).value + ' ' + JSON.stringify(ctx.__el('pickupLinesWrap').innerHTML).slice(0, 40));
   ok('[8] the note and wanted date came across too', /pick up by 8 AM/.test(String(ctx.__el('__notes').value)) && /2026-09-14T/.test(String(ctx.__el('resellerPickupTime').value)), String(ctx.__el('__notes').value));
@@ -698,7 +720,7 @@ async function bootOrderPage({ search, calls = [], barHeight, ...resp }) {
   ok('[14] and the offline fallback cannot hand a reseller the login screen', /js\/order-page\.js'\)\s*return;/.test(sw));
   ok('[14] order.html is in the deploy layout', /order\.html/.test(build));
   ok('[14] the page is served no-cache and kept out of search engines', /\/order\.html\n  Cache-Control: no-cache/.test(read('_headers')) && /noindex/.test(read('_headers')));
-  ok('[14] the build is bumped so phones drop the old shell', /arswinetech-pro-v234-reseller-order-history/.test(sw) && /v234-reseller-order-history/.test(cfg), sw.split('\n')[7] + ' | ' + cfg.split('\n')[2]);
+  ok('[14] the build is bumped so phones drop the old shell', /arswinetech-pro-v235-pickup-breed-clue/.test(sw) && /v235-pickup-breed-clue/.test(cfg), sw.split('\n')[7] + ' | ' + cfg.split('\n')[2]);
   ok('[14] the page asks for breeds, not bottles', /Which breeds do you need\?/.test(page) && !/Choose your bottles/.test(page));
 
   /* the fixed basket bar used to steal the last row: a hardcoded 104px of body padding lost
@@ -773,6 +795,30 @@ async function bootOrderPage({ search, calls = [], barHeight, ...resp }) {
   ok('[14] orders, links and the menu ride existing tables — nothing to pay for', !/create table/i.test(sql) && /'semen_order_breed'/.test(sql));
   ok('[14] the SQL never mentions a secret either', !/service_role_key|eyJhbGciOi/.test(sql));
   ok('[14] the doc tells them to re-paste it, which is the only fix for a live link', /re-paste this file/.test(sql) || /v231/.test(read('qa/fix188-reseller-order-links.md')));
+}
+
+/* ══ [14b] the asked-for breed survives into the ledger, only when it differs ═════ */
+{
+  const db = seed();
+  db.semenResellerOrders.push(order({ lines: [{ breed: 'Duroc Pietrain', boar: 'Duroc Pietrain', qty: 2, rate: 250 }] }));
+  const ctx = bootApp(db);
+  ctx.acceptResellerOrder('rsord_test1');
+  ctx.pickupLineUseLot(0, 'SEM-BD');                  /* collect Duroc for a Duroc Pietrain request */
+  await ctx.window.saveResellerPickup({ preventDefault() {}, target: fakeEl('form') });
+  const tx = db.semenResellerTx[0];
+  ok('[14b] the saved line keeps what was asked, beside what was given', tx && tx.lines[0].ordered_breed === 'Duroc Pietrain' && tx.lines[0].breed === 'Duroc', JSON.stringify(tx && tx.lines[0]));
+  ctx.openSemenResellerHub();
+  ok('[14b] and the reseller’s history shows the swap in amber', /🛒 asked Duroc Pietrain/.test(ctx.sheet('semenResellerHub').html), (ctx.sheet('semenResellerHub').html.match(/asked [^<]{0,40}/) || [''])[0]);
+
+  const db2 = seed();
+  db2.semenResellerOrders.push(order({ lines: [{ breed: 'Largewhite', boar: 'Largewhite', qty: 1, rate: 400 }] }));
+  const ctx2 = bootApp(db2);
+  ctx2.acceptResellerOrder('rsord_test1');
+  ctx2.pickupLineUseLot(0, 'SEM-LW');                 /* the breed they asked for, exactly */
+  await ctx2.window.saveResellerPickup({ preventDefault() {}, target: fakeEl('form') });
+  ok('[14b] a match is silent — no “asked” note when nothing changed', !/asked/.test(ctx2.sheet('semenResellerHub').html), (ctx2.sheet('semenResellerHub').html.match(/asked[^<]{0,40}/) || ['clean'])[0]);
+  eq('[14b] a matching lot still bills the ordered amount', db2.semenResellerTx[0].total_amount, 400);
+  eq('[14b] and takes exactly one bottle from it', db2.semen.find(l => l.id === 'SEM-LW').available_bottles, 9);
 }
 
 /* ══ [15] the farm's inbox does not grow into a wall ═════════════════════════ */

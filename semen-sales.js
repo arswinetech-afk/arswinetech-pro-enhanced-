@@ -2578,7 +2578,7 @@
             <div class="reseller-line-item">
               <div>
                 <b>${escH(l.boar)} (${escH(l.breed)})</b>
-                <small class="muted" style="display:block">Batch: ${escH(l.semen_batch_no || '—')} · ${l.qty} bottle(s) × ${peso(l.rate)}</small>
+                <small class="muted" style="display:block">Batch: ${escH(l.semen_batch_no || '—')} · ${l.qty} bottle(s) × ${peso(l.rate)}${l.ordered_breed && String(l.ordered_breed).trim().toLowerCase() !== String(l.breed || '').trim().toLowerCase() ? ` · <span style="color:#f0b64b">🛒 asked ${escH(l.ordered_breed)}</span>` : ''}</small>
                 ${l.returned_qty ? `<small style="color:#d97706;display:block">↩ Returned: <b>${l.returned_qty} bottle(s)</b> (${escH(l.return_reason || 'Unused')})</small>` : ''}
                 ${resellerReplLinesHTML(l)}   <!-- [FIX 187] every replacement batch, not just the last one -->
               </div>
@@ -2927,23 +2927,48 @@
     const f = F();
     const available = (f.semen || []).filter(s => +(s.available_bottles ?? s.bottles ?? 0) > 0);
 
-    wrap.innerHTML = activePickupLines.map((line, lIdx) => `
+    wrap.innerHTML = activePickupLines.map((line, lIdx) => {
+      const asked = String(line.ordered_breed || '').trim();
+      const matches = asked ? lotsWithStockForBreed(asked) : [];
+      /* matches of the requested breed float to the top and are ticked, but nothing is
+         pre-selected: which boar to collect is the farm's call, and a dropdown that already
+         picked one is how a wrong lot quietly becomes an invoice */
+      const ordered = asked
+        ? [...matches, ...available.filter(s => !matches.some(m => m.id === s.id))]
+        : available;
+      const clue = asked ? (() => {
+        const chosen = line.semen_id ? (f.semen || []).find(x => x.id === line.semen_id) : null;
+        const chosenMatches = chosen ? matches.some(m => m.id === chosen.id) : false;
+        const head = `<div style="font-size:11.5px;line-height:1.45;margin:2px 0 8px;padding:7px 9px;border-radius:9px;background:rgba(14,165,233,.10);border:1px solid rgba(110,200,255,.22)">🛒 They asked for <b style="font-size:13px">${escH(asked)}</b> · ${+line.qty || 0} bottle${(+line.qty || 0) === 1 ? '' : 's'} at ${peso(+line.ordered_rate || 0)}`;
+        if (chosen) return `${head}${chosenMatches
+          ? ` — <span style="color:var(--ok)">✓ ${escH(chosen.boar_name || chosen.boar)} is that breed</span></div>`
+          : ` — <span style="color:#f0b64b">⚠ you put ${escH(chosen.boar_name || chosen.boar)} on this line instead</span> <small class="muted">(fine if that was the swap you meant)</small></div>`}</div>`;
+        if (!matches.length) return `${head} — <span style="color:#f0b64b">no ${escH(asked)} in stock right now</span> <small class="muted">(put any lot here, or accept now and collect later)</small></div>`;
+        if (matches.length === 1) {
+          const m = matches[0];
+          return `${head} — <b>${escH(m.boar_name || m.boar)}</b> (${escH(m.semen_batch_no || 'Batch')}, ${lotOnHand(m)} left) is the only lot of it <button type="button" class="btn ghost small" onclick="window.pickupLineUseLot(${lIdx},'${escH(m.id)}')" style="padding:4px 9px;margin-left:4px">Use it</button></div>`;
+        }
+        return `${head} — ${matches.length} lots of it in stock, ticked ✓ at the top of the list</div>`;
+      })() : '';
+      return `
       <div class="reseller-pickup-line-card" id="pickupLineCard_${lIdx}" style="background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:10px">
-        <!-- Row 1: Semen Batch Selector -->
+        <!-- Row 1: what they asked for, then the batch picker -->
+        ${clue}
         <div class="field" style="margin:0 0 10px 0">
-          <label style="font-size:11.5px;font-weight:750">Semen Batch / Boar Line ${lIdx + 1} *</label>
+          <label style="font-size:11.5px;font-weight:750">Semen Batch / Boar Line ${lIdx + 1} ${asked ? `<span class="muted" style="font-weight:600">— for ${escH(asked)}</span>` : '*'}</label>
           <select class="rfid-select" onchange="window.onPickupBatchSelect(${lIdx}, this.value)" style="width:100%">
             <option value="">— Choose Available Semen —</option>
-            ${available.map(s => `
+            ${ordered.map(s => `
               <option value="${s.id}" ${line.semen_id === s.id ? 'selected' : ''}>
-                ${s.boar_name || s.boar} (${s.breed}) · ${s.semen_batch_no || 'Batch'} · ${s.available_bottles ?? s.bottles} left (₱${s.price || 350})
+                ${asked && matches.some(m => m.id === s.id) ? '✓ ' : ''}${s.boar_name || s.boar} (${s.breed}) · ${s.semen_batch_no || 'Batch'} · ${s.available_bottles ?? s.bottles} left (₱${s.price || 350})
               </option>
             `).join('')}
           </select>
         </div>
 
-        <!-- Row 2: Qty, Price, Subtotal, Delete -->
-        <div style="display:grid;grid-template-columns:minmax(85px,1fr) minmax(105px,1.2fr) minmax(95px,1fr) auto;gap:10px;align-items:end">
+        <!-- Row 2: Qty and Price side by side; Row 3: money and the remove tap. Four
+             columns squeezed the subtotal and the ✕ off the edge of a 360px phone. -->
+        <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px;align-items:end">
           <div class="field" style="margin:0">
             <label style="font-size:11px;font-weight:700">Qty (bottles) *</label>
             <input type="number" min="1" step="1" inputmode="numeric" id="lineQty_${lIdx}" value="${line.qty || 1}" class="suggest-input" style="font-size:15px;font-weight:bold;text-align:center" onfocus="this.select()" oninput="window.onPickupLineQtyChange(${lIdx}, this.value)" onblur="window.onPickupLineQtyBlur(${lIdx}, this.value)">
@@ -2958,15 +2983,13 @@
             <label style="font-size:11px;font-weight:700">Subtotal</label>
             <b id="lineSubtotal_${lIdx}" style="display:block;padding:8px 0;font-size:15px;color:var(--ink)">${peso(line.amount || 0)}</b>
           </div>
-
-          ${activePickupLines.length > 1 ? `
-            <div style="margin-bottom:2px">
-              <button type="button" class="btn ghost small delete-action" onclick="window.removePickupLine(${lIdx})" title="Remove line" style="padding:8px 10px">✕</button>
-            </div>
-          ` : ''}
+        </div>
+        <div style="display:flex;justify-content:flex-end;margin-top:8px">
+          ${activePickupLines.length > 1 ? `<button type="button" class="btn ghost small delete-action" onclick="window.removePickupLine(${lIdx})" title="Remove this line" style="padding:8px 10px">✕ Remove line ${lIdx + 1}</button>` : ''}
         </div>
       </div>
-    `).join('');
+    `;
+    }).join('');
 
     calcPickupTotals();
   }
@@ -2979,6 +3002,14 @@
   window.removePickupLine = function(lIdx) {
     activePickupLines.splice(lIdx, 1);
     renderPickupLines();
+  };
+
+  /* the clue's “Use it” button — it goes through the same handler as the dropdown so the
+     line cannot end up half-updated (price rule, batch no, boar name all move together) */
+  window.pickupLineUseLot = function (lIdx, semenId) {
+    window.onPickupBatchSelect(lIdx, semenId);
+    renderPickupLines();
+    calcPickupTotals();
   };
 
   window.onPickupBatchSelect = function(lIdx, semenId) {
@@ -4620,7 +4651,7 @@
                   <b>${escH(l.boar)} (${escH(l.breed)})</b>
                   <b>${peso(l.amount)}</b>
                 </div>
-                <small class="muted" style="display:block">Batch: ${escH(l.semen_batch_no || '—')} · ${l.qty} bottle(s) × ${peso(l.rate)}</small>
+                <small class="muted" style="display:block">Batch: ${escH(l.semen_batch_no || '—')} · ${l.qty} bottle(s) × ${peso(l.rate)}${l.ordered_breed && String(l.ordered_breed).trim().toLowerCase() !== String(l.breed || '').trim().toLowerCase() ? ` · <span style="color:#f0b64b">🛒 asked ${escH(l.ordered_breed)}</span>` : ''}</small>
                 ${l.returned_qty ? `<small style="color:#d97706;display:block">↩ Returned: ${l.returned_qty} bottle(s) (${escH(l.return_reason || '')})</small>` : ''}
                 ${resellerReplLinesHTML(l)}   <!-- [FIX 187] every replacement batch, not just the last one -->
               </div>
@@ -5261,7 +5292,7 @@
       lines.push({
         boar: breed || 'Semen', breed: breed, semen_batch_no: '',
         qty, rate, amount: +(qty * rate).toFixed(2),
-        semen_id: '', ordered_rate: rate, from_order: true
+        semen_id: '', ordered_rate: rate, ordered_breed: breed, from_order: true
       });
     });
     return { lines, advisory: short.join(' · '), shortfall: short.join(' · ') };
@@ -5566,18 +5597,28 @@
     return n ? ` (${n})` : '';
   }
 
+  /* One matcher for "which lots are this breed", used by the inbox note, the pick-up
+     dropdown and the per-line clue — three places that must never disagree about what a
+     breed name means. Loose on purpose: the menu is free text, the batch list is free text,
+     and a farm that writes "Large White" and "Largewhite" means the same pig. */
+  function lotsForBreed(breed) {
+    const f = F();
+    const want = String(breed || '').trim().toLowerCase();
+    if (!want) return [];
+    const norm = v => String(v || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const w = norm(want);
+    return (f.semen || []).filter(s => {
+      const b = norm(s.breed), n = norm(s.boar_name || s.boar);
+      return b === w || n === w || (w && (b.includes(w) || w.includes(b) || n.includes(w) || w.includes(n)));
+    });
+  }
+  function lotsWithStockForBreed(breed) { return lotsForBreed(breed).filter(s => lotOnHand(s) > 0); }
+
   /* A breed with nothing in the cooler is still orderable; the office just deserves to
      know it before they promise bottles. Read live, never stored on the order. */
   function orderBreedStockNote(breed) {
-    const f = F();
-    const want = String(breed || '').trim().toLowerCase();
-    if (!want) return '';
-    const lots = (f.semen || []).filter(s => {
-      const b = String(s.breed || '').trim().toLowerCase();
-      const n = String(s.boar_name || s.boar || '').trim().toLowerCase();
-      return b === want || n === want || b.includes(want) || n.includes(want);
-    });
-    const onHand = lots.reduce((a, s) => a + lotOnHand(s), 0);
+    if (!String(breed || '').trim()) return '';
+    const onHand = lotsWithStockForBreed(breed).reduce((a, s) => a + lotOnHand(s), 0);
     return onHand > 0 ? '' : 'none of this breed is in stock right now';
   }
 
