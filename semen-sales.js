@@ -2570,7 +2570,7 @@
                 <b>${escH(l.boar)} (${escH(l.breed)})</b>
                 <small class="muted" style="display:block">Batch: ${escH(l.semen_batch_no || '—')} · ${l.qty} bottle(s) × ${peso(l.rate)}</small>
                 ${l.returned_qty ? `<small style="color:#d97706;display:block">↩ Returned: <b>${l.returned_qty} bottle(s)</b> (${escH(l.return_reason || 'Unused')})</small>` : ''}
-                ${l.replaced_qty ? `<small style="color:var(--teal2);display:block">🔁 Replaced with: <b>${escH(l.replacement_boar)} (${escH(l.replacement_breed)})</b> × ${l.replaced_qty} @ ${peso(l.replacement_rate)}</small>` : ''}
+                ${resellerReplLinesHTML(l)}   <!-- [FIX 187] every replacement batch, not just the last one -->
               </div>
               <b>${peso(l.amount)}</b>
             </div>
@@ -3234,196 +3234,579 @@
     openResellerTxReceipt(txId);
   };
 
-  /* ── Return & Replacement Workflow ── */
+  /* ── Return & Replacement Workflow ──
+     [FIX 187] Rewritten after live data showed the flow losing money.
+
+     Two bugs were reported together: a reseller returned 3 bottles of B1LW @₱400 and
+     wanted to replace them with 2 × B1LW + 1 × Duroc (BD), but the form offered exactly
+     ONE replacement selector per dispatch line, and the resulting balance read ₱850
+     instead of ₱2,650.
+
+     Why the money broke: the save recomputed every line as
+         amount = (qty − returned_qty) × rate + (this session's repQty × repRate)
+     while `returned_qty` accumulated across saves and `replaced_qty` was OVERWRITTEN.
+     So each new save threw away the replacement amount recorded by the previous one —
+     the 2 × B1LW = ₱800 charge was deleted when the 1 × Duroc was added, and lines
+     untouched in that session were rewritten with a zero replacement value too. The
+     short sum was then written back as the invoice total (`tx.total_amount = newTotal`).
+
+     The model now: a dispatch line owns an ARRAY of replacement rows; line money is
+     derived from stored state only (idempotent — saving twice changes nothing); the
+     legacy single-replacement fields are kept in sync so the hub, receipt and Bluetooth
+     slip keep working; and a hand-corrected invoice (total_manual) moves by the delta of
+     its lines instead of being replaced by their sum. */
+
+  /* Stored replacement batches for one dispatch line. Records written by older builds
+     carried exactly one replacement (replaced_qty / replacement_rate / …); those are
+     read as a one-entry array so their billing is unchanged, and are upgraded in place
+     the next time the line is touched. An explicit empty array means "no replacement"
+     (after a cancellation) and must NOT fall back to the legacy fields. */
+  function lineReplacements(l) {
+    const norm = r => ({
+      semen_id: String((r && r.semen_id) || ''),
+      boar: String((r && r.boar) || 'Replacement'),
+      breed: String((r && r.breed) || ''),
+      batch_no: String((r && r.batch_no) || ''),
+      qty: Math.max(0, +((r && r.qty) || 0)),
+      rate: Math.max(0, +((r && r.rate) || 0)),
+      reason: String((r && r.reason) || ''),
+      at: String((r && r.at) || '')
+    });
+    if (Array.isArray(l.replacements)) return l.replacements.map(norm);
+    const qty = Math.max(0, +l.replaced_qty || 0);
+    if (!qty) return [];
+    return [norm({
+      semen_id: l.replacement_semen_id, boar: l.replacement_boar, breed: l.replacement_breed,
+      batch_no: l.replacement_batch_no, qty, rate: l.replacement_rate, reason: l.return_reason, at: l.adjusted_at
+    })];
+  }
+
+  /* The semen batch a bottle belongs to: by semen id first, then by batch number
+     (older rows only stored the batch number). */
+  function findSemenLot(ref) {
+    const list = (F().semen || []);
+    let s = (ref && ref.semen_id) ? list.find(x => x.id === ref.semen_id) : null;
+    if (!s && ref && ref.batch_no) s = list.find(x => x.semen_batch_no === ref.batch_no);
+    return s || null;
+  }
+  function lotOnHand(s) { return s ? Math.max(0, +((s.available_bottles !== undefined ? s.available_bottles : s.bottles) || 0)) : 0; }
+  function lotSetOnHand(s, n) {
+    if (!s) return;
+    const v = Math.max(0, +n || 0);
+    s.available_bottles = v; s.bottles = v; s.updated_at = new Date().toISOString();
+    if (v <= 0) s.status = 'exhausted'; else if (s.status === 'exhausted') s.status = 'active'; /* [FIX 143] keep the same field set the pickup/void paths write */
+  }
+
+  /* What one dispatch line bills: the bottles the reseller kept, at the dispatch rate,
+     plus every replacement actually handed over at that batch's own rate. */
+  function resellerLineAmount(l) {
+    const kept = Math.max(0, (+l.qty || 0) - Math.max(0, +l.returned_qty || 0));
+    const repl = lineReplacements(l).reduce((a, r) => a + r.qty * r.rate, 0);
+    return +((kept * (+l.rate || 0)) + repl).toFixed(2);
+  }
+
+  /* Refresh the array-derived legacy mirrors other screens read, then the line amount. */
+  function syncResellerLineMirrors(l) {
+    const reps = lineReplacements(l);
+    l.replacements = reps;
+    l.returned_qty = Math.max(0, +l.returned_qty || 0);
+    l.replaced_qty = reps.reduce((a, r) => a + r.qty, 0);
+    const money = reps.reduce((a, r) => a + r.qty * r.rate, 0);
+    l.replacement_rate = l.replaced_qty ? +(money / l.replaced_qty).toFixed(2) : 0;
+    l.replacement_boar = !reps.length ? '' : (reps.length === 1 ? reps[0].boar : `${reps[0].boar} +${reps.length - 1} more`);
+    l.replacement_breed = !reps.length ? '' : (reps.length === 1 ? reps[0].breed : 'mixed');
+    l.replacement_batch_no = !reps.length ? '' : (reps.length === 1 ? reps[0].batch_no : '');
+    l.replacement_amount = +money.toFixed(2);
+    l.is_returned_replaced = l.returned_qty > 0 || reps.length > 0;
+    l.amount = resellerLineAmount(l);
+    return l;
+  }
+
+  /* Recompute the invoice from its lines. `tx.total_manual === true` marks a total the
+     office corrected by hand (see the edit form): such a total moves by the CHANGE in
+     its lines instead of being replaced by their sum, so a hand fix — e.g. restoring
+     the ₱1,800 this bug swallowed — survives the next return instead of reverting. */
+  function applyResellerLineAmounts(tx, opts) {
+    const lines = tx.lines || [];
+    /* `beforeLines` lets a caller that already rewrote the line amounts (the return save
+       mirrors each line as it applies) still report the honest delta it started from. */
+    const before = opts && opts.beforeLines !== undefined
+      ? +(+opts.beforeLines || 0).toFixed(2)
+      : +lines.reduce((a, l) => a + (+l.amount || 0), 0).toFixed(2);
+    lines.forEach(l => syncResellerLineMirrors(l));
+    const derived = +lines.reduce((a, l) => a + (+l.amount || 0), 0).toFixed(2);
+    const manual = tx.total_manual === true;
+    tx.total_amount = Math.max(0, +(manual ? (+tx.total_amount || 0) + (derived - before) : derived).toFixed(2));
+    recalculateResellerTx(tx);   /* balance = total − discount − paid, then the status */
+    return { derived, manualKept: manual && Math.abs(tx.total_amount - derived) > 0.004 };
+  }
+
+  /* [FIX 187] Exposed for the qa harness (qa/test-reseller-return.mjs) and for on-device
+     diagnosis: `arsResellerReturnMath.derive(tx)` reports what an invoice's lines say
+     without touching it. */
+  window.arsResellerReturnMath = {
+    replacementsFor: lineReplacements,
+    amountForLine: resellerLineAmount,
+    lineMirrors: syncResellerLineMirrors,
+    derive: tx => {
+      const lines = tx && tx.lines || [];
+      const derived = +lines.reduce((a, l) => a + resellerLineAmount(l), 0).toFixed(2);
+      return { derived, stored: +(+tx.total_amount || 0).toFixed(2), drift: +(derived - (+tx.total_amount || 0)).toFixed(2), balance: resellerTxBalance(tx), manual: tx.total_manual === true };
+    },
+    apply: applyResellerLineAmounts
+  };
+
+  /* Line total as it would read if the open form were saved right now — the preview and
+     the save share these primitives so the number shown is the number written. */
+  function projectedResellerLineAmount(l, extraReturned, keptReps, addedReps) {
+    const c = {
+      qty: +l.qty || 0, rate: +l.rate || 0, amount: +l.amount || 0,
+      returned_qty: Math.max(0, +l.returned_qty || 0) + Math.max(0, +extraReturned || 0),
+      replacements: keptReps.concat(addedReps)
+    };
+    return resellerLineAmount(c);
+  }
+
+  /* These forms are appended as .modal-overlay elements, not the app's #modalBg sheet,
+     so app.js's closeModal() (which takes no id) cannot dismiss them — the file's own
+     convention is to remove the element. */
+  function closeResellerModal(id) { const el = document.getElementById(id); if (el && el.remove) el.remove(); }
+  window.closeResellerModal = closeResellerModal;
+
+  /* ── the modal ── */
   let activeReturnTxId = null;
+  let returnDraft = null;   /* { txId, ret:{lIdx:{qty,reason,action}}, adds:{lIdx:[row]}, removes:{'lIdx:i':true} } */
+
+  function ensureReturnDraft(txId) {
+    if (!returnDraft || returnDraft.txId !== txId) {
+      returnDraft = { txId, ret: {}, adds: {}, removes: {} };
+      activeReturnTxId = txId;
+    }
+    return returnDraft;
+  }
 
   function openResellerReturnReplaceModal(txId) {
     ensureResellerData();
     const f = F();
     const tx = (f.semenResellerTx || []).find(x => x.id === txId);
-    if (!tx) { toast('Pickup transaction not found.'); return; }
+    if (!tx) { toast('Transaction not found.'); return; }
+    const d = ensureReturnDraft(txId);
+    const lines = tx.lines || [];
+    const isVoided = tx.voided === true;
 
-    activeReturnTxId = txId;
-    const available = (f.semen || []).filter(s => +(s.available_bottles ?? s.bottles ?? 0) > 0);
+    const reseller = (f.semenResellers || []).find(r => r.id === tx.reseller_id);
+    if (!reseller) { toast('Reseller not found.'); return; }
 
-    document.getElementById('resellerReturnModal')?.remove();
+    const semen = (f.semen || []).filter(s => lotOnHand(s) > 0);
 
-    document.body.insertAdjacentHTML('beforeend', `
-      <div class="due-modal-bg" id="resellerReturnModal" style="z-index:9999999!important">
-        <form class="due-modal reseller-hub-wrap" onsubmit="window.saveResellerReturnReplace(event, '${tx.id}')">
-          <div class="modal-top">
-            <div>
-              <div class="eyebrow" style="color:#d97706;font-weight:800">RESELLER RETURN &amp; REPLACEMENT ADJUSTMENT</div>
-              <h2>↩ Return / Replace Semen Bottles</h2>
-              <p class="muted">Pickup #${escH(tx.id)} · Reseller: <b>${escH(tx.reseller_name)}</b></p>
-            </div>
-            <button type="button" class="close-reminder" onclick="document.getElementById('resellerReturnModal').remove()">×</button>
+    /* Every line keeps its own replacement list — unlimited rows, each with its own
+       batch, quantity and price, because the batch price is the price indicator. */
+    function renderLineBlock(l, lIdx) {
+      const storedReps = lineReplacements(l);
+      const returnable = Math.max(0, (+l.qty || 0) - Math.max(0, +l.returned_qty || 0));
+      const retDraft = d.ret[lIdx] || {};
+      const retQty = retDraft.qty !== undefined ? retDraft.qty : 0;
+      const adds = d.adds[lIdx] || [];
+
+      const storedRows = !storedReps.length ? '' : `<div class="rr-stored" style="margin-top:6px">
+        <div style="font-size:11px;font-weight:bold;color:var(--muted)">REPLACED SO FAR (already billed):</div>
+        ${storedReps.map((r, i) => {
+          const off = !!d.removes[`${lIdx}:${i}`];
+          const onHandLot = findSemenLot(r);
+          return `<div class="rr-row" style="display:flex;flex-wrap:wrap;gap:4px 8px;align-items:center;padding:4px 0;border-bottom:1px dashed var(--line);${off ? 'opacity:.5' : ''}">
+            <span style="flex:1 1 150px;min-width:0;font-size:12px;${off ? 'text-decoration:line-through' : ''}"><b>${escH(r.boar)}</b>${r.batch_no ? ` <small class="muted">(${escH(r.batch_no)})</small>` : ''}${r.breed ? ` <small class="muted">${escH(r.breed)}</small>` : ''}</span>
+            <span style="flex:0 0 auto;font-size:12px;white-space:nowrap">${r.qty} × ₱${+r.rate||0} = <b>₱${(r.qty * (+r.rate || 0)).toFixed(2)}</b></span>
+            <span style="flex:0 0 auto">${off
+              ? `<button type="button" class="btn ghost small" onclick="window.rrUndelete(${lIdx},${i})">↩︎ Undo</button>`
+              : `<button type="button" class="btn ghost small" style="color:#dc2626" onclick="window.rrRemoveExisting(${lIdx},${i})" title="Cancel this replacement and put the ${r.qty} bottle(s) back into ${escH(onHandLot ? (onHandLot.semen_batch_no || onHandLot.id) : 'that batch')}">✕ Cancel</button>`}</span>
+          </div>`;
+        }).join('')}
+      </div>`;
+
+      const addRows = adds.map((row, i) => {
+        const opts = ['<option value="">— select batch —</option>'].concat(semen.map(s => {
+          const val = String(s.id || s.semen_batch_no || '');
+          return `<option value="${escH(val)}" data-batch="${escH(s.semen_batch_no || '')}" ${String(row.semen_id) === val ? 'selected="selected"' : ''}>${escH(s.semen_batch_no || s.id)} — ${escH(s.boar_name || s.boar || '')} (${escH(s.breed || '—')}) · ₱${+(s.price_per_dose || 0)} · ${lotOnHand(s)} left</option>`;
+        })).join('');
+        return `<div class="rr-row" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:5px 0;border-bottom:1px dashed var(--line)">
+          <select class="input" style="flex:1 1 165px;min-width:0;padding:6px 8px;font-size:12px" onchange="window.rrPick(${lIdx},${i},this.value)">${opts}</select>
+          <input class="input rr-num" type="number" min="1" step="1" value="${+row.qty || 1}" style="flex:0 1 58px;min-width:0;padding:6px 8px;font-size:12px;text-align:center" oninput="window.rrQty(${lIdx},${i},this.value)" title="Bottles of this batch" />
+          <div style="position:relative;flex:1 1 92px;min-width:0"><span style="position:absolute;left:8px;top:6px;font-size:11px;color:var(--muted)">₱</span><input class="input rr-num" type="number" min="0" step="0.01" value="${+row.rate || 0}" style="width:100%;padding:6px 8px 6px 18px;font-size:12px" oninput="window.rrRate(${lIdx},${i},this.value)" title="Price per bottle — prefilled from the batch, change it only for a price adjustment" /></div>
+          <span class="rr-lineamt" style="flex:0 0 auto;font-size:11.5px;font-weight:bold;white-space:nowrap;text-align:right">₱${((+row.qty || 0) * (+row.rate || 0)).toFixed(2)}</span>
+          <button type="button" class="btn ghost small" style="flex:0 0 auto;color:#dc2626;padding:4px 6px" onclick="window.rrDelRow(${lIdx},${i})" title="Remove this row before saving">✕</button>
+        </div>`;
+      }).join('');
+
+      return `<div class="rr-card" data-line="${lIdx}" data-qty="${+l.qty || 0}" data-rate="${+l.rate || 0}" data-returned="${Math.max(0, +l.returned_qty || 0)}" style="padding:10px;border:1px solid var(--line);border-radius:8px;margin-bottom:8px;background:var(--panel)">
+        <div class="rr-head" style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap">
+          <div><b>${escH(l.boar || 'Unknown Boar')}</b> <small class="muted">${escH(l.breed || '')}</small><br>
+            <small class="muted">${escH(l.semen_batch_no || '')} — ${+l.qty || 0} × ₱${+l.rate || 0} = ₱${(+l.qty || 0) * (+l.rate || 0)}</small></div>
+          <div class="rr-state" style="font-size:11px;text-align:right"></div>
+        </div>
+        <div class="rr-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px">
+          <label style="font-size:11px;font-weight:bold">Return qty
+            <input class="input rr-retqty" type="number" min="0" max="${returnable}" step="1" value="${retQty}" style="padding:6px 8px;font-size:13px" oninput="window.rrRetQty(${lIdx},this.value)" ${isVoided ? 'readonly' : ''} />
+            <small class="muted" style="font-weight:normal"> of ${+l.qty || 0} · ${returnable} still returnable</small></label>
+          <label style="font-size:11px;font-weight:bold">Reason
+            <select class="input" style="padding:6px 8px;font-size:12px" onchange="window.rrReason(${lIdx},this.value)">
+              <option value="">— select reason —</option>
+              <option ${d.ret[lIdx]?.reason === 'Unused / Unsold' ? 'selected' : ''}>Unused / Unsold</option>
+              <option ${d.ret[lIdx]?.reason === 'Damaged' ? 'selected' : ''}>Damaged</option>
+              <option ${d.ret[lIdx]?.reason === 'Expired' ? 'selected' : ''}>Expired</option>
+              <option ${d.ret[lIdx]?.reason === 'Quality issue' ? 'selected' : ''}>Quality issue</option>
+              <option ${d.ret[lIdx]?.reason === 'Wrong batch' ? 'selected' : ''}>Wrong batch</option>
+              <option ${d.ret[lIdx]?.reason === 'Other' ? 'selected' : ''}>Other</option>
+            </select></label>
+        </div>
+        <label style="font-size:11px;font-weight:bold;display:block;margin-top:6px">What happens to the returned stock
+          <select class="input" style="padding:6px 8px;font-size:12px" onchange="window.rrAction(${lIdx},this.value)">
+            <option value="discard" ${((d.ret[lIdx]?.action || 'discard') === 'discard') ? 'selected' : ''}>Discard — not restocked, no credit back</option>
+            <option value="restock" ${((d.ret[lIdx]?.action || '') === 'restock') ? 'selected' : ''}>Restock — add back into ${escH(l.semen_batch_no || 'that batch')}</option>
+          </select></label>
+        <div class="rr-repl" style="margin-top:8px">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+            <span style="font-size:11px;font-weight:bold">Replacement (any number of batches)</span>
+            <button type="button" class="btn ghost small" style="color:#166534" onclick="window.rrAddRow(${lIdx})" ${isVoided ? 'disabled' : ''}>+ Add replacement batch</button>
           </div>
+          <div class="rr-adds" data-lidx="${lIdx}">${addRows || (storedReps.length ? '' : '<small class="muted">No replacement added — the returned bottles are a credit only.</small>')}</div>
+          ${storedRows}
+        </div>
+      </div>`;
+    }
 
-          <div class="reminder-fields" style="text-align:left">
-            <p class="field-hint" style="margin:0 0 10px">Specify returned bottles from this dispatch. Replaced bottles will adjust the bill and automatically deduct stock from the newly chosen semen batch.</p>
-
-            ${(tx.lines || []).map((l, lIdx) => `
-              <div style="background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:12px">
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-                  <b>Line ${lIdx + 1}: ${escH(l.boar)} (${escH(l.breed)})</b>
-                  <span class="tag">Original: ${l.qty} @ ${peso(l.rate)} = ${peso(l.amount)}</span>
-                </div>
-
-                <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
-                  <div class="field" style="margin:0">
-                    <label style="font-size:11px">Returned Qty (bottles)</label>
-                    <input type="number" min="0" max="${l.qty}" step="1" name="ret_qty_${lIdx}" value="${l.returned_qty || 0}" class="suggest-input">
-                  </div>
-                  <div class="field" style="margin:0">
-                    <label style="font-size:11px">Return Reason</label>
-                    <select name="ret_reason_${lIdx}" class="rfid-select">
-                      <option value="Unused / Unsold">Unused / Unsold</option>
-                      <option value="Expired">Expired</option>
-                      <option value="Cold-Shocked / Dead Motility">Cold-Shocked / Dead Motility</option>
-                      <option value="Customer Cancellation">Customer Cancellation</option>
-                      <option value="Wrong Breed Dispatched">Wrong Breed Dispatched</option>
-                    </select>
-                  </div>
-                  <div class="field" style="margin:0">
-                    <label style="font-size:11px">Inventory Action</label>
-                    <select name="ret_action_${lIdx}" class="rfid-select">
-                      <option value="discard">Discard / Expired (No Restock)</option>
-                      <option value="restock">Restock to Available Bottles</option>
-                    </select>
-                  </div>
-                </div>
-
-                <!-- Replacement Line -->
-                <div style="margin-top:10px;padding-top:8px;border-top:1px dashed var(--line)">
-                  <label style="font-size:11px;font-weight:700;color:var(--teal2)">🔁 Give Replacement Semen (Optional)</label>
-                  <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:8px;align-items:end">
-                    <div class="field" style="margin:0">
-                      <select name="rep_semen_${lIdx}" class="rfid-select">
-                        <option value="">— No Replacement (Bill Deducted) —</option>
-                        ${available.map(s => `
-                          <option value="${s.id}">
-                            ${s.boar_name || s.boar} (${s.breed}) · ${s.available_bottles ?? s.bottles} left (₱${s.price || 350})
-                          </option>
-                        `).join('')}
-                      </select>
-                    </div>
-                    <div class="field" style="margin:0">
-                      <input type="number" min="0" step="1" name="rep_qty_${lIdx}" placeholder="Replaced Qty" value="${l.replaced_qty || 0}" class="suggest-input">
-                    </div>
-                    <div class="field" style="margin:0">
-                      <input type="number" min="0" step="1" name="rep_rate_${lIdx}" placeholder="New Rate (₱)" value="${l.replacement_rate || l.rate || 350}" class="suggest-input">
-                    </div>
-                  </div>
-                </div>
-              </div>
-            `).join('')}
-
-            <div class="field full">
-              <label>Adjustment Remarks / Signature Note</label>
-              <textarea name="adj_notes" placeholder="e.g. 2 Duroc bottles returned due to expired viability; replaced with 2 Large White doses."></textarea>
-            </div>
-          </div>
-
-          <div class="due-actions" style="margin-top:18px">
-            <button type="button" class="btn ghost" onclick="document.getElementById('resellerReturnModal').remove()">Cancel</button>
-            <button type="submit" class="btn" style="background:#d97706;color:#fff">✓ Save Adjustment &amp; Print BLE Slip</button>
-          </div>
-        </form>
+    const modal = document.createElement('div');
+    modal.id = 'resellerReturnModal';
+    modal.className = 'modal-overlay show';
+    modal.innerHTML = `<div class="modal" style="max-width:760px">
+      <div class="modal-hd"><h3>↩︎ RETURN &amp; REPLACE #${txId}${isVoided ? ' <small class="muted">(void — read-only)</small>' : ''}</h3><button type="button" class="btn ghost small" onclick="window.closeResellerModal('resellerReturnModal')">✕</button></div>
+      <div class="modal-bd" style="max-height:70vh;overflow:auto">
+        <div style="padding:8px;background:var(--info-bg);border-radius:6px;margin-bottom:10px">
+          <b>${escH(reseller.name)}</b> · ${escH(tx.tx_no || '')} · ${fmtDate(tx.timestamp)}<br>
+          <small class="muted">Returned bottles are deducted from what is owed; every replacement batch is added at its own price. Adjustments are cumulative and can be re-opened — a replacement row can be cancelled here and the stock returns to its batch.</small>
+        </div>
+        ${lines.map(renderLineBlock).join('')}
+        <div class="rr-totals" style="margin-top:10px;padding:8px;border:1px dashed var(--line);border-radius:8px"></div>
+        <button type="button" class="btn ghost small" style="margin-top:6px" onclick="document.getElementById('returnAdjustmentPanel').style.display='block';this.style.display='none'">Show previous adjustment notes</button>
+        <div id="returnAdjustmentPanel" style="display:none;margin-top:8px;padding:8px;background:#fefce8;border:1px solid #fde68a;border-radius:6px">
+          <div style="font-size:11px;font-weight:bold;margin-bottom:4px">ADJUSTMENT HISTORY FOR THIS PICKUP:</div>
+          <ul style="font-size:11.5px;margin:4px 0 0 16px">
+            ${lines.map((l, idx) => {
+              const reps = lineReplacements(l);
+              return (+(l.returned_qty || 0) > 0 || reps.length) ? `<li>Line ${idx + 1}: ${l.returned_qty || 0} returned${reps.length ? ' · ' + reps.map(r => `${r.qty} × ${escH(r.boar)} @ ₱${+r.rate || 0}`).join(' + ') : ''}${l.return_reason ? ` <small class="muted">(${escH(l.return_reason)})</small>` : ''}</li>` : '';
+            }).join('') || '<li>No adjustment recorded yet.</li>'}
+          </ul>
+          <small class="muted">${escH(tx.adjustment_notes || '')}</small>
+        </div>
       </div>
-    `);
-  }
-  window.openResellerReturnReplaceModal = openResellerReturnReplaceModal;
+      <div class="modal-ft" style="display:flex;gap:8px;justify-content:space-between">
+        <button type="button" class="btn ghost small" onclick="window.closeResellerModal('resellerReturnModal')">Cancel</button>
+        <div style="display:flex;gap:8px">
+          <button type="button" class="btn ghost small" onclick="window.openEditResellerTxModal('${tx.id}')">✎ Edit pickup record</button>
+          <button type="button" class="btn" style="background:#166534;color:#fff" onclick="window.saveResellerReturnReplace(event,'${tx.id}')" ${isVoided ? 'disabled' : ''}>💾 Save Adjustment</button>
+        </div>
+      </div>
+    </div>`;
+    document.body.appendChild(modal);
 
-  window.saveResellerReturnReplace = function(e, txId) {
+    /* Recompute the preview whenever anything in the form changes: the arithmetic is
+       only trustworthy if it is derived, never transcribed. */
+    modal.addEventListener('input', rrRefreshPreview);
+    modal.addEventListener('change', rrRefreshPreview);
+    rrRefreshPreview();
+  }
+
+  /* ── live preview of the money ── */
+  function rrRefreshPreview() {
+    if (!activeReturnTxId) return;
+    const f = F();
+    const tx = (f.semenResellerTx || []).find(x => x.id === activeReturnTxId);
+    const modal = document.getElementById('resellerReturnModal');
+    if (!tx || !modal) return;
+    const d = returnDraft && returnDraft.txId === activeReturnTxId ? returnDraft : { ret: {}, adds: {}, removes: {} };
+    let derivedNow = +(tx.lines || []).reduce((a, l) => a + (+l.amount || 0), 0).toFixed(2);
+    let derivedNew = 0;
+    let stockWarn = 0;
+    (tx.lines || []).forEach((l, lIdx) => {
+      const stored = lineReplacements(l);
+      const keptReps = stored.filter((r, i) => !d.removes[`${lIdx}:${i}`]);
+      const adds = (d.adds[lIdx] || []).map(row => ({ ...row, qty: Math.max(0, +row.qty || 0), rate: Math.max(0, +row.rate || 0) }))
+        .filter(row => row.qty > 0);
+      const retNow = Math.max(0, +l.returned_qty || 0);
+      const retWant = Math.max(0, parseInt((d.ret[lIdx] || {}).qty, 10) || 0);
+      const retNew = retNow + Math.min(Math.max(0, (+l.qty || 0) - retNow), retWant);
+      const amount = projectedResellerLineAmount(l, Math.min(Math.max(0, (+l.qty || 0) - retNow), retWant), keptReps, adds);
+      const before = +l.amount || 0;
+      derivedNew += amount;
+      const replMoney = adds.reduce((a, r) => a + r.qty * r.rate, 0);
+      const maxRet = Math.max(0, (+l.qty || 0) - retNow);
+      const over = retWant > maxRet;
+      const card = modal.querySelector(`.rr-card[data-line="${lIdx}"]`);
+      if (card) {
+        const st = card.querySelector('.rr-state');
+        if (st) st.innerHTML = `<span class="muted">returned ${retNow} → <b>${retNew}</b>${over ? ` <span style="color:#b45309">(only ${maxRet} still returnable here)</span>` : ''}</span>
+          ${adds.length ? `<div style="color:#166534">+ ${adds.reduce((a, r) => a + r.qty, 0)} replacing = ₱${replMoney.toFixed(2)}</div>` : ''}
+          <div>line: ₱${before.toFixed(2)} → <b>₱${amount.toFixed(2)}</b></div>`;
+        const inp = card.querySelector('.rr-retqty');
+        if (inp && String(inp.max) !== String(maxRet)) inp.max = String(maxRet);
+      }
+      if (over) stockWarn++;   /* same reason the save would refuse — surfaced before saving */
+      adds.forEach(row => {
+        const lot = findSemenLot(row);
+        if (!lot || lotOnHand(lot) < row.qty) stockWarn++;
+      });
+    });
+    const totals = modal.querySelector('.rr-totals');
+    if (totals) {
+      const wasTotal = +tx.total_amount || 0;
+      const willTotal = Math.max(0, +(tx.total_manual === true ? wasTotal + (derivedNew - derivedNow) : derivedNew).toFixed(2));
+      const disc = resellerTxDiscount(tx);
+      const paid = +(tx.paid_amount || 0);
+      const balNow = Math.max(0, +(wasTotal - disc - paid).toFixed(2));
+      const balNew = Math.max(0, +(willTotal - disc - paid).toFixed(2));
+      totals.innerHTML = `<div style="display:grid;grid-template-columns:1fr auto;gap:2px 12px;font-size:12.5px">
+        <div class="muted">Invoice if saved</div><b>₱${wasTotal.toFixed(2)} → ₱${willTotal.toFixed(2)}</b>
+        <div class="muted">Balance after this adjustment</div><b style="color:${balNew > balNow ? '#b45309' : '#166534'}">₱${balNow.toFixed(2)} → ₱${balNew.toFixed(2)}</b>
+        ${tx.total_manual ? '<div class="muted">Manual correction on this record</div><b>kept, moved by the line change</b>' : ''}
+        ${stockWarn ? `<div style="grid-column:1/-1;font-size:11px;color:#b45309">⚠ ${stockWarn} ${stockWarn === 1 ? 'entry needs' : 'entries need'} fixing (quantity beyond what is returnable, or beyond the batch on hand) — save will be refused until ${stockWarn === 1 ? 'it is' : 'they are'} corrected.</div>` : ''}
+      </div>`;
+    }
+  }
+
+  window.rrAddRow = function (lIdx) {
+    const d = ensureReturnDraft(activeReturnTxId);
+    (d.adds[lIdx] = d.adds[lIdx] || []).push({ semen_id: '', boar: '', breed: '', batch_no: '', qty: 1, rate: 0 });
+    openResellerReturnReplaceModalRerender();
+  };
+  window.rrDelRow = function (lIdx, i) {
+    const d = ensureReturnDraft(activeReturnTxId);
+    (d.adds[lIdx] || []).splice(i, 1);
+    openResellerReturnReplaceModalRerender();
+  };
+  window.rrPick = function (lIdx, i, val) {
+    const d = ensureReturnDraft(activeReturnTxId);
+    const row = (d.adds[lIdx] || [])[i];
+    if (!row) return;
+    row.semen_id = val || '';
+    const s = (F().semen || []).find(x => String(x.id || x.semen_batch_no || '') === val);
+    row.boar = s ? (s.boar_name || s.boar || '') : '';
+    row.breed = s ? (s.breed || '') : '';
+    row.batch_no = s ? (s.semen_batch_no || '') : '';
+    row.rate = s ? +(s.price_per_dose || 0) : 0;
+    if (!(+row.qty > 0)) row.qty = 1;
+    openResellerReturnReplaceModalRerender();
+  };
+  window.rrQty = function (lIdx, i, v) {
+    const row = ((ensureReturnDraft(activeReturnTxId).adds[lIdx] || [])[i]);
+    if (row) row.qty = Math.max(0, parseInt(v, 10) || 0);
+    rrRefreshPreview();
+  };
+  window.rrRate = function (lIdx, i, v) {
+    const row = ((ensureReturnDraft(activeReturnTxId).adds[lIdx] || [])[i]);
+    if (row) row.rate = Math.max(0, +v || 0);
+    rrRefreshPreview();
+  };
+  window.rrRetQty = function (lIdx, v) {
+    const d = ensureReturnDraft(activeReturnTxId);
+    (d.ret[lIdx] = d.ret[lIdx] || {}).qty = Math.max(0, parseInt(v, 10) || 0);
+    rrRefreshPreview();
+  };
+  window.rrReason = function (lIdx, v) {
+    const d = ensureReturnDraft(activeReturnTxId);
+    (d.ret[lIdx] = d.ret[lIdx] || {}).reason = v || '';
+  };
+  window.rrAction = function (lIdx, v) {
+    const d = ensureReturnDraft(activeReturnTxId);
+    (d.ret[lIdx] = d.ret[lIdx] || {}).action = v || 'discard';
+  };
+  window.rrRemoveExisting = function (lIdx, i) {
+    const d = ensureReturnDraft(activeReturnTxId);
+    d.removes[`${lIdx}:${i}`] = true;
+    openResellerReturnReplaceModalRerender();
+  };
+  window.rrUndelete = function (lIdx, i) {
+    const d = ensureReturnDraft(activeReturnTxId);
+    delete d.removes[`${lIdx}:${i}`];
+    openResellerReturnReplaceModalRerender();
+  };
+  /* Re-render from the draft (batch lists, totals, row visibility are all derived). */
+  function openResellerReturnReplaceModalRerender() {
+    if (!activeReturnTxId) return;
+    const keepScroll = document.querySelector('#resellerReturnModal .modal-bd')?.scrollTop || 0;
+    closeResellerModal('resellerReturnModal');
+    openResellerReturnReplaceModal(activeReturnTxId);
+    const bd = document.querySelector('#resellerReturnModal .modal-bd');
+    if (bd) bd.scrollTop = keepScroll;
+  }
+
+  window.saveResellerReturnReplace = function (e, txId) {
     if (e) e.preventDefault();
     const f = F();
     const tx = (f.semenResellerTx || []).find(x => x.id === txId);
     if (!tx) { toast('Transaction not found.'); return; }
+    if (tx.voided === true) { toast('Voided transactions cannot be adjusted.'); return; }
+    const d = (returnDraft && returnDraft.txId === txId) ? returnDraft : { ret: {}, adds: {}, removes: {} };
+    const totalBefore = +tx.total_amount || 0;
+    const linesBefore = (tx.lines || []).map(l => +l.amount || 0);   /* snapshot for the audit trail */
+    const notes = [];
+    const audit = { at: new Date().toISOString(), returns: 0, replacements: 0, cancelled: 0, lines: [] };
 
-    const form = e.target;
-    const d = Object.fromEntries(new FormData(form));
-
-    let newTotal = 0;
+    /* ── pass 1: validate the whole form before a single peso or bottle moves ──
+       A half-applied adjustment is worse than a refused one: the invoice and the batch
+       counts would disagree with no way to tell which part landed. The old build clamped
+       or silently dropped rows instead (a return larger than the dispatched quantity was
+       trimmed to fit [FIX M8]; an out-of-stock replacement was skipped) — both are now
+       hard errors that keep the form open so the number can be corrected.            */
+    const blocked = [];
+    const freed = {}, claimed = {};
+    const lotKey = x => String((x && (x.id || x.semen_batch_no)) || '');
     (tx.lines || []).forEach((l, lIdx) => {
-      const retQty = Math.max(0, parseInt(d[`ret_qty_${lIdx}`] || 0, 10) || 0);
-      /* [FIX M8] the return/replace form only limited qty by the HTML max
-         attribute — a hand-typed value could return MORE bottles than were ever
-         dispatched. Cap at what is actually returnable. */
-      const alreadyReturned = Math.max(0, +l.returned_qty || 0);
-      const returnable = Math.max(0, (+l.qty || 0) - alreadyReturned);
-      const realRetQty = Math.min(returnable, retQty);
-      if (retQty > returnable) toast(`⚠️ Line ${lIdx + 1}: capped return at ${returnable} bottle(s) (${l.qty} dispatched, ${alreadyReturned} already returned).`);
-      const retReason = d[`ret_reason_${lIdx}`] || 'Unused';
-      const retAction = d[`ret_action_${lIdx}`] || 'discard';
-      const repSemenId = d[`rep_semen_${lIdx}`] || '';
-      const repQty = Math.max(0, parseInt(d[`rep_qty_${lIdx}`] || 0, 10) || 0);
-      const repRate = Math.max(0, parseFloat(d[`rep_rate_${lIdx}`] || l.rate || 350) || 350);
+      const lineDraft = d.ret[lIdx] || {};
+      const returnedNow = Math.max(0, +l.returned_qty || 0);
+      const returnable = Math.max(0, (+l.qty || 0) - returnedNow);
+      const wantReturn = Math.max(0, parseInt(lineDraft.qty, 10) || 0);
+      if (wantReturn > returnable) {
+        blocked.push(`Line ${lIdx + 1}: you asked to return ${wantReturn} bottle(s), but ${returnable === 0 ? `all ${+l.qty || 0} on this line are already returned` : `only ${returnable} of the ${+l.qty || 0} dispatched is still unreturned`}.`);
+      }
+      lineReplacements(l).forEach((r, i) => {
+        if (!d.removes[`${lIdx}:${i}`]) return;
+        const lot = findSemenLot(r);
+        if (lot) { const k = lotKey(lot); freed[k] = (freed[k] || 0) + r.qty; }
+      });
+      (d.adds[lIdx] || []).forEach(row => {
+        const qty = Math.max(0, Math.floor(+row.qty || 0));
+        if (!qty) return;
+        const lot = findSemenLot(row);
+        if (!lot) { blocked.push(`Line ${lIdx + 1}: replacement batch "${row.batch_no || row.semen_id || '?'}" is no longer in semen inventory — pick a live batch or drop the row.`); return; }
+        const k = lotKey(lot);
+        /* on hand + what this very save is putting back − what other rows already take */
+        const avail = lotOnHand(lot) + (freed[k] || 0) - (claimed[k] || 0);
+        if (qty > avail) blocked.push(`Line ${lIdx + 1}: ${lot.boar_name || lot.boar || 'that batch'} has only ${Math.max(0, avail)} bottle(s) available for this save, ${qty} asked for.`);
+        claimed[k] = (claimed[k] || 0) + qty;
+      });
+    });
+    if (blocked.length) {
+      const all = blocked.slice(0, 2).join(' · ') + (blocked.length > 2 ? ` · +${blocked.length - 2} more` : '');
+      toast(`⚠ ${all}. Nothing was saved — fix the number(s) and save again.`);
+      return;
+    }
 
-      l.returned_qty = alreadyReturned + realRetQty;
-      l.return_reason = retReason;
-      l.return_action = retAction;
+    /* ── pass 2: apply ── */
+    (tx.lines || []).forEach((l, lIdx) => {
+      const lineDraft = d.ret[lIdx] || {};
+      const stored = lineReplacements(l);
+      const returnedNow = Math.max(0, +l.returned_qty || 0);
+      const returnable = Math.max(0, (+l.qty || 0) - returnedNow);
+      const retQty = Math.min(returnable, Math.max(0, parseInt(lineDraft.qty, 10) || 0));
 
-      // Handle stock return (uses the validated realRetQty)
-      if (realRetQty > 0 && retAction === 'restock') {
-        let s = null;
-        if (l.semen_id) s = (f.semen || []).find(x => x.id === l.semen_id);
-        if (!s && l.semen_batch_no) s = (f.semen || []).find(x => x.semen_batch_no === l.semen_batch_no);
-        if (s) {
-          const restored = +(s.available_bottles !== undefined ? s.available_bottles : (s.bottles || 0)) + realRetQty;
-          s.available_bottles = restored;
-          s.bottles = restored;
-          if (s.status === 'exhausted' && restored > 0) s.status = 'active';
+      /* 1) cancelled replacement rows first: the bottles go back to the batch they came
+         from, so a wrong replacement (e.g. the wrong number of doses) is reversible. */
+      const cancelled = [];
+      const remaining = stored.filter((r, i) => {
+        if (!d.removes[`${lIdx}:${i}`]) return true;
+        cancelled.push(r);
+        return false;
+      });
+      cancelled.forEach(r => {
+        const lot = findSemenLot(r);
+        if (lot) lotSetOnHand(lot, lotOnHand(lot) + r.qty);
+        else notes.push(`Line ${lIdx + 1}: ${r.qty} × ${r.boar} cancelled, but that batch is no longer in semen inventory — check its count by hand.`);
+        audit.cancelled += r.qty;
+        notes.push(`Line ${lIdx + 1}: cancelled ${r.qty} × ${r.boar}${r.batch_no ? ` (${r.batch_no})` : ''} @ ₱${r.rate}; billing and stock reversed.`);
+      });
+
+      /* 2) the return itself: credit only, unless the bottles are restocked. */
+      if (retQty > 0) {
+        l.returned_qty = returnedNow + retQty;
+        l.return_reason = (lineDraft.reason || l.return_reason || 'Unused / Unsold');
+        l.return_action = lineDraft.action || 'discard';
+        if (l.return_action === 'restock') {
+          const lot = findSemenLot({ semen_id: l.semen_id, batch_no: l.semen_batch_no });
+          if (lot) { lotSetOnHand(lot, lotOnHand(lot) + retQty); notes.push(`Line ${lIdx + 1}: ${retQty} returned bottle(s) restocked into ${lot.semen_batch_no || lot.id}.`); }
+          else notes.push(`Line ${lIdx + 1}: ${retQty} bottle(s) marked restocked, but that batch is no longer in semen inventory — add it there if the stock is real.`);
+        } else {
+          notes.push(`Line ${lIdx + 1}: ${retQty} bottle(s) discarded — no credit to batch stock.`);
         }
+        audit.returns += retQty;
       }
 
-      // Handle replacement stock deduction — validate against on-hand before deducting
-      if (repQty > 0 && repSemenId) {
-        const repSemen = (f.semen || []).find(x => x.id === repSemenId || x.semen_batch_no === repSemenId);
-        if (repSemen) {
-          const repStock = Math.max(0, +(repSemen.available_bottles !== undefined ? repSemen.available_bottles : (repSemen.bottles || 0)));
-          if (repQty > repStock) {
-            toast(`⚠️ Replacement for line ${lIdx + 1}: capped at ${repStock} bottle(s) on hand for ${repSemen.boar_name || repSemen.boar}.`);
-            repQty = repStock;
-          }
-          const remaining = Math.max(0, repStock - repQty);
-          repSemen.available_bottles = remaining;
-          repSemen.bottles = remaining;
-          if (remaining === 0) repSemen.status = 'exhausted';
-          l.replacement_boar = repSemen.boar_name || repSemen.boar || 'Boar';
-          l.replacement_breed = repSemen.breed || 'Breed';
-          l.replacement_batch_no = repSemen.semen_batch_no || '';
-          l.replacement_rate = repRate;
-          l.replaced_qty = repQty;
-        }
-      }
+      /* 3) new replacement rows: validated against on-hand stock, then deducted. */
+      const added = [];
+      (d.adds[lIdx] || []).forEach(row => {
+        const qty = Math.max(0, Math.floor(+row.qty || 0));
+        if (!qty) return;
+        const rate = Math.max(0, +row.rate || 0);
+        const lot = findSemenLot(row);
+        if (!lot) return;                       /* pass 1 refused this save; unreachable */
+        const onHand = lotOnHand(lot);
+        const qtyOk = Math.min(onHand, qty);     /* belt and braces; pass 1 guaranteed enough stock */
+        if (qtyOk <= 0) return;
+        lotSetOnHand(lot, onHand - qtyOk);
+        added.push({
+          semen_id: lot.id || '', boar: lot.boar_name || lot.boar || 'Boar', breed: lot.breed || '',
+          batch_no: lot.semen_batch_no || '', qty: qtyOk, rate,
+          reason: (lineDraft.reason || '').trim(), at: new Date().toISOString()
+        });
+        notes.push(`Line ${lIdx + 1}: replaced with ${qtyOk} × ${lot.boar_name || lot.boar}${lot.semen_batch_no ? ` (${lot.semen_batch_no})` : ''} @ ₱${rate} = ₱${(qtyOk * rate).toFixed(2)}.`);
+      });
+      if (added.length) audit.replacements += added.reduce((a, r) => a + r.qty, 0);
 
-      if (realRetQty > 0 || repQty > 0) {
-        l.is_returned_replaced = true;
-      }
-
-      // Re-align line amount (kept = original − cumulative returns)
-      const keptQty = Math.max(0, l.qty - l.returned_qty);
-      l.amount = (keptQty * l.rate) + (repQty * repRate);
-      newTotal += l.amount;
+      l.replacements = remaining.concat(added);
+      syncResellerLineMirrors(l);
+      audit.lines.push({
+        line: lIdx + 1, dispatch: `${l.boar || l.semen_batch_no || ''} × ${+l.qty || 0}`,
+        returned: +l.returned_qty || 0,
+        replacements: l.replacements.map(r => `${r.boar} × ${r.qty} @ ₱${r.rate}`),
+        amount_before: +(linesBefore[lIdx] || 0).toFixed(2), amount_after: +(+l.amount || 0).toFixed(2)
+      });
     });
 
-    tx.total_amount = newTotal;
-    tx.balance = Math.max(0, newTotal - (tx.paid_amount || 0));
-    tx.status = 'returned_replaced';
-    tx.adjustment_notes = d.adj_notes || '';
-    tx.adjusted_at = new Date().toISOString();
+    if (!audit.returns && !audit.replacements && !audit.cancelled) {
+      closeResellerModal('resellerReturnModal');
+      /* The form may hold only rejected input (an over-sized return): say why nothing
+         was written instead of pretending the operator typed nothing. */
+      toast(notes.length ? `⚠ Nothing saved — ${notes[0]}` : 'Nothing to save — no bottles were returned, replaced or cancelled.');
+      openSemenResellerHub();
+      return;
+    }
+
+    const recalc = applyResellerLineAmounts(tx, { beforeLines: linesBefore.reduce((a, b) => a + b, 0) });
+    /* Header fields the receipt and the Bluetooth slip read were never written by the
+       old save, which is why a return could look "unadjusted" on paper. */
+    tx.returned_count = +(tx.lines || []).reduce((a, l) => a + Math.max(0, +l.returned_qty || 0), 0);
+    tx.replaced_count = +(tx.lines || []).reduce((a, l) => a + Math.max(0, +l.replaced_qty || 0), 0);
+    tx.has_return_adjustment = true;
+    tx.return_reason = (tx.lines || []).map(l => l.return_reason).filter(Boolean)[0] || tx.return_reason || 'Return adjustment';
+    tx.replacement_notes = notes.join(' ');
+    tx.adjustment_notes = [tx.adjustment_notes, ...notes].filter(Boolean).join(' | ').slice(0, 1200);
+    tx.return_adjusted_at = tx.adjusted_at = new Date().toISOString();
+    tx.return_audit = [...(tx.return_audit || []), audit].slice(-20);
+    if (tx.sync_status === 'verified') tx.sync_status = 'pending';   /* the row now differs from the cloud copy */
+    /* Status comes from the money (open / partial / paid) — recalculateResellerTx just
+       set it — instead of the old blanket 'returned_replaced', which hid the payment
+       state and dropped the invoice out of the hub's "awaiting payment" count. */
 
     save();
     renderAll();
     if (window.refreshOpenDrilldown) window.refreshOpenDrilldown();
-    document.getElementById('resellerReturnModal')?.remove();
-    toast(`✓ Return & Replacement adjustment saved for #${tx.id}!`);
+    closeResellerModal('resellerReturnModal');
+    const drift = `Invoice ₱${totalBefore.toFixed(2)} → ₱${tx.total_amount.toFixed(2)}`;
+    toast(`✓ Return & Replacement saved for #${tx.id}. ${drift}${recalc.manualKept ? ` · hand correction kept (${tx.total_amount >= recalc.derived ? '+' : '−'}₱${Math.abs(tx.total_amount - recalc.derived).toFixed(2)} over the lines)` : ''}`);
+    activeReturnTxId = null;
+    returnDraft = null;
     openSemenResellerHub();
-
-    // Open receipt with Bluetooth printing
     openResellerTxReceipt(tx.id);
   };
+
+  /* [FIX 187] Shared summary used by the tx row and the printed receipt: a line can now
+     carry several replacement batches, so the old single `replacement_boar × qty` tag
+     would have hidden every batch after the first. */
+  function resellerReplLinesHTML(l) {
+    const reps = lineReplacements(l);
+    if (!reps.length) return '';
+    const inner = reps.map(r => `${escH(r.boar)}${r.batch_no ? ` (${escH(r.batch_no)})` : ''} × ${r.qty} @ ${peso(+r.rate || 0)}`).join(' <b>+</b> ');
+    const money = +(reps.reduce((a, r) => a + r.qty * (+r.rate || 0), 0)).toFixed(2);
+    return `<small style="color:var(--teal2);display:block">🔁 Replaced with: <b>${inner}</b> = ${peso(money)}${reps.length > 1 ? ` <span class="muted">(${reps.length} batches)</span>` : ''}</small>`;
+  }
 
   function resellerPaymentPreview(fromDiscount = false) {
     const original = Math.max(0, parseFloat(document.getElementById('resellerPayOriginalBalance')?.value || 0) || 0);
@@ -3780,74 +4163,187 @@
   };
 
   /* ── Edit Reseller Transaction Modal ── */
+  /* ── [FIX 187] Edit a pickup record (including repairing an adjusted one) ──
+     The hub already had an ✎ Edit button, but it could only re-type the timestamp and
+     two amounts. An invoice whose lines no longer add up — exactly what the return bug
+     above produced — could therefore be "corrected" only by overwriting the total, and
+     the next return save rewrote that number again. This form shows the line breakdown
+     with the stored amount next to the recomputed one, can rebuild the lines on demand,
+     and requires a reason whenever the total is moved off what the lines say. That
+     reason, plus `total_manual`, is what protects the correction afterwards: adjusted
+     lines then shift the total by their delta instead of replacing it. */
+
   function openEditResellerTxModal(txId) {
-    ensureResellerData();
     const f = F();
     const tx = (f.semenResellerTx || []).find(x => x.id === txId);
     if (!tx) { toast('Transaction not found.'); return; }
+    const reseller = (f.semenResellers || []).find(r => r.id === tx.reseller_id);
+    const lines = tx.lines || [];
+    const storedLines = +lines.reduce((a, l) => a + (+l.amount || 0), 0).toFixed(2);
+    const derivedLines = +lines.reduce((a, l) => a + resellerLineAmount(l), 0).toFixed(2);
+    const driftTotal = +((+tx.total_amount || 0) - storedLines).toFixed(2);
+    const driftLines = +(storedLines - derivedLines).toFixed(2);
+    const disc = resellerTxDiscount(tx);
+    const paid = +(tx.paid_amount || 0);
+    const dtVal = tx.timestamp ? `${String(tx.timestamp).slice(0, 10)}T${String(tx.timestamp).slice(11, 16)}` : '';
 
-    document.getElementById('editResellerTxModal')?.remove();
+    const lineRows = lines.map((l, i) => {
+      const reps = lineReplacements(l);
+      const mine = +l.amount || 0;
+      const right = resellerLineAmount(l);
+      const bad = Math.abs(mine - right) > 0.004;
+      return `<div style="padding:5px 0;border-bottom:1px dashed var(--line);font-size:11.5px">
+        <div style="display:flex;justify-content:space-between;gap:8px">
+          <span><b>${escH(l.boar || l.semen_batch_no || 'Batch ' + (i + 1))}</b>
+            <small class="muted">${escH(l.semen_batch_no || '')} · ${+l.qty || 0} × ₱${+l.rate || 0}</small></span>
+          <span>₱${mine.toFixed(2)}${bad ? ` <b style="color:#b45309"> → ₱${right.toFixed(2)}</b>` : ''}</span>
+        </div>
+        ${(+l.returned_qty || 0) > 0 ? `<small class="muted">↩︎ ${+l.returned_qty || 0} returned${l.return_reason ? ` · ${escH(l.return_reason)}` : ''}</small>` : ''}
+        ${reps.map(r => `<div style="margin-left:10px;font-size:11px;color:#166534">↳ replacing ${r.qty} × ${escH(r.boar)}${r.batch_no ? ` (${escH(r.batch_no)})` : ''} @ ₱${+r.rate || 0} = ₱${(r.qty * (+r.rate || 0)).toFixed(2)}</div>`).join('')}
+      </div>`;
+    }).join('');
 
-    document.body.insertAdjacentHTML('beforeend', `
-      <div class="due-modal-bg" id="editResellerTxModal" style="z-index:9999999!important">
-        <form class="due-modal" style="text-align:left" onsubmit="window.saveEditResellerTx(event, '${tx.id}')">
-          <div class="modal-top">
-            <div>
-              <div class="eyebrow" style="color:var(--teal2);font-weight:700">CORRECT TRANSACTION</div>
-              <h2>✎ Edit Pickup #${escH(tx.id)}</h2>
-            </div>
-            <button type="button" class="close-reminder" onclick="document.getElementById('editResellerTxModal').remove()">×</button>
+    const modal = document.createElement('div');
+    modal.className = 'modal-overlay show';
+    modal.id = 'editResellerTxModal';
+    modal.innerHTML = `<div class="modal" style="max-width:640px">
+      <div class="modal-hd"><h3>✎ EDIT PICKUP #${txId}</h3><button type="button" class="btn ghost small" onclick="window.closeResellerModal('editResellerTxModal')">✕</button></div>
+      <div class="modal-bd" style="max-height:70vh;overflow:auto">
+        <form id="editResellerTxForm" onsubmit="window.saveEditResellerTx(event,'${tx.id}')">
+          <div style="padding:8px;background:#fefce8;border:1px solid #fde68a;border-radius:8px;font-size:12px;margin-bottom:10px">
+            <b>${escH((reseller && reseller.name) || 'Reseller')}</b> · ${escH(tx.tx_no || '')} · ${escH(tx.type || 'pickup')}
+            ${tx.voided ? ' · <b style="color:#b45309">VOIDED</b>' : ''}
+            ${tx.total_manual ? ' · <b style="color:#166534">hand-corrected total</b>' : ''}
           </div>
-
-          <div class="reminder-fields">
-            <div class="field full">
-              <label>Pickup Date &amp; Time</label>
-              <input type="datetime-local" name="timestamp" value="${localDateTimeValue(tx.timestamp || new Date())}" required class="suggest-input">
-            </div>
-            <div class="field">
-              <label>Total Amount (₱)</label>
-              <input type="number" min="0" step="1" name="total_amount" value="${tx.total_amount}" required class="suggest-input">
-            </div>
-            <div class="field">
-              <label>Paid Amount (₱)</label>
-              <input type="number" min="0" step="1" name="paid_amount" value="${tx.paid_amount}" required class="suggest-input">
-            </div>
-            <div class="field full">
-              <label>Notes / Remarks</label>
-              <textarea name="notes" placeholder="Notes">${escH(tx.notes || '')}</textarea>
-            </div>
+          ${lines.length ? `<div style="font-size:11px;font-weight:bold;margin-bottom:4px">LINE BREAKDOWN (what the invoice is built from)</div>
+            <div style="border:1px solid var(--line);border-radius:8px;padding:0 8px;margin-bottom:6px">${lineRows}</div>
+            <div style="font-size:11px" class="muted">Lines add up to <b>₱${storedLines.toFixed(2)}</b>${Math.abs(driftLines) > 0.004 ? ` · recomputed from returns/replacements: <b style="color:#b45309">₱${derivedLines.toFixed(2)}</b>` : ''}${Math.abs(driftTotal) > 0.004 ? ` · invoice currently shows <b style="color:#b45309">₱${(+tx.total_amount || 0).toFixed(2)}</b> (${driftTotal > 0 ? '+' : '−'}₱${Math.abs(driftTotal).toFixed(2)} vs lines)` : ''}</div>`
+            : '<small class="muted">This record has no line breakdown, so its total can only be corrected by hand below.</small>'}
+          ${lines.length && (Math.abs(driftLines) > 0.004) ? `<label class="check" style="display:flex;gap:6px;align-items:flex-start;margin-top:8px;font-size:12px">
+              <input type="checkbox" id="etx_rebuild" style="margin-top:2px" />
+              <span><b>Rebuild the lines</b> — recompute every line from its dispatch quantity, returns and replacement rows (fixes a line total that drifted from what was actually handed over).</span>
+            </label>` : ''}
+          <div class="grid2" style="gap:10px;margin-top:10px">
+            <label>Pickup date &amp; time
+              <input class="input" id="etx_timestamp" type="datetime-local" value="${escH(dtVal)}" /></label>
+            <label>Total amount (₱)
+              <input class="input" id="etx_total" type="number" step="0.01" min="0" value="${+tx.total_amount || 0}" /></label>
+            <label>Paid to date (₱) <small class="muted">hand override — recorded payments are not rewritten</small>
+              <input class="input" id="etx_paid" type="number" step="0.01" min="0" value="${+paid || 0}" /></label>
+            <label>Discount / readjustment applied (₱)
+              <input class="input" id="etx_disc" type="number" step="0.01" min="0" value="${+disc || 0}" readonly title="Set this with the discount tool, not here" /></label>
           </div>
-
-          <div class="due-actions" style="margin-top:16px">
-            <button type="button" class="btn ghost" onclick="document.getElementById('editResellerTxModal').remove()">Cancel</button>
-            <button type="submit" class="btn">✓ Save Changes</button>
+          <label style="display:block;margin-top:8px;font-size:12px">Internal note <textarea class="input" id="etx_notes" rows="2">${escH(tx.notes || '')}</textarea></label>
+          <label style="display:block;margin-top:8px;font-size:12px">Reason for changing the amount <small class="muted">(required when the total is not what the lines add up to — it is stored with the record)</small>
+            <textarea class="input" id="etx_reason" rows="2" placeholder="e.g. 2 × B1LW @₱400 replacement charged by mistake in the old return form; restored by hand."></textarea></label>
+          <div style="margin-top:8px;padding:8px;background:var(--line-soft);border-radius:8px;font-size:12px">
+            <div class="muted">After saving: billed ₱<b id="etx_prev_total"></b> · balance <b id="etx_prev_bal" style="color:#b45309">₱${Math.max(0, (+tx.total_amount || 0) - disc - paid).toFixed(2)}</b></div>
+            ${tx.total_manual ? `<div style="margin-top:4px;font-size:11.5px">This record carries a hand correction of <b>${(+tx.total_amount - storedLines) >= 0 ? '+' : '−'}₱${Math.abs(+tx.total_amount - storedLines).toFixed(2)}</b> over its lines — future adjustments move that figure instead of erasing it. Save the exact line total (₱${(Math.abs(driftLines) > 0.004 ? derivedLines : storedLines).toFixed(2)}) with a reason to drop the correction.</div>` : ''}
+          </div>
+          <div class="modal-ft" style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px">
+            <button type="button" class="btn ghost" onclick="window.closeResellerModal('editResellerTxModal')">Cancel</button>
+            <button type="submit" class="btn">💾 Save changes</button>
           </div>
         </form>
       </div>
-    `);
+    </div>`;
+    document.body.appendChild(modal);
+    const live = () => {
+      const t = Math.max(0, +document.getElementById('etx_total').value || 0);
+      const p = Math.max(0, +document.getElementById('etx_paid').value || 0);
+      const d = Math.max(0, +document.getElementById('etx_disc').value || 0);
+      document.getElementById('etx_prev_total').textContent = t.toFixed(2);
+      document.getElementById('etx_prev_bal').textContent = `₱${Math.max(0, t - d - p).toFixed(2)}`;
+    };
+    ['etx_total', 'etx_paid'].forEach(id => { const el = document.getElementById(id); if (el) el.addEventListener('input', live); });
+    live();
   }
   window.openEditResellerTxModal = openEditResellerTxModal;
 
-  window.saveEditResellerTx = function(e, txId) {
+  window.saveEditResellerTx = function (e, txId) {
     if (e) e.preventDefault();
-    const f = F();
-    const tx = (f.semenResellerTx || []).find(x => x.id === txId);
-    if (!tx) return;
+    const tx = (F().semenResellerTx || []).find(x => x.id === txId);
+    if (!tx) { toast('Transaction not found.'); return; }
+    const tsEl = document.getElementById('etx_timestamp');
+    const totalEl = document.getElementById('etx_total');
+    const paidEl = document.getElementById('etx_paid');
+    const notesEl = document.getElementById('etx_notes');
+    const reasonEl = document.getElementById('etx_reason');
+    const rebuildEl = document.getElementById('etx_rebuild');
+    const ts = tsEl && tsEl.value ? new Date(tsEl.value).toISOString() : '';
+    if (tsEl && tsEl.value && isNaN(Date.parse(ts))) { toast('Enter a valid pickup date & time.'); return; }
+    const reason = ((reasonEl && reasonEl.value) || '').trim();
 
-    const form = e.target;
-    const d = Object.fromEntries(new FormData(form));
+    /* 1) rebuild the lines first, so the "does this total match its lines?" test below
+          compares against the corrected arithmetic and not the drifted numbers. */
+    if (rebuildEl && rebuildEl.checked) {
+      /* A hand-fixed total on a record whose lines drifted is kept as a correction on
+         top of the rebuilt lines: rebuilding is meant to repair the breakdown (lost
+         return/replacement rows), not to undo the money decision made above it. */
+      const beforeLines = +(tx.lines || []).reduce((a, l) => a + (+l.amount || 0), 0).toFixed(2);
+      (tx.lines || []).forEach(l => syncResellerLineMirrors(l));
+      const afterLines = +(tx.lines || []).reduce((a, l) => a + (+l.amount || 0), 0).toFixed(2);
+      if (tx.total_manual === true && Math.abs(afterLines - beforeLines) > 0.004) {
+        tx.total_amount = Math.max(0, +((+tx.total_amount || 0) + (afterLines - beforeLines)).toFixed(2));
+      }
+    }
+    const derived = +(tx.lines || []).reduce((a, l) => a + resellerLineAmount(l), 0).toFixed(2);
 
-    tx.timestamp = d.timestamp ? new Date(d.timestamp).toISOString() : tx.timestamp;
-    tx.date = tx.timestamp.slice(0, 10);
-    tx.total_amount = Math.max(0, parseFloat(d.total_amount || 0) || 0);
-    tx.paid_amount = Math.max(0, parseFloat(d.paid_amount || 0) || 0);
-    tx.balance = Math.max(0, tx.total_amount - tx.paid_amount);
-    tx.notes = d.notes || '';
+    const newTotal = Math.max(0, +((totalEl && totalEl.value) || 0) || 0);
+    const paid = Math.max(0, +((paidEl && paidEl.value) || 0) || 0);
+    if (paid > newTotal + 0.004) { toast('Paid cannot exceed the total. Remove or reduce the payment first.'); return; }
+    /* Payments are not stored on the invoice: they are farm Income entries carrying
+       payment_allocations (see resellerPaymentHistory). Lowering `paid` below what is
+       already allocated to this pickup would orphan real money, so that needs a reason. */
+    let booked = 0;
+    (F().transactions || []).forEach(t => {
+      if (!t || t.reseller_id !== tx.reseller_id) return;
+      if (!/reseller payment/i.test(String(t.description || ''))) return;
+      if (['voided', 'deleted', 'undone'].includes(String(t.status || '').toLowerCase())) return;
+      (t.payment_allocations || []).forEach(a => { if (a && a.tx_id === tx.id) booked += (+a.amount || 0); });
+    });
+    booked = +booked.toFixed(2);
+    if (booked > 0.004 && paid < booked - 0.004 && !reason) {
+      toast(`Payments of ₱${booked.toFixed(2)} are already allocated to this pickup. Reducing "paid" below that needs a reason.`);
+      return;
+    }
+    const offLines = Math.abs(newTotal - derived) > 0.004;
+    /* A total that contradicts its own lines is a hand correction: without a reason it
+       would be silently overwritten the next time the invoice is recalculated. */
+    if (offLines && (tx.lines || []).length && !reason) {
+      toast('This total is not what the lines add up to — write the reason first, so the correction is kept.');
+      return;
+    }
 
+    const wasTotal = +tx.total_amount || 0;
+    const wasPaid = +tx.paid_amount || 0;
+    const paidChanged = Math.abs(paid - wasPaid) > 0.004;
+    const changed = Math.abs(newTotal - wasTotal) > 0.004 || paidChanged || (ts && ts !== tx.timestamp) || !!(rebuildEl && rebuildEl.checked);
+    if (ts) { tx.timestamp = ts; tx.date = String(ts).slice(0, 10); }   /* statements sort on timestamp || date */
+    if (notesEl) tx.notes = String(notesEl.value || '').trim();
+    if (paidChanged) tx.paid_amount = +paid.toFixed(2);   /* ledger rows below are not rewritten by this */
+    tx.total_amount = +newTotal.toFixed(2);
+    tx.total_manual = offLines && !!(tx.lines || []).length;   /* equal to the lines = derived, not hand-set */
+    tx.total_derived = derived;
+    if (Math.abs(newTotal - wasTotal) > 0.004) {
+      tx.manual_correction = {
+        at: new Date().toISOString(), from: +wasTotal.toFixed(2), to: tx.total_amount,
+        derived, reason: reason || 'No reason recorded', rebuilt_lines: !!(rebuildEl && rebuildEl.checked)
+      };
+    }
+    if (changed) {
+      const stamp = `[FIX 187] pickup record edited ${new Date().toISOString().slice(0, 16).replace('T', ' ')}`;
+      tx.edit_history = [...(tx.edit_history || []), { at: new Date().toISOString(), total_before: +wasTotal.toFixed(2), total_after: tx.total_amount, paid_before: +wasPaid.toFixed(2), paid_after: +tx.paid_amount.toFixed(2), derived, reason: reason || '', rebuilt_lines: !!(rebuildEl && rebuildEl.checked) }].slice(-20);
+      tx.adjustment_notes = [stamp, tx.adjustment_notes].filter(Boolean).join(' | ').slice(0, 1200);
+    }
+    recalculateResellerTx(tx);
+    if (changed && tx.sync_status === 'verified') tx.sync_status = 'pending';   /* the row now differs from the cloud copy */
     save();
-    document.getElementById('editResellerTxModal')?.remove();
-    toast(`✓ Pickup #${txId} updated.`);
+    renderAll();
+    if (window.refreshOpenDrilldown) window.refreshOpenDrilldown();
+    closeResellerModal('editResellerTxModal');
     openSemenResellerHub();
+    toast(changed ? `✓ Pickup #${tx.id} updated. Balance ₱${(+tx.balance || 0).toFixed(2)}.` : 'Nothing changed.');
   };
 
   /* ── Delete Reseller Transaction ── */
@@ -3947,7 +4443,7 @@
                 </div>
                 <small class="muted" style="display:block">Batch: ${escH(l.semen_batch_no || '—')} · ${l.qty} bottle(s) × ${peso(l.rate)}</small>
                 ${l.returned_qty ? `<small style="color:#d97706;display:block">↩ Returned: ${l.returned_qty} bottle(s) (${escH(l.return_reason || '')})</small>` : ''}
-                ${l.replaced_qty ? `<small style="color:var(--teal2);display:block">🔁 Replaced with: ${escH(l.replacement_boar)} × ${l.replaced_qty} @ ${peso(l.replacement_rate)}</small>` : ''}
+                ${resellerReplLinesHTML(l)}   <!-- [FIX 187] every replacement batch, not just the last one -->
               </div>
             `).join('')}
 
@@ -4117,7 +4613,8 @@
         add(`  Batch: ${l.semen_batch_no || "-"}`);
         add(row(`  ${l.qty} bottle(s) x ${P(l.rate)}`, P(l.amount)));
         if (l.returned_qty) add(`  [!] RET: ${l.returned_qty} bottle(s)`);
-        if (l.replaced_qty) add(`  [+] REP: ${l.replacement_boar} x${l.replaced_qty} @ ${P(l.replacement_rate)}`);
+        /* [FIX 187] one line per replacement batch, each with its own price */
+        lineReplacements(l).forEach(r => add(`  [+] REP: ${r.boar}${r.batch_no ? ` (${r.batch_no})` : ''} x${r.qty} @ ${P(r.rate)} = ${P(r.qty * r.rate)}`));
       });
 
       add(sep);
@@ -4125,7 +4622,7 @@
       if (resellerTxDiscount(tx) > 0) add(row("DISCOUNT / READJ:", "-" + P(resellerTxDiscount(tx))));
       add(row("PAID AMOUNT:", P(tx.paid_amount || 0)));
       add(row("BALANCE DUE:", P(resellerTxBalance(tx))));
-      if (tx.status === 'returned_replaced') add("** ADJUSTMENT APPLIED **", { c: 1 });
+      if ((tx.lines || []).some(l => l.is_returned_replaced || (+l.returned_qty || 0) > 0)) add("** ADJUSTMENT APPLIED **", { c: 1 });   /* [FIX 187] status no longer pinned to 'returned_replaced' */
       add(sep);
       add("Thank you for your business!", { c: 1 });
 

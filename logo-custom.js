@@ -84,12 +84,18 @@
           return;
         }
 
-        // Keep the official application logo untouched. This data belongs only
-        // to the verified farm ID selected above.
-        /* [FIX 86] downscale to ≤512px so the logo can't eat the localStorage
-           quota (a raw 2 MB upload ≈ 2.7 MB of base64 in the offline DB). */
+        /* [FIX 86] downscale so the logo can't eat the localStorage quota (a raw
+           2 MB upload ≈ 2.7 MB of base64 in the offline DB).
+           [FIX 186] WebP + a hard byte cap. The old 512px PNG was routinely
+           150-400 KB, and that logo row is part of every app_records read — so a
+           single logo cost hundreds of kilobytes on every device, every sync.
+           WebP keeps the transparency the sidebar needs (JPEG would paint a white
+           box behind it) and is ~2x smaller; browsers that cannot encode WebP
+           return PNG from toDataURL, so this degrades to the old format. */
         let logoUrl = dataUrl;
-        if (window.arsDownscaleImage) {
+        if (window.arsFitDataUrl) {
+          try { logoUrl = await window.arsFitDataUrl(dataUrl, { maxDim: 448, maxBytes: 110000, quality: 0.86, mime: 'image/webp' }); } catch (_) {}
+        } else if (window.arsDownscaleImage) {
           try { logoUrl = await window.arsDownscaleImage(dataUrl, 512, 0.85, true); } catch (_) {}
         }
         farm.logo = logoUrl;

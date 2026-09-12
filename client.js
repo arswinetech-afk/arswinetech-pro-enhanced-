@@ -390,6 +390,29 @@ window.ARSCloud = (() => {
 
   async function getFarmRecordCounts(farmId) {
     await ensureFreshSession(true);
+    /* [FIX 186] This panel used to fire one request per entity type — 37 round-trips,
+       each asking Postgres for an exact count. When the optional
+       supabase/sync_perf.sql helper is installed the whole thing collapses to
+       a single ~300-byte RPC. If that function is absent (fresh project, or the owner
+       chose not to run the SQL) the original loop runs unchanged, so this is strictly
+       an upgrade and can never break the diagnostics view. */
+    try {
+      const rows = await request('/rest/v1/rpc/ars_farm_record_counts', {
+        method: 'POST',
+        body: JSON.stringify({ p_farm_id: String(farmId) })
+      }, { requireAuth: true });
+      if (Array.isArray(rows)) {
+        const viaRpc = {};
+        Object.keys(entityMap).forEach(key => { viaRpc[key] = 0; });   // same keys as the per-type loop below
+        rows.forEach(row => {
+          const type = String(row?.entity_type || '');
+          const key = typeToKey[type] || type;
+          if (key in viaRpc) viaRpc[key] = Number(row?.n ?? row?.count ?? 0) || 0;
+        });
+        return viaRpc;
+      }
+    } catch (_) { /* RPC not installed — fall through to the per-type loop */ }
+
     const counts = {};
     for (const [key, type] of Object.entries(entityMap)) {
       const path = `/rest/v1/app_records?select=entity_type&farm_id=eq.${encodeURIComponent(farmId)}&entity_type=eq.${encodeURIComponent(type)}&limit=1`;
@@ -678,6 +701,65 @@ window.ARSCloud = (() => {
     return result;
   }
 
+  /* ═══════════════════════════════════════════════════════════════════════════
+     [FIX 186] HEAD-VERIFIED PREFLIGHT — stop downloading the whole farm to write
+     one record. pushFarm used to call listFarmRows() (every row of app_records for
+     the farm, payload column included) before every write, purely to compare
+     per-row versions. On a farm holding photos, a logo and audit rows, one tap of
+     "Save" therefore cost the same egress as a full sync — and then every other
+     signed-in device paid it again on the heartbeat that noticed the change.
+
+     The server already publishes a ~300-byte version vector: the farm's row count
+     plus its newest updated_at. Every write path in this app stamps updated_at
+     (buildRows, upsertCommerceRows) and every delete moves the count, so a vector
+     that still matches this device's verified baseline proves no row can have
+     changed → the per-row comparison is unnecessary. If it moved, or the baseline
+     is unknown, the read narrows to just the rows about to be written.
+
+     Safety properties, in order of preference, each degrading to the next:
+       1. vector matches  → write, no row read at all
+       2. vector moved    → read only the dirty local_ids, compare as before
+       3. either read fails → the original full listFarmRows() preflight
+       4. that fails too    → the write is refused (unchanged behaviour)
+     The vector is always read LIVE from Supabase here — never from the /ars-head
+     edge cache, which may be 60s stale by design.
+     ═══════════════════════════════════════════════════════════════════════════ */
+  const verifiedHeads = new Map(); // farmId -> { count, maxUpdated } | null = unknown
+  const TARGETED_READ_MAX_ROWS = 400;
+
+  function noteVerifiedHead(farmId, head) {
+    if (!farmId) return;
+    const key = String(farmId);
+    if (!head || head.ok !== true || typeof head.count !== 'number') verifiedHeads.set(key, null);
+    else verifiedHeads.set(key, { count: head.count, maxUpdated: head.maxUpdated || null });
+  }
+
+  /* Remote versions for only the rows this device is about to write. local_id is
+     unique per (farm, entity_type), so an id can also match a sibling row of
+     another type; serverRowMap keys on the full triple, so extra rows are simply
+     never consulted — an over-fetch, never a wrong conflict. A capped result means
+     the read may have been truncated, which is treated as a failure so the caller
+     falls back to the full preflight. */
+  async function fetchRemoteVersions(farmId, rows) {
+    const ids = Array.from(new Set(rows.map(row => String(row.local_id ?? '').trim()).filter(Boolean)));
+    if (!ids.length) return [];
+    const out = [];
+    for (let i = 0; i < ids.length; i += 200) {
+      const chunk = ids.slice(i, i + 200);
+      const chunkLimit = Math.max(chunk.length * 4, 50);
+      const list = chunk
+        .map(id => encodeURIComponent('"' + id.replace(/["\\]/g, '') + '"'))
+        .join(',');
+      const path = `/rest/v1/app_records?select=farm_id,entity_type,local_id,updated_at`
+        + `&farm_id=eq.${encodeURIComponent(farmId)}&local_id=in.(${list})&limit=${chunkLimit}`;
+      const body = await request(path, {}, { requireAuth: true });
+      if (!Array.isArray(body)) throw new Error('Unexpected cloud response during preflight');
+      if (body.length >= chunkLimit) throw new Error('Preflight read was truncated; using the full preflight');
+      out.push(...body);
+    }
+    return out;
+  }
+
   async function pushFarm(farmId, farm, options = {}) {
     loadSessionOnce();
     if (!token || !farmId || !farm) return { success: false, reason: 'Missing authentication or farm data.' };
@@ -708,32 +790,62 @@ window.ARSCloud = (() => {
       return { success: true, count: 0, pending: hasDirtyChanges(farmId) };
     }
 
-    // Re-read the server state before writing. If another device changed a row
-    // after this device's baseline, do not overwrite it silently.
-    let serverRows;
-    try {
-      serverRows = (await listFarmRows(farmId)).rows;
-    } catch (error) {
-      window.__arsLastPushError = `Cloud preflight failed: ${error.message}`;
-      return { success: false, reason: `Cloud preflight failed: ${error.message}` };
+    /* [FIX 186] Compare against the server before writing — but stop downloading
+       the whole farm to do it. If the live version vector still matches the
+       baseline this device last verified, no row can have changed and the
+       per-row comparison is skipped. Otherwise only the rows about to be
+       written are read (and a failed narrow read still falls back to the full
+       preflight, so a refused-or-stale write is never possible). */
+    const baselineHead = verifiedHeads.get(String(farmId));
+    let liveHead = null;
+    if (baselineHead) {
+      try {
+        liveHead = await farmSyncHead(farmId);
+      } catch (error) {
+        liveHead = null;
+      }
     }
-    const serverMap = serverRowMap(serverRows);
+    const headStillMatches = Boolean(baselineHead && liveHead && liveHead.ok
+      && liveHead.count === baselineHead.count
+      && String(liveHead.maxUpdated || '') === String(baselineHead.maxUpdated || ''));
+
     const conflicts = [];
     const writable = [];
-    rows.forEach(row => {
-      const key = rowKey(farmId, row.entity_type, row.local_id);
-      const remote = serverMap.get(key);
-      const baseline = cloudVersions.get(key);
-      const remoteTime = remote?.updated_at ? new Date(remote.updated_at).getTime() : 0;
-      const baselineTime = baseline?.updated_at ? new Date(baseline.updated_at).getTime() : 0;
-      if (remote && (!baseline || remoteTime > baselineTime)) {
-        conflicts.push({ farm_id: farmId, entity_type: row.entity_type, local_id: row.local_id, remote_updated_at: remote.updated_at, baseline_updated_at: baseline?.updated_at || null });
-      } else {
-        writable.push(row);
+    if (headStillMatches) {
+      rows.forEach(row => writable.push(row));
+      window.__arsPushPreflight = 'head';
+    } else {
+      let serverRows;
+      try {
+        serverRows = rows.length <= TARGETED_READ_MAX_ROWS
+          ? await fetchRemoteVersions(farmId, rows)
+          : (await listFarmRows(farmId)).rows;
+        window.__arsPushPreflight = rows.length <= TARGETED_READ_MAX_ROWS ? 'targeted' : 'full';
+      } catch (error) {
+        try {
+          serverRows = (await listFarmRows(farmId)).rows;
+          window.__arsPushPreflight = 'full-fallback';
+        } catch (fallbackError) {
+          window.__arsLastPushError = `Cloud preflight failed: ${fallbackError.message}`;
+          return { success: false, reason: `Cloud preflight failed: ${fallbackError.message}` };
+        }
       }
-    });
-    if (conflicts.length) {
-      return { success: false, reason: 'Remote changes detected; no conflicting local rows were uploaded.', conflicts, pending: true };
+      const serverMap = serverRowMap(serverRows);
+      rows.forEach(row => {
+        const key = rowKey(farmId, row.entity_type, row.local_id);
+        const remote = serverMap.get(key);
+        const baseline = cloudVersions.get(key);
+        const remoteTime = remote?.updated_at ? new Date(remote.updated_at).getTime() : 0;
+        const baselineTime = baseline?.updated_at ? new Date(baseline.updated_at).getTime() : 0;
+        if (remote && (!baseline || remoteTime > baselineTime)) {
+          conflicts.push({ farm_id: farmId, entity_type: row.entity_type, local_id: row.local_id, remote_updated_at: remote.updated_at, baseline_updated_at: baseline?.updated_at || null });
+        } else {
+          writable.push(row);
+        }
+      });
+      if (conflicts.length) {
+        return { success: false, reason: 'Remote changes detected; no conflicting local rows were uploaded.', conflicts, pending: true };
+      }
     }
 
     const versionsAtStart = new Map();
@@ -763,6 +875,12 @@ window.ARSCloud = (() => {
       window.__arsLastPushError = null;
       if (window.STORE) window.STORE.setItem('ars-last-cloud-sync', now);
       window.__arsLastSuccessfulSyncAt = now;
+      /* [FIX 186] Our own write moved the farm's head, and its server-side
+         updated_at string cannot be reproduced locally (Postgres returns
+         microseconds + offset, JS sends milliseconds + 'Z'). Mark the baseline
+         unknown; cloud-sync's post-push head probe repopulates it a moment later,
+         which is what keeps a burst of edits on the cheap path. */
+      noteVerifiedHead(farmId, null);
       return { success: true, count: writable.length, pending: hasDirtyChanges(farmId) };
     } catch (error) {
       window.__arsLastPushError = error.message || String(error); /* [FIX 96] */
@@ -957,6 +1075,17 @@ window.ARSCloud = (() => {
       dirtyKeysForFarm(farmId).forEach(key => dirtyVersions.delete(key));
       Array.from(cloudVersions.keys()).filter(key => key.startsWith(`${farmId}:::`)).forEach(key => cloudVersions.delete(key));
       nextVersions.forEach((value, key) => cloudVersions.set(key, value));
+      /* [FIX 186] A verified pull IS the baseline. Record the farm head from the
+         rows just read — same table, same farm filter, same PostgREST timestamp
+         serialization as the probe — so the next save can take the no-read path. */
+      {
+        let newest = null, newestAt = -Infinity;
+        rows.forEach(row => {
+          const t = row?.updated_at ? new Date(row.updated_at).getTime() : NaN;
+          if (!isNaN(t) && t > newestAt) { newestAt = t; newest = row.updated_at; }
+        });
+        noteVerifiedHead(farmId, { ok: true, count: result.expectedTotal ?? rows.length, maxUpdated: newest });
+      }
       window.__arsCloudBaselineReady = true;
       // The pull replaced the active farm with a verified cloud-authoritative
       // baseline and cleared its dirty rows. Do not leave a stale global marker
@@ -1128,6 +1257,7 @@ window.ARSCloud = (() => {
 
   return {
     farmSyncHead,
+    noteVerifiedHead, /* [FIX 186] feed the push preflight's version baseline */
     edgeHeadGet,
     edgeHeadPut,
     getAccessToken: () => token, /* [FIX 127] presence auth */

@@ -413,11 +413,18 @@
           document.getElementById('reservationDetail')?.remove();
           openReservationDetails(i)
         };
-        if (window.arsDownscaleImage) {
-          window.arsDownscaleImage(r.result, 1000, 0.8)
-            .then(apply)
-            .catch(() => apply(r.result));
-        } else apply(r.result);
+        /* [FIX 186] 1000px left a 100-250 KB base64 photo inside the reservation
+           row — and a failed downscale stored the RAW file, up to 3 MB, which every
+           device then re-downloads on every sync. Now fit to ≤600px / 150 KB, and
+           if the image cannot be encoded at all the photo is refused instead of
+           silently uploading the original. */
+        const shrink = window.arsFitDataUrl
+          ? window.arsFitDataUrl(r.result, { maxDim: 600, maxBytes: 150000, quality: 0.72 })
+          : (window.arsDownscaleImage ? window.arsDownscaleImage(r.result, 800, 0.75) : Promise.resolve(r.result));
+        Promise.resolve(shrink).then(out => {
+          if (typeof out === 'string' && out.startsWith('data:image/') && out.length <= 300000) apply(out);
+          else if (window.toast) window.toast('📷 That photo could not be compressed enough to store safely — please pick a smaller image.');
+        }).catch(() => { if (window.toast) window.toast('📷 Could not read that image. Try another photo.'); });
       };
       r.readAsDataURL(f)
     };
