@@ -648,7 +648,7 @@ async function bootOrderPage({ search, calls = [], ...resp }) {
   ok('[14] and the offline fallback cannot hand a reseller the login screen', /js\/order-page\.js'\)\s*return;/.test(sw));
   ok('[14] order.html is in the deploy layout', /order\.html/.test(build));
   ok('[14] the page is served no-cache and kept out of search engines', /\/order\.html\n  Cache-Control: no-cache/.test(read('_headers')) && /noindex/.test(read('_headers')));
-  ok('[14] the build is bumped so phones drop the old shell', /arswinetech-pro-v231-reseller-order-menu/.test(sw) && /v231-reseller-order-menu/.test(cfg), sw.split('\n')[7] + ' | ' + cfg.split('\n')[2]);
+  ok('[14] the build is bumped so phones drop the old shell', /arswinetech-pro-v232-reseller-sql-recreate/.test(sw) && /v232-reseller-sql-recreate/.test(cfg), sw.split('\n')[7] + ' | ' + cfg.split('\n')[2]);
   ok('[14] the page asks for breeds, not bottles', /Which breeds do you need\?/.test(page) && !/Choose your bottles/.test(page));
   ok('[14] every element the page looks up exists in the page', (() => {
     const ids = [...op.matchAll(/id\('([A-Za-z]+)'\)/g)].map(m => m[1]);
@@ -668,13 +668,29 @@ async function bootOrderPage({ search, calls = [], ...resp }) {
 
   /* the SQL is the only authority, and it is where v230 broke */
   ok('[14] the SQL is paste-it-twice safe (every statement create-or-replace)', !/\ncreate function/.test(sql) && (sql.match(/create or replace function/g) || []).length === 4);
+  ok('[14] a function whose RETURN SHAPE changed is dropped first, or Postgres answers 42P13', (() => {
+    const names = ['ars_order_catalog', 'ars_order_shop', 'ars_place_order', 'ars_order_status'];
+    return names.every(n => {
+      const at = sql.indexOf(`create or replace function public.${n}(`);
+      const before = sql.slice(0, at);
+      return at > 0 && before.includes(`drop function if exists public.${n}(`);
+    });
+  })(), 'every create needs a matching drop above it');
+  ok('[14] and the reason is written where they will read it', /42P13/.test(sql) && /cannot change return type/.test(sql));
+  ok('[14] the drops touch only these functions — never a table, never a row', (sql.match(/^drop function if exists/gm) || []).length === 7 && !/^drop (table|schema|index)/im.test(sql), String((sql.match(/^drop \w+/gm) || []).length));
+  ok('[14] every function body is closed with $$; (4 of them)', (sql.match(/^\$\$;/gm) || []).length === 4);
   ok('[14] index creation is guarded too', /create index if not exists/.test(sql) && !/\ncreate index [^i]/.test(sql));
   ok('[14] the four RPCs are security definer with a pinned search_path', (sql.match(/^ {2}security definer$/gm) || []).length === 4, String((sql.match(/^ {2}security definer$/gm) || []).length));
   ok('[14] the public gets execute on the four, and nothing else on the table', /revoke all on function/.test(sql) && /grant execute on function/.test(sql) && /to anon, authenticated, service_role/.test(sql));
   ok('[14] the loop variable is jsonb — `record` produced “operator does not exist: record ->> unknown”', /v_line\s+jsonb/.test(sql) && !/v_line\s+record/.test(sql), (sql.match(/v_line\s+\w+/) || [''])[0]);
   ok('[14] and the loop feeds it a jsonb element, not a record row', /for v_line in select jsonb_array_elements\(p_lines\) loop/.test(sql) && !/select \* from jsonb_array_elements/.test(sql));
   ok('[14] the catalogue is the farm’s menu, not the cooler', /ars_order_catalog[\s\S]*?entity_type = 'semen_order_breed'/.test(sql) && !/ars_order_catalog[\s\S]*?semen_inventory/.test(sql));
-  ok('[14] placing an order touches no stock column at all', /ars_place_order[\s\S]*?end;\n\$\$;/.test(sql) && !/available_bottles|bottles'\)|on_hand/.test(sql.slice(sql.indexOf('ars_place_order'), sql.indexOf("-- 4) The reseller's own order history"))));
+  {
+    const at = sql.indexOf('create or replace function public.ars_place_order(');
+    const body = sql.slice(at, sql.indexOf('$$;', at));
+    ok('[14] placing an order touches no stock column at all', at > 0 && !/available_bottles|on_hand|bottles'\)|semen_inventory/.test(body), (body.match(/.{0,60}(on_hand|semen_inventory).{0,40}/) || ['clean'])[0]);
+    ok('[14] and it does read the menu it is priced from', /entity_type = 'semen_order_breed'/.test(body));
+  }
   ok('[14] the page cannot name a price: the function reads k and qty only', !/v_line->>'(rate|price|amount|total)/.test(sql));
   ok('[14] quantity is clamped to the farm’s 1..999 per line, and lines are capped', /least\(999, greatest\(1,/.test(sql) && /jsonb_array_length\(p_lines\) > 40/.test(sql));
   ok('[14] a burst from one link is throttled and the queue is capped', /interval '20 seconds'/.test(sql) && /v_pending >= 25/.test(sql));

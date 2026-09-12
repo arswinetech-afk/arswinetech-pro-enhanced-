@@ -1,4 +1,4 @@
-# FIX 188 / FIX 189 — Reseller order links and the farm's order menu (v230 → v231)
+# FIX 188 / FIX 189 — Reseller order links and the farm's order menu (v230 → v231 → v232)
 
 > Your question: *"Is it possible to send a link where this link will have like an ordering
 > counter page, whereas the reseller can simply place their order and once they click
@@ -10,6 +10,27 @@
 > a reseller orders a **breed from a menu the farm owns** instead of a batch from the cooler,
 > the ₱/bottle comes from that menu, and an arrival interrupts with a pop-up, a beep and a
 > vibration. Build `v231-reseller-order-menu-2026-09-12`.
+> **v232** is that same build with a fixable install: pasting the SQL onto a farm that already
+> had v230 died with `42P13 cannot change return type of existing function`, because v231
+> changed what the catalogue function returns. Build `v232-reseller-sql-recreate-2026-09-12`.
+
+## v232 — why the paste failed, and why dropping is the right answer
+
+`create or replace function` may rewrite a function's body, signature and grants, but Postgres
+refuses to change its **row type**: v230's `ars_order_catalog(text)` returned
+`(item_key, semen_batch_no, boar, breed, price, on_hand)` and v231's returns
+`(item_key, breed, price, blurb, priced)`. Hence `42P13 … Row type defined by OUT parameters is
+different. HINT: Use DROP FUNCTION ars_order_catalog(text) first.` The hint is correct, and here
+it is safe: these four functions store nothing — they are only doors onto `app_records`, so no
+order, link, menu row, batch or ledger entry is touched by dropping and recreating them, and the
+grants at the bottom of the file are re-applied in the same paste.
+
+So every create in `supabase/reseller_orders.sql` is now preceded by a matching
+`drop function if exists …` (7 of them: the four current signatures plus the argument shapes
+earlier drafts used, so a half-installed project converges too). `if exists` makes each a no-op
+on a fresh project, which is why the file is still safe to paste any number of times. The harness
+lints this — a create without a matching drop above it now fails a check, because this exact
+failure was invisible until a human pasted it.
 
 ## v231 — what the first phone test found
 
@@ -61,7 +82,8 @@ the inbox is already open.
 
 **Re-paste `supabase/reseller_orders.sql` once, then open 🧬 Order menu and press ✓ Save menu.**
 The SQL is idempotent and rewrites no existing row — but the `record ->>` failure lives in the
-database, so uploading the zip alone cannot fix it. Saving the menu once is what puts your four
+database, so uploading the zip alone cannot fix it. (From v232 the paste also drops and recreates
+its own four functions, since v231 changed a return type; see the section above.) Saving the menu once is what puts your four
 breeds into the cloud for the page to read; until then their page says the farm has not put any
 breeds on the menu yet, which is true.
 
@@ -109,8 +131,8 @@ revocable** · **Phase 1 now**.
 | `client.js` | `entityMap` += `semenResellerOrders: 'semen_reseller_order'`, `semenResellerOrderLinks: 'semen_reseller_order_link'`, `semenOrderBreeds: 'semen_order_breed'` — so orders, links and the menu sync, back up and restore like every other record (the menu must sync: the public page reads it from the cloud). |
 | `app.js` | `sanitizeFarm` initialises the three buckets, as it does for all the others. |
 | `sw.js` | `/order.html` and `/js/order-page.js` bypass the app cache (a reseller must never get yesterday's page, and offline must not hand them your login screen). |
-| `_headers`, `config.js` | `order.html` served `no-cache` + `X-Robots-Tag: noindex`; version `v231-reseller-order-menu-2026-09-12`. |
-| `qa/build-deploy-layout.sh`, `qa/test-reseller-orders.mjs` | the page is copied into the deploy layout; 192 checks. |
+| `_headers`, `config.js` | `order.html` served `no-cache` + `X-Robots-Tag: noindex`; version `v232-reseller-sql-recreate-2026-09-12`. |
+| `qa/build-deploy-layout.sh`, `qa/test-reseller-orders.mjs` | the page is copied into the deploy layout; 197 checks. |
 
 No `_worker.js` change is needed: it only special-cases `/ars-head` and otherwise falls
 through to `env.ASSETS.fetch(request)`, so `/order.html` is served as a static asset.
@@ -118,9 +140,10 @@ through to `env.ASSETS.fetch(request)`, so `/order.html` is served as a static a
 ## One-time install (Supabase → SQL editor → Paste)
 
 Paste **`supabase/reseller_orders.sql`** once (again, for v231 — it replaces the catalogue
-function, rewrites `ars_place_order` and adds the menu's index). It is idempotent — every statement is
-`create or replace` / `create index if not exists`, so pasting it twice is safe, and it
-installs nothing else. It creates **no table and deletes no row**: orders and links are
+function, rewrites `ars_place_order` and adds the menu's index; v232 made that paste work on a
+farm that already had v230 installed). It is idempotent — every statement is
+`create or replace` / `create index if not exists` / `drop function if exists`, so pasting it
+twice is safe, and it installs nothing else. It creates **no table and deletes no row**: orders and links are
 ordinary `app_records` rows, the same table your app already uses.
 
 Then run the verify query at the bottom of the file. Expected: **4 rows, `security_definer =
@@ -168,7 +191,7 @@ lists their own recent orders as `Waiting for the farm` / `Accepted — ready to
 
 ## Checks that ran
 
-`node qa/test-reseller-orders.mjs` → **192/192** (page arithmetic with no stock in it and the
+`node qa/test-reseller-orders.mjs` → **197/197** (page arithmetic with no stock in it and the
 999 cap; the payload that leaves the phone; the fake-browser end-to-end incl. an unpriced breed
 admitted as "Price confirmed by the farm"; link lifecycle incl. supersede and pause; the menu —
 seeded once, emptied stays emptied, duplicates refused, a draft line pruned on cancel, and a

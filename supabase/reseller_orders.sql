@@ -32,7 +32,9 @@
 --     entity_type = 'semen_reseller_order'        (payload holds the request)
 --     entity_type = 'semen_order_breed'           (payload holds one menu line)
 --
--- IDEMPOTENT: safe to re-run any number of times. No existing data is modified.
+-- IDEMPOTENT: safe to re-run any number of times. No existing data is modified. It drops and
+-- recreates its OWN four functions (they store nothing) because v231 changed what one of them
+-- returns, and Postgres will not let create-or-replace do that — see the note above section 2.
 -- Run as the project's postgres role (the SQL editor default) so the definer
 -- functions own their write path.
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -54,6 +56,18 @@ create index if not exists app_records_order_linkid_idx
 create index if not exists app_records_order_breed_idx
   on public.app_records (farm_id)
   where entity_type = 'semen_order_breed';
+
+-- WHY A DROP COMES FIRST. Postgres refuses to change the row a function returns:
+--   42P13  cannot change return type of existing function
+--   DETAIL Row type defined by OUT parameters is different.
+-- v230's catalogue returned (item_key, semen_batch_no, boar, breed, price, on_hand) and v231's
+-- returns (item_key, breed, price, blurb, priced), so `create or replace` alone cannot install
+-- it on a farm that already pasted v230 — which is exactly where you were. Dropping is safe:
+-- these functions hold NO data, they are only doors onto app_records, and every order, link and
+-- menu row keeps sitting in that table untouched. Each drop is `if exists`, so a first-time
+-- install reads them as no-ops, and the grants at the bottom of this file are re-applied after.
+drop function if exists public.ars_order_catalog(text);
+drop function if exists public.ars_order_catalog(text, text);      /* any earlier draft */
 
 -- 2) What the farm is offering — the farm's OWN order menu (Reseller Center →
 --    🧬 Order menu), never the cooler. A reseller may order a breed even when the
@@ -89,6 +103,8 @@ $$;
 -- 2b) Whose link is this? The page shows the reseller's own name and the farm's,
 --     both copied onto the link row by the app when the link was made — so this
 --     never touches the farms table, and an unknown or revoked token says so plainly.
+drop function if exists public.ars_order_shop(text);
+
 create or replace function public.ars_order_shop(p_token text)
 returns jsonb
 language plpgsql
@@ -126,6 +142,10 @@ $$;
 --    What IS recomputed here, and never taken from the browser: which breeds this
 --    farm's menu offers, the ₱/bottle on that menu, and every amount. The client
 --    sends menu keys and counts only — a tampered page cannot set its own price.
+drop function if exists public.ars_place_order(text, jsonb, text, text);
+drop function if exists public.ars_place_order(text, jsonb);        /* any earlier draft */
+drop function if exists public.ars_place_order(text, jsonb, text);  /* any earlier draft */
+
 create or replace function public.ars_place_order(
   p_token text,
   p_lines jsonb,
@@ -267,6 +287,8 @@ $$;
 
 -- 4) The reseller's own order history on that page — status only, newest first.
 --    A link can only ever read orders that were placed through it.
+drop function if exists public.ars_order_status(text);
+
 create or replace function public.ars_order_status(p_token text)
 returns table(order_id text, status text, placed_at text, bottles integer,
               total numeric, note text, decision_note text)
@@ -296,7 +318,7 @@ as $$
    limit 10;
 $$;
 
--- 5) The public may call these three, and nothing else. RLS on app_records stays
+-- 5) The public may call these four, and nothing else. RLS on app_records stays
 --    untouched — these functions are the only way in, and each one is checked
 --    against the token before it reads or writes a single row.
 /* Every one of these reads public.app_records directly, and RLS on that table says an
