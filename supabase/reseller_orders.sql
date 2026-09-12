@@ -1,10 +1,16 @@
 -- ═══════════════════════════════════════════════════════════════════════════
 -- ARSwineTech Pro — [FIX 188] RESELLER ORDER LINKS (run once, ~15 s)
 --
--- Gives each reseller a private link (…/order.html?k=<token>) where they tap the
--- bottles they want, see the price and what is left, and hit Place order. The
--- order lands in the Reseller Center as a PENDING request with a badge; nothing
--- about stock, balances or invoices changes until you press Accept in the app.
+-- Gives each reseller a private link (…/order.html?k=<token>) where they choose how
+-- many bottles of each BREED on your order menu they want, at the ₱/bottle you put on
+-- that menu, and hit Place order. The order lands in the Reseller Center as a PENDING
+-- request with a badge, a pop-up and a beep; nothing about stock, balances or invoices
+-- changes until you accept it and save a pick-up — and which boar to collect is always
+-- your decision, which is why their menu is a list of breeds you maintain, not your
+-- cooler. (v231: the earlier build listed live batches with bottles-left, and a farm
+-- whose batches carried no selling price saw ₱0.00 everywhere. It also failed with
+-- "operator does not exist: record ->> unknown" because the loop variable was declared
+-- `record` instead of `jsonb`. Both are fixed here, so re-paste this file.)
 --
 -- WHY IT LOOKS LIKE THIS
 --   Your cloud is one table — public.app_records (farm_id, entity_type, local_id,
@@ -12,7 +18,7 @@
 --   public page has no such login, so it must not touch that table directly.
 --   These three SECURITY DEFINER functions are the ONLY public door, and each one
 --   takes nothing but a token:
---     * ars_order_catalog(text)  → what the farm is offering right now
+--     * ars_order_catalog(text)  → the farm's order menu (breeds + ₱/bottle)
 --     * ars_place_order(text,jsonb,text,text) → validates + inserts the request
 --     * ars_order_status(text)   → that link's own last orders (status for the page)
 --   No service-role key exists anywhere in the app, the zip or Cloudflare: the
@@ -24,6 +30,7 @@
 -- with a farm delete like everything else:
 --     entity_type = 'semen_reseller_order_link'   (payload holds the token)
 --     entity_type = 'semen_reseller_order'        (payload holds the request)
+--     entity_type = 'semen_order_breed'           (payload holds one menu line)
 --
 -- IDEMPOTENT: safe to re-run any number of times. No existing data is modified.
 -- Run as the project's postgres role (the SQL editor default) so the definer
@@ -44,33 +51,39 @@ create index if not exists app_records_order_linkid_idx
   on public.app_records ((payload->>'link_id'))
   where entity_type = 'semen_reseller_order';
 
--- 2) What the farm is offering — only the six fields a reseller may ever see.
---    Price comes from the batch record itself (the same number your pick-up form
---    prefills), and so does the count, so the page can never invent either.
+create index if not exists app_records_order_breed_idx
+  on public.app_records (farm_id)
+  where entity_type = 'semen_order_breed';
+
+-- 2) What the farm is offering — the farm's OWN order menu (Reseller Center →
+--    🧬 Order menu), never the cooler. A reseller may order a breed even when the
+--    farm has no bottles left, because the farm decides at collect time which boar
+--    to pull. Only these five fields ever leave the database for this function.
 create or replace function public.ars_order_catalog(p_token text)
-returns table(item_key text, semen_batch_no text, boar text, breed text,
-              price numeric, on_hand integer)
+returns table(item_key text, breed text, price numeric, blurb text, priced boolean)
 language sql
 stable
 set search_path = public
   security definer
 as $$
   select a.local_id::text,
-         coalesce(nullif(a.payload->>'semen_batch_no',''), a.local_id::text),
-         coalesce(nullif(a.payload->>'boar_name',''), nullif(a.payload->>'boar',''), 'Semen'),
-         coalesce(nullif(a.payload->>'breed',''), '—'),
-         coalesce((a.payload->>'price_per_dose')::numeric, (a.payload->>'price')::numeric, 0),
-         greatest(0, coalesce((a.payload->>'available_bottles')::int, (a.payload->>'bottles')::int, 0))
+         coalesce(nullif(a.payload->>'name',''), nullif(a.payload->>'breed',''), 'Semen'),
+         greatest(0, coalesce((a.payload->>'price')::numeric, 0)),
+         coalesce(nullif(a.payload->>'blurb',''), ''),
+         coalesce((a.payload->>'price')::numeric, 0) > 0
     from public.app_records a
-   where a.entity_type = 'semen_inventory'
+   where a.entity_type = 'semen_order_breed'
      and a.farm_id = (select l.farm_id from public.app_records l
                        where l.entity_type = 'semen_reseller_order_link'
                          and l.payload->>'token' = p_token
                          and coalesce(l.payload->>'active','true') = 'true'
                        limit 1)
+     and coalesce(a.payload->>'active','true') = 'true'
      and coalesce(a.payload->>'status','active') not in ('voided','deleted','archived')
-     and greatest(0, coalesce((a.payload->>'available_bottles')::int, (a.payload->>'bottles')::int, 0)) > 0
-   order by 3, 2;
+     /* an unnamed row is an unsaved draft line in the editor — never a choice, and it
+        must not appear on a reseller's page as a nameless breed at ₱0 */
+     and coalesce(nullif(a.payload->>'name',''), nullif(a.payload->>'breed','')) is not null
+   order by coalesce((a.payload->>'sort')::int, 0), 2;
 $$;
 
 -- 2b) Whose link is this? The page shows the reseller's own name and the farm's,
@@ -107,11 +120,12 @@ begin
 end;
 $$;
 
--- 3) Place an order.
---    Every number that reaches the ledger is recomputed here: the client sends
---    item keys and quantities only, prices and availability come from your stock,
---    and an over-request is clamped to what the batch actually holds (the response
---    reports the clamping so the page can say so out loud).
+-- 3) Place an order.  A reseller's order is a REQUEST for bottles of a breed.
+--    Nothing about your stock is checked here and nothing about your stock changes:
+--    which boar to collect, and whether a breed is priced, is yours to decide.
+--    What IS recomputed here, and never taken from the browser: which breeds this
+--    farm's menu offers, the ₱/bottle on that menu, and every amount. The client
+--    sends menu keys and counts only — a tampered page cannot set its own price.
 create or replace function public.ars_place_order(
   p_token text,
   p_lines jsonb,
@@ -124,12 +138,14 @@ set search_path = public
 as $$
 declare
   v_link      record;
-  v_line      record;
+  v_line      jsonb;      /* a jsonb ELEMENT. Declaring this as `record` is what produced
+                             "operator does not exist: record ->> unknown" — a record cannot
+                             be indexed with ->> , so the loop variable MUST be jsonb. */
   v_item      record;
   v_lines     jsonb := '[]'::jsonb;
+  v_removed   jsonb := '[]'::jsonb;
   v_total     numeric := 0;
   v_qty       integer;
-  v_clamped   jsonb := '[]'::jsonb;
   v_pending   integer;
   v_order_id  text := 'rsord_' || replace(gen_random_uuid()::text, '-', '');
   v_payload   jsonb;
@@ -147,7 +163,10 @@ begin
   end if;
 
   if p_lines is null or jsonb_typeof(p_lines) <> 'array' or jsonb_array_length(p_lines) = 0 then
-    return jsonb_build_object('ok', false, 'error', 'Pick at least one bottle first.');
+    return jsonb_build_object('ok', false, 'error', 'Choose at least one breed first.');
+  end if;
+  if jsonb_array_length(p_lines) > 40 then
+    return jsonb_build_object('ok', false, 'error', 'That order has too many lines (40 max). Send it in two parts.');
   end if;
 
   /* spam guard: one order per link per 20 s, and never a queue longer than 25 */
@@ -168,48 +187,40 @@ begin
       'This link already has 25 unread orders. Send your next order after the farm clears the list.');
   end if;
 
-  for v_line in select * from jsonb_array_elements(p_lines) loop
+  for v_line in select jsonb_array_elements(p_lines) loop
     v_qty := least(999, greatest(1, coalesce(nullif(v_line->>'qty','')::int, 0)));
 
     select a.local_id::text as key,
-           coalesce(nullif(a.payload->>'semen_batch_no',''), a.local_id::text) as batch,
-           coalesce(nullif(a.payload->>'boar_name',''), nullif(a.payload->>'boar',''), 'Semen') as boar,
-           coalesce(nullif(a.payload->>'breed',''), '—') as breed,
-           coalesce((a.payload->>'price_per_dose')::numeric, (a.payload->>'price')::numeric, 0) as price,
-           greatest(0, coalesce((a.payload->>'available_bottles')::int, (a.payload->>'bottles')::int, 0)) as on_hand
+           coalesce(nullif(a.payload->>'name',''), nullif(a.payload->>'breed',''), 'Semen') as breed,
+           greatest(0, coalesce((a.payload->>'price')::numeric, 0)) as price
       into v_item
       from public.app_records a
-     where a.entity_type = 'semen_inventory'
+     where a.entity_type = 'semen_order_breed'
        and a.farm_id = v_link.farm_id
+       and coalesce(a.payload->>'active','true') = 'true'
+       and coalesce(a.payload->>'status','active') not in ('voided','deleted','archived')
        and (a.local_id::text = (v_line->>'k')::text
-            or coalesce(nullif(a.payload->>'semen_batch_no',''),'') = coalesce(v_line->>'k',''))
+            or coalesce(nullif(a.payload->>'name',''),'') = coalesce(v_line->>'k',''))
      limit 1;
 
-    if not found or v_item.on_hand <= 0 then
-      v_clamped := v_clamped || jsonb_build_array(jsonb_build_object(
-        'requested', v_qty, 'granted', 0, 'boar', coalesce(v_line->>'boar','?'),
-        'why', 'no longer in stock'));
+    if not found then
+      v_removed := v_removed || jsonb_build_array(jsonb_build_object(
+        'requested', v_qty, 'breed', coalesce(nullif(v_line->>'breed',''), '?'),
+        'why', 'is no longer on this farm’s order menu'));
       continue;
-    end if;
-
-    if v_qty > v_item.on_hand then
-      v_clamped := v_clamped || jsonb_build_array(jsonb_build_object(
-        'requested', v_qty, 'granted', v_item.on_hand, 'boar', v_item.boar,
-        'batch', v_item.batch, 'why', 'only what is left was reserved'));
-      v_qty := v_item.on_hand;
     end if;
 
     v_total := v_total + (v_qty * v_item.price);
     v_lines := v_lines || jsonb_build_array(jsonb_build_object(
-      'semen_id', v_item.key, 'semen_batch_no', v_item.batch, 'boar', v_item.boar,
-      'breed', v_item.breed, 'qty', v_qty, 'rate', v_item.price,
+      'breed_id', v_item.key, 'breed', v_item.breed, 'boar', v_item.breed,
+      'semen_batch_no', '', 'semen_id', '', 'qty', v_qty, 'rate', v_item.price,
       'amount', +(v_qty * v_item.price)::numeric(12,2)));
   end loop;
 
   if jsonb_array_length(v_lines) = 0 then
     return jsonb_build_object('ok', false, 'error',
-      'Nothing in that order is in stock any more — ask the farm what is available.',
-      'clamped', v_clamped);
+      'None of those breeds are on the farm’s menu right now — reload the page and pick from what it shows.',
+      'removed', v_removed);
   end if;
 
   v_payload := jsonb_build_object(
@@ -226,7 +237,7 @@ begin
     'lines', v_lines,
     'bottles', (select coalesce(sum((l->>'qty')::int), 0) from jsonb_array_elements(v_lines) l),
     'total', +v_total::numeric(12,2),
-    'clamped', v_clamped,
+    'removed', v_removed,
     'updated_at', to_char(now() at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
   );
 
@@ -249,7 +260,7 @@ begin
   return jsonb_build_object('ok', true, 'order_id', v_order_id,
                             'total', +v_total::numeric(12,2),
                             'bottles', (select coalesce(sum((l->>'qty')::int), 0) from jsonb_array_elements(v_lines) l),
-                            'lines', v_lines, 'clamped', v_clamped,
+                            'lines', v_lines, 'removed', v_removed,
                             'reseller_name', v_link.payload->>'reseller_name');
 end;
 $$;
@@ -316,6 +327,7 @@ select p.proname as function, p.prosecdef as security_definer,
 
 -- Expected: 4 rows, security_definer = true, owner = postgres, token_index_present >= 1.
 --
--- Then open the app → Reseller Center → a reseller → 🛒 Order link → Copy link.
+-- Then open the app → Reseller Center → 🧬 Order menu (check the four breeds and their
+-- ₱/bottle) → a reseller → 🛒 Order link → Copy link.
 -- Nothing else to install: the app creates the link row and reads orders back
 -- through the same sync it already uses.

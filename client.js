@@ -46,6 +46,9 @@ window.ARSCloud = (() => {
        every device on the heartbeat the sync already does — no second transport. */
     semenResellerOrderLinks: 'semen_reseller_order_link',
     semenResellerOrders: 'semen_reseller_order',
+    /* [FIX 189] what the farm lets its resellers order, and at what price. It has to be
+       a synced record (not just local UI) because the public page reads it from the cloud. */
+    semenOrderBreeds: 'semen_order_breed',
     feedTrials: 'feed_trial',
     feedOrders: 'feed_order',
     boars: 'boar',

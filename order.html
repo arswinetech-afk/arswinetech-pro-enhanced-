@@ -41,8 +41,7 @@
   .card .mid{flex:1 1 auto;min-width:0}
   .card b{display:block;font-size:14px;letter-spacing:-.2px}
   .card em{display:block;font-style:normal;font-size:11.5px;color:#9dc3bf;margin-top:2px;overflow-wrap:anywhere}
-  .card .left{display:inline-block;margin-top:4px;font-size:10.5px;font-weight:800;color:#7ce8da;background:rgba(64,220,200,.13);border-radius:99px;padding:2px 8px}
-  .card .left.low{color:#f0b64b;background:rgba(240,182,75,.14)}
+  .card .blurb{display:inline-block;margin-top:4px;font-size:10.5px;color:#9dc3bf}
   .qty{flex:0 0 auto;display:flex;align-items:center;gap:6px}
   .qty button{width:36px;height:36px;border-radius:11px;border:1px solid rgba(190,251,244,.22);background:#0d3237;color:#eafaf8;font-size:19px;line-height:1;font-weight:800;cursor:pointer}
   .qty button:active{transform:scale(.94)}
@@ -84,7 +83,7 @@
   <div id="msg"></div>
 
   <div id="main" hidden>
-    <h2>Choose your bottles</h2>
+    <h2>Which breeds do you need?</h2>
     <div id="list"><div class="sk"></div><div class="sk"></div><div class="sk"></div></div>
 
     <h2>When &amp; anything we should know</h2>
@@ -92,7 +91,7 @@
       <input type="date" id="needBy" min="">
     </label>
     <label class="field">Note for the farm
-      <textarea id="note" maxlength="240" placeholder="e.g. pick up by 8 AM, bring the ice gel box"></textarea>
+      <textarea id="note" maxlength="240" placeholder="e.g. pick up by 8 AM, any boar is fine, bring the ice gel box"></textarea>
     </label>
 
     <h2>My recent orders</h2>
@@ -103,7 +102,7 @@
 <div class="bar" id="bar" hidden>
   <div class="row"><span id="basket">Nothing picked yet</span><b id="sum">₱0.00</b></div>
   <button class="go" id="send" disabled>Place order</button>
-  <div class="note" id="hint">Prices are today's batch price and the farm confirms every order — nothing is charged yet.</div>
+  <div class="note" id="hint">The farm confirms every order and chooses which boar to collect — nothing is charged yet.</div>
 </div>
 
 <script src="supabase/config.js"></script>

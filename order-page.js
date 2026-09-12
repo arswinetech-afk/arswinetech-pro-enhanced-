@@ -26,22 +26,23 @@ window.ArsOrderPage = (function () {
     return m ? m[1] : '';
   }
 
-  const itemKey = it => String(it.item_key || it.key || it.semen_batch_no || '');
+  const itemKey = it => String(it.item_key || it.key || it.breed_id || it.breed || it.boar || '');
 
+  /* No stock maths here on purpose: a reseller orders a BREED and the farm decides
+     which boar to collect, so the only limits are "is this still on the menu" and the
+     farm's 999-bottle-per-line ceiling. Any clamping the page used to do was a promise
+     about the farm's cooler that the page has no business making. */
+  const MAX_QTY = 999;
   function clampCart(c, cat) {
     const byKey = {};
     (cat || []).forEach(it => { byKey[itemKey(it)] = it; });
     const out = {}, warnings = [];
     Object.keys(c || {}).forEach(k => {
       const it = byKey[k];
-      let q = Math.floor(+c[k] || 0);
-      if (!it) { warnings.push('That item is no longer listed — it was removed from your order.'); return; }
-      const max = Math.max(0, +it.on_hand || 0);
-      if (q > max) {
-        q = max;
-        warnings.push(`Only ${max} of ${esc(it.boar)} (${esc(it.semen_batch_no)}) ${max === 1 ? 'is' : 'are'} left, so your order asks for ${max}.`);
-      }
-      if (q <= 0) { if (max === 0) warnings.push(`${esc(it.boar)} ran out — removed from your order.`); return; }
+      const q = Math.min(MAX_QTY, Math.max(0, Math.floor(+c[k] || 0)));
+      if (!it) { warnings.push('One of your picks is no longer on this farm’s menu — it was removed from your order.'); return; }
+      if (q <= 0) return;
+      if ((+c[k] || 0) > MAX_QTY) warnings.push(`${esc(it.boar || it.breed)} is capped at ${MAX_QTY} bottles per order — send another order if you need more.`);
       out[k] = q;
     });
     return { cart: out, warnings };
@@ -51,17 +52,18 @@ window.ArsOrderPage = (function () {
     const byKey = {};
     (cat || []).forEach(it => { byKey[itemKey(it)] = it; });
     const lines = [];
-    let bottles = 0, total = 0;
+    let bottles = 0, total = 0, unpriced = 0;
     Object.keys(c || {}).forEach(k => {
       const it = byKey[k];
       const q = Math.floor(+c[k] || 0);
       if (!it || q <= 0) return;
-      const rate = +it.price || 0;
+      const rate = +it.price || 0;           /* 0 = the farm has not priced this breed yet */
       const amount = +(q * rate).toFixed(2);
       bottles += q; total += amount;
-      lines.push({ k, item_key: k, semen_batch_no: it.semen_batch_no, boar: it.boar, breed: it.breed, qty: q, rate, amount });
+      if (!(rate > 0)) unpriced++;
+      lines.push({ k, item_key: k, breed_id: it.breed_id || k, boar: it.boar || it.breed, breed: it.breed, qty: q, rate, amount });
     });
-    return { lines, bottles, total: +total.toFixed(2) };
+    return { lines, bottles, total: +total.toFixed(2), unpriced };
   }
 
   /* Quantities only — price is never sent, so a tampered page cannot set its own rate. */
@@ -107,23 +109,24 @@ window.ArsOrderPage = (function () {
   function paintList() {
     const wrap = els.list;
     if (!catalog.length) {
-      wrap.innerHTML = `<div class="err">No bottles are listed for pick-up right now. Message the farm directly and ask them to publish stock.</div>`;
+      wrap.innerHTML = `<div class="err">This farm has not put any breeds on its order menu yet. Message them and they will add what you can order.</div>`;
       return;
     }
     wrap.innerHTML = catalog.map(it => {
-      const key = itemKey(it), max = Math.max(0, +it.on_hand || 0), q = +cart[key] || 0;
+      const key = itemKey(it), name = it.boar || it.breed || 'Semen', q = +cart[key] || 0;
+      const priced = it.priced === undefined ? (+it.price || 0) > 0 : !!it.priced;
       return `<div class="card">
-        <div class="pic">🧪</div>
+        <div class="pic">🧬</div>
         <div class="mid">
-          <b>${esc(it.boar)}</b>
-          <em>${esc(it.semen_batch_no)}${it.breed && it.breed !== '—' ? ` · ${esc(it.breed)}` : ''} · ${money(it.price)} a bottle</em>
-          <span class="left${max <= 3 ? ' low' : ''}">${max} left</span>
+          <b>${esc(name)}</b>
+          <em>${priced ? `${money(it.price)} a bottle` : 'Price confirmed by the farm'}</em>
+          ${it.blurb ? `<span class="blurb">${esc(it.blurb)}</span>` : ''}
         </div>
-        <div class="price">${q ? money(q * (+it.price || 0)) : '<small>&nbsp;</small>'}</div>
+        <div class="price">${q ? (priced ? money(q * (+it.price || 0)) : `<small>${q} bottle${q > 1 ? 's' : ''}</small>`) : '<small>&nbsp;</small>'}</div>
         <div class="qty">
           <button type="button" aria-label="One fewer" onclick="ArsOrderPage.step('${esc(key)}',-1)" ${q <= 0 ? 'disabled' : ''}>−</button>
-          <input type="number" inputmode="numeric" min="0" max="${max}" value="${q}" aria-label="How many bottles" onchange="ArsOrderPage.set('${esc(key)}',this.value)">
-          <button type="button" aria-label="One more" onclick="ArsOrderPage.step('${esc(key)}',1)" ${q >= max ? 'disabled' : ''}>＋</button>
+          <input type="number" inputmode="numeric" min="0" max="${MAX_QTY}" value="${q}" aria-label="How many bottles" onchange="ArsOrderPage.set('${esc(key)}',this.value)">
+          <button type="button" aria-label="One more" onclick="ArsOrderPage.step('${esc(key)}',1)" ${q >= MAX_QTY ? 'disabled' : ''}>＋</button>
         </div>
       </div>`;
     }).join('');
@@ -131,10 +134,12 @@ window.ArsOrderPage = (function () {
 
   function paintBar(warn) {
     const t = cartTotals(cart, catalog);
-    els.basket.textContent = t.bottles ? `${t.bottles} bottle${t.bottles > 1 ? 's' : ''} · ${t.lines.length} batch${t.lines.length > 1 ? 'es' : ''}` : 'Nothing picked yet';
+    els.basket.textContent = t.bottles ? `${t.bottles} bottle${t.bottles > 1 ? 's' : ''} · ${t.lines.length} breed${t.lines.length > 1 ? 's' : ''}` : 'Nothing picked yet';
     els.sum.textContent = money(t.total);
     els.send.disabled = !t.bottles;
-    els.hint.innerHTML = warn || 'Prices are today\u2019s batch price and the farm confirms every order \u2014 nothing is charged yet.';
+    els.hint.innerHTML = warn || (t.unpriced
+      ? `${t.unpriced} line${t.unpriced > 1 ? 's have' : ' has'} no price on the menu yet — the farm will confirm the amount when they accept.`
+      : 'The farm confirms every order and chooses which boar to collect — nothing is charged yet.');
     return t;
   }
 
@@ -156,19 +161,15 @@ window.ArsOrderPage = (function () {
 
   /* ── actions ─────────────────────────────────────────────────────────────── */
   function step(key, delta) {
-    const it = catalog.find(x => itemKey(x) === key);
-    const max = Math.max(0, +((it || {}).on_hand) || 0);
-    const next = Math.min(max, Math.max(0, (+cart[key] || 0) + delta));
+    const next = Math.min(MAX_QTY, Math.max(0, (+cart[key] || 0) + delta));
     if (next > 0) cart[key] = next; else delete cart[key];
     saveDraft(); paintList(); paintBar();
   }
   function set(key, value) {
-    const it = catalog.find(x => itemKey(x) === key);
-    const max = Math.max(0, +((it || {}).on_hand) || 0);
-    const n = Math.min(max, Math.max(0, Math.floor(+value || 0)));
+    const n = Math.min(MAX_QTY, Math.max(0, Math.floor(+value || 0)));
     if (n > 0) cart[key] = n; else delete cart[key];
     saveDraft(); paintList();
-    paintBar(n === +value || !max ? '' : `That batch has ${max} left — your order will ask for ${max}.`);
+    paintBar((+value || 0) > MAX_QTY ? `An order line is capped at ${MAX_QTY} bottles — send another order if you need more.` : '');
   }
 
   let busy = false;
@@ -183,13 +184,13 @@ window.ArsOrderPage = (function () {
       const r = await rpc('ars_place_order', rpcBody(token, t.lines, els.note.value, els.needBy.value));
       const out = Array.isArray(r) ? r[0] : r;
       if (!out || out.ok !== true) { say(esc((out && out.error) || 'The farm did not accept the order. Try again or call them.')); return; }
-      const extra = Array.isArray(out.clamped) && out.clamped.length
-        ? `<br><b>Note from the farm's stock:</b> ${out.clamped.map(c => `${c.requested} × ${esc(c.boar || '?')} → ${c.granted} (${esc(c.why)})`).join('; ')}` : '';
+      const extra = Array.isArray(out.removed) && out.removed.length
+        ? `<br><b>Not sent:</b> ${out.removed.map(c => `${c.requested} × ${esc(c.breed || c.boar || '?')} (${esc(c.why)})`).join('; ')}` : '';
       cart = {}; saveDraft(); paintList(); paintBar();
       refreshOrders();
       els.shop.innerHTML = `<h3 style="margin:0 0 6px">✓ Order sent</h3>
         ${out.bottles || t.bottles} bottle${(out.bottles || t.bottles) === 1 ? '' : 's'} · <b>${money(out.total != null ? out.total : t.total)}</b>
-        <br>The farm has been notified and will confirm. Nothing is charged until they accept.${extra}
+        <br>The farm has been notified and will confirm which boar they collect. Nothing is charged until they accept.${extra}
         <br><span style="color:#9dc3bf">Keep this link open — its status updates right here.</span>`;
       els.main.hidden = false;
       window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -221,9 +222,9 @@ window.ArsOrderPage = (function () {
       const name = (s && (s.reseller_name || s.farm_name)) || 'Your account';
       els.farmName.textContent = (s && s.farm_name) ? s.farm_name : 'ARSwineTech farm';
       els.shop.hidden = false;
-      els.shop.innerHTML = `Ordering as <b>${esc(name)}</b><span>Send it whenever you need bottles — the farm confirms stock and price before anything is reserved.</span>`;
+      els.shop.innerHTML = `Ordering as <b>${esc(name)}</b><span>Send it whenever you need bottles — the farm confirms the price and which boar to collect before anything is reserved.</span>`;
       catalog = Array.isArray(cat) ? cat : [];
-      cart = clampCart(loadDraft(), catalog).cart;
+      cart = clampCart(loadDraft(), catalog).cart;   /* a draft saved yesterday drops breeds the farm retired */
       els.main.hidden = false; els.bar.hidden = false;
       paintList(); paintBar(); refreshOrders();
     } catch (e) {

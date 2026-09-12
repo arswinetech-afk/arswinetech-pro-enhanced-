@@ -1,6 +1,6 @@
 /* Public Supabase browser configuration. The publishable key is designed to be
    exposed in a PWA. Never put a service_role or secret key in this file. */
-window.ARS_APP_VERSION = 'v230-reseller-order-links-2026-09-12';
+window.ARS_APP_VERSION = 'v231-reseller-order-menu-2026-09-12';
 window.ARS_OFFICIAL_LOGO = 'assets/arswinetech-logo.png';
 // This is diagnostic metadata only. It is not used for authorization or farm selection.
 window.ARS_DEPLOYMENT_ID = window.ARS_DEPLOYMENT_ID || '';

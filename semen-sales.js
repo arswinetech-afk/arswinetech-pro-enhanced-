@@ -2317,6 +2317,7 @@
        the sync, the backup and the tombstone rules already cover them. */
     if (!Array.isArray(f.semenResellerOrders)) f.semenResellerOrders = [];
     if (!Array.isArray(f.semenResellerOrderLinks)) f.semenResellerOrderLinks = [];
+    if (!Array.isArray(f.semenOrderBreeds)) f.semenOrderBreeds = [];   /* [FIX 189] the farm's order menu */
 
     // Filter out any tombstoned items. [FIX M9] reservation numbers (and legacy
     // customer names written into the shared list by older builds) never hide a
@@ -2415,6 +2416,8 @@
 
   function openSemenResellerHub() {
     ensureResellerData();
+    ensureResellerOrderMenu();        /* [FIX 189] their page needs a menu to show */
+    armResellerOrderNotifier();       /* [FIX 189] pop-up + beep when an order lands */
     const f = F();
     const resellers = f.semenResellers || [];
     const txs = (f.semenResellerTx || []).filter(x => !x.voided); /* FIX 180 */
@@ -2467,6 +2470,8 @@
             <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
               <button type="button" class="btn" onclick="openResellerPickupModal()" style="background:#0ea5e9;color:#fff">＋ Record Semen Pickup</button>
               <button type="button" class="btn ghost" onclick="openResellerProfileModal()">＋ Add Reseller Profile</button>
+              <button type="button" class="btn ghost" onclick="window.openResellerOrderMenu()">🧬 Order menu</button>
+              <button type="button" class="btn ghost" onclick="window.openResellerOrderInbox()">🛒 Orders${resellerOrderToolbarCount()}</button>
             </div>
             <div style="display:flex;gap:8px;align-items:center">
               <button type="button" class="btn ghost small" onclick="btScanPrinter()">📶 Bluetooth Printer</button>
@@ -2516,7 +2521,7 @@
           <div style="display:flex;align-items:center;gap:12px">
             <div style="text-align:right">
               <small class="muted" style="display:block;font-size:11px">${rBottles} bottles picked up</small>
-              <b style="font-size:14.5px;color:${rBal > 0 ? 'var(--warn)' : 'var(--ok)'}">Balance: ${peso(rBal)}</b>
+              <b style="font-size:14.5px;color:${rBal > 0 ? 'var(--warn)' : 'var(--ok)'}">Balance: ${peso(rBal)}</b>${resellerOrderChipHTML(r.id)}
               ${rDiscounts > 0 ? `<small style="display:block;color:var(--ok);font-size:10px">Discounts: ${peso(rDiscounts)}</small>` : ''}
             </div>
             <span id="resArrow_${r.id}" style="font-size:14px;color:var(--muted)">▼</span>
@@ -2803,7 +2808,9 @@
       { boar: '', breed: '', semen_batch_no: '', qty: 1, rate: 350, amount: 350 }
     ];
     if (pendingPickupPrefill && Array.isArray(pendingPickupPrefill.lines) && pendingPickupPrefill.lines.length) {
-      activePickupLines = pendingPickupPrefill.lines.map(l => ({ ...l }));   /* already clamped to today's stock */
+      /* the ordered counts, with the batch left blank for the farm to choose; stock is
+         checked by saveResellerPickup, exactly as it is for a hand-written pick-up */
+      activePickupLines = pendingPickupPrefill.lines.map(l => ({ ...l }));
     }
 
     document.getElementById('resellerPickupModal')?.remove();
@@ -2985,7 +2992,12 @@
       l.boar = s.boar_name || s.boar || 'Semen';
       l.breed = s.breed || 'Commercial';
       l.semen_batch_no = s.semen_batch_no || '';
-      l.rate = +(s.price || 350);
+      /* [FIX 189] when a line came from an accepted reseller order, the price the
+         reseller was shown wins — the batch record has no selling price of its own in
+         this app, and quietly moving ₱400 to ₱350 on the way through the picker is
+         exactly the kind of drift the office should never have to audit. Manual lines
+         keep behaving as they always did. */
+      l.rate = +(l.ordered_rate || s.price || 350);
       l.amount = (l.qty || 1) * l.rate;
 
       const rateInp = document.getElementById(`lineRate_${lIdx}`);
@@ -5020,7 +5032,9 @@
     const pre = pendingPickupPrefill;
     if (!pre) return '';
     const asked = (pre.lines || []).length;
-    return `<div class="reseller-settlement-preview" style="margin:12px 0 0">🛒 From <b>${escH(pre.reseller_name || 'a reseller order')}</b>’s order link — ${asked} item${asked === 1 ? '' : 's'}, filled from today's stock at today's price.${pre.shortfall ? ` <b style="color:#f0b64b">Stock moved since they ordered: ${escH(pre.shortfall)}.</b>` : ''} Nothing is recorded until you press Save.</div>`;
+    return `<div class="reseller-settlement-preview" style="margin:12px 0 0">🛒 From <b>${escH(pre.reseller_name || 'a reseller order')}</b>’s order link — ${asked} line${asked === 1 ? '' : 's'} at your menu price. <b>Choose which boar to collect</b> on each line below${pre.advisory ? ` · <b style="color:#f0b64b">${escH(pre.advisory)}.</b>` : ''}. ${pre.lines.some(l => !(+l.rate > 0) && (+l.qty || 0) > 0)
+        ? ` · <b style="color:#f0b64b">${pre.lines.filter(l => !(+l.rate > 0) && (+l.qty || 0) > 0).length} line${pre.lines.filter(l => !(+l.rate > 0) && (+l.qty || 0) > 0).length === 1 ? ' has' : ' have'} no menu price — they will bill ₱0 unless you type a ₱/bottle here.</b>`
+        : ''}. Nothing is recorded until you press Save.</div>`;
   }
 
   const ORDER_PENDING = 'pending';
@@ -5078,6 +5092,15 @@
       </div>`).join('');
   }
 
+  /* An unpriced order is NOT ₱0.00 — a zero on a money screen reads as “free” to a
+     tired office, and their menu starts at ₱0 until they price it. Say what it is. */
+  function orderMoneyLabel(o) {
+    const total = o.total !== undefined ? +o.total : +((o.lines || []).reduce((a, l) => a + (+l.qty || 0) * (+l.rate || 0), 0)).toFixed(2);
+    const unpriced = (o.lines || []).filter(l => !(+l.rate > 0) && (+l.qty || 0) > 0).length;
+    if (!(total > 0) && unpriced) return '<b style="color:#f0b64b;text-transform:none;letter-spacing:0">price to confirm</b>';
+    return `<b style="text-transform:none;letter-spacing:0">${orderMoney(total)}</b>`;
+  }
+
   function orderCardHTML(o, actionable) {
     const st = orderStatusOf(o);
     const chip = st === ORDER_PENDING
@@ -5088,13 +5111,15 @@
     return `<div class="adj-card" data-order="${escH(o.id)}">
       <div class="adj-card-title">
         <span><b style="font-size:13.5px;text-transform:none;letter-spacing:0">${escH(o.reseller_name || 'Reseller')}</b>
-          · ${bottles} bottle${bottles === 1 ? '' : 's'} · <b style="text-transform:none;letter-spacing:0">${orderMoney(total)}</b></span>
+          · ${bottles} bottle${bottles === 1 ? '' : 's'} · ${orderMoneyLabel(o)}</span>
         <span>${chip}${o.placed_at ? ` <small class="muted" style="margin-left:6px">${escH(orderAgo(o.placed_at))}</small>` : ''}</span>
       </div>
       ${orderLineRowsHTML(o.lines)}
       ${o.need_by ? `<small class="field-hint">🗓 wants it ${escH(o.need_by)}</small>` : ''}
       ${o.note ? `<small class="field-hint">💬 “${escH(o.note)}”</small>` : ''}
-      ${Array.isArray(o.clamped) && o.clamped.length ? `<small class="field-hint" style="color:#f0b64b">Their link asked for more than stock allowed — the counts above are what is available now.</small>` : ''}
+      ${Array.isArray(o.removed) && o.removed.length ? `<small class="field-hint" style="color:#f0b64b">Their page could not send: ${o.removed.map(rr => `${+rr.requested || 0} × ${escH(rr.breed || rr.boar || '?')} (${escH(rr.why || 'not on the menu')})`).join('; ')}.</small>` : ''}
+      ${(o.lines || []).some(l => orderBreedStockNote(l.breed || l.boar)) ? `<small class="field-hint" style="color:#f0b64b">📦 ${escH((o.lines || []).map(l => orderBreedStockNote(l.breed || l.boar)).filter(Boolean)[0])} — you can still accept it and collect later.</small>` : ''}
+      <small class="field-hint"> You choose which boar to collect; they ordered by breed.</small>
       ${o.decision_note ? `<small class="field-hint">Farm note: ${escH(o.decision_note)}</small>` : ''}
       ${actionable ? `<div class="due-actions" style="justify-content:flex-start;margin-top:9px;flex-wrap:wrap">
         <button type="button" class="btn ghost small" style="background:var(--ok);color:#fff;border:0" onclick="window.acceptResellerOrder('${escH(o.id)}')">✓ Accept &amp; create pick-up</button>
@@ -5105,10 +5130,13 @@
   }
 
   /* ── the inbox sheet (what the badge opens) ───────────────────────────────── */
-  function openResellerOrderInbox() {
+  function openResellerOrderInbox(onlyResellerId) {
     ensureResellerData();
-    const all = resellerOrderBucket();
-    const pending = pendingResellerOrders();
+    const f = F();
+    const who = onlyResellerId ? (f.semenResellers || []).find(r => String(r.id) === String(onlyResellerId)) : null;
+    const keep = o => !onlyResellerId || String(o.reseller_id) === String(onlyResellerId);
+    const all = resellerOrderBucket().filter(keep);
+    const pending = pendingResellerOrders().filter(keep);
     const handled = all.filter(o => orderStatusOf(o) !== ORDER_PENDING)
       .sort((a, b) => String(b.decided_at || b.placed_at || '').localeCompare(String(a.decided_at || a.placed_at || '')))
       .slice(0, 8);
@@ -5120,14 +5148,14 @@
           <div class="modal-top">
             <div>
               <div class="eyebrow" style="color:var(--teal2);font-weight:800">🛒 Order-link requests</div>
-              <h2>${pending.length ? pending.length + ' order' + (pending.length > 1 ? 's' : '') + ' waiting' : 'Nothing waiting'}</h2>
+              <h2>${who ? escH(who.name || 'This reseller') + (pending.length ? ` — ${pending.length} order${pending.length > 1 ? 's' : ''} waiting` : ' — nothing waiting') : (pending.length ? pending.length + ' order' + (pending.length > 1 ? 's' : '') + ' waiting' : 'Nothing waiting')}</h2>
               <p class="muted">Requests only — no bottle and no balance moves until you save a pick-up. Prices are re-read from today's batch price, so a change you made after they ordered is honoured.</p>
             </div>
             <button type="button" class="close-reminder" onclick="closeResellerModal('resellerOrderInbox')">×</button>
           </div>
 
           ${pending.length ? pending.map(o => orderCardHTML(o, true)).join('')
-            : `<div class="adj-card">No pending orders right now. When a reseller sends one from their link it lands here, and the badge on “Registered Resellers” lights up.</div>`}
+            : `<div class="adj-card">No pending orders ${who ? 'from ' + escH(who.name || 'this reseller') : 'right now'}. When a reseller sends one from their link it lands here, the badge on “Registered Resellers” lights up, and a pop-up interrupts whatever screen you are on.</div>`}
 
           ${handled.length ? `<div class="adj-card">
             <div class="adj-card-title"><span>Handled recently</span></div>
@@ -5144,6 +5172,9 @@
     `);
   }
   window.openResellerOrderInbox = openResellerOrderInbox;
+
+  function openResellerOrderInboxFor(resellerId) { openResellerOrderInbox(resellerId); }
+  window.openResellerOrderInboxFor = openResellerOrderInboxFor;
 
   function patchOrder(orderId, changes, msg) {
     ensureResellerData();
@@ -5192,31 +5223,29 @@
     }, `✕ Order declined${why ? ' with your note' : ''} — it shows on their link.`)) refreshOrderUI();
   };
 
-  /* Map an order onto the pick-up form's line shape. Stock and price are read NOW —
-     what the reseller's page showed is only what they asked for. */
+  /* Map an order onto the pick-up form's line shape: their breed, their count, your menu
+     price — and no batch, because choosing the boar is the farm's decision, never the
+     reseller's and never the code's. */
+  /* A breed line becomes an unfinished pick-up line on purpose: qty and price are the
+     reseller's request, and the BATCH is left blank because choosing the boar is the
+     farm's decision. saveResellerPickup still refuses to hand out bottles that are not
+     there, so accepting cannot break the ledger even when the cooler is empty. */
   window.arsResellerOrderPickupLines = function (order) {
-    const f = F();
-    const lots = f.semen || [];
     const lines = [], short = [];
     ((order && order.lines) || []).forEach(l => {
-      const lot = lots.find(s => (String(l.semen_id || '') !== '' && String(s.id || '') === String(l.semen_id || ''))
-        || (String(l.semen_batch_no || '') !== '' && String(s.semen_batch_no || '') === String(l.semen_batch_no || '')));
-      const want = Math.max(0, Math.floor(+l.qty || 0));
-      const have = lot ? Math.max(0, +((lot.available_bottles !== undefined ? lot.available_bottles : lot.bottles) ?? 0)) : 0;
-      const qty = Math.min(want, have);
-      const rate = lot ? +(lot.price_per_dose ?? lot.price ?? l.rate ?? 0) : +l.rate || 0;
-      if (!lot) short.push(`${l.boar || l.semen_batch_no || 'a batch'} is no longer in the inventory`);
-      else if (qty < want) short.push(`${lot.boar_name || lot.boar || l.boar}: asked ${want}, only ${have} left`);
+      const qty = Math.min(ORDER_LINE_MAX, Math.max(0, Math.floor(+l.qty || 0)));
       if (qty <= 0) return;
+      const breed = String(l.breed || l.boar || '').trim();
+      const rate = +(+l.rate || 0);
+      const note = orderBreedStockNote(breed);
+      if (note) short.push(`${breed || 'a breed'}: ${note}`);
       lines.push({
-        boar: (lot && (lot.boar_name || lot.boar)) || l.boar || '',
-        breed: (lot && lot.breed) || l.breed || '',
-        semen_batch_no: (lot && lot.semen_batch_no) || l.semen_batch_no || '',
+        boar: breed || 'Semen', breed: breed, semen_batch_no: '',
         qty, rate, amount: +(qty * rate).toFixed(2),
-        semen_id: (lot && lot.id) || l.semen_id || ''
+        semen_id: '', ordered_rate: rate, from_order: true
       });
     });
-    return { lines, shortfall: short.join(' · ') };
+    return { lines, advisory: short.join(' · '), shortfall: short.join(' · ') };
   };
 
   window.acceptResellerOrder = function (orderId) {
@@ -5225,23 +5254,23 @@
     if (orderStatusOf(o) !== ORDER_PENDING) { toast('That order was already ' + orderStatusOf(o) + '.'); return; }
     const res = window.arsResellerOrderPickupLines(o);
     if (!res.lines.length) {
-      toast(`⚠ Nothing in that order is in stock any more — decline it so ${o.reseller_name || 'the reseller'} is told on their link.`);
+      toast('That order has no lines left to fill — decline it so the reseller is told on their link.');
       return;
     }
     patchOrder(orderId, {
       status: 'accepted', decided_at: new Date().toISOString(), accepted_at: new Date().toISOString(),
       accepted_lines: res.lines, seen_at: o.seen_at || new Date().toISOString(),
-      decision_note: res.shortfall ? `Accepted short: ${res.shortfall}` : ''
+      decision_note: res.advisory ? `Accepted with a note: ${res.advisory}` : ''
     });
     pendingPickupPrefill = {
       orderId: o.id, reseller_name: o.reseller_name || 'Reseller', lines: res.lines,
-      shortfall: res.shortfall || '', needBy: o.need_by || '',
-      note: [o.note, res.shortfall ? `Short: ${res.shortfall}` : ''].filter(Boolean).join(' — ')
+      advisory: res.advisory || '', needBy: o.need_by || '',
+      note: [o.note, res.advisory ? `Note: ${res.advisory}` : ''].filter(Boolean).join(' — ')
     };
     closeResellerModal('resellerOrderInbox');
     openSemenResellerHub();
     openResellerPickupModal(o.reseller_id || '');
-    toast(`✓ Order accepted — confirm the pick-up below. Nothing is recorded until you save it${res.shortfall ? ' (some bottles were short)' : ''}.`);
+    toast(`✓ Order accepted — choose which boar to collect in the form below. Nothing is recorded until you save it${res.advisory ? ' (a breed is out of stock)' : ''}.`);
   };
 
   /* ── the link itself ──────────────────────────────────────────────────────── */
@@ -5257,6 +5286,8 @@
 
   function createOrderLink(resellerId) {
     ensureResellerData();
+    ensureResellerOrderMenu(false);   /* its save() below carries the menu to the cloud */
+    F().semenOrderMenuSynced = true;
     const f = F();
     const r = (f.semenResellers || []).find(x => String(x.id) === String(resellerId));
     if (!r) { toast('Reseller not found.'); return null; }
@@ -5292,6 +5323,15 @@
     } catch (_) { return ''; }
   }
 
+  function resellerOrderMenuHint() {
+    const rows = orderMenuRows(true);
+    const live = rows.filter(x => x.active !== false);
+    const unpriced = live.filter(x => !(+x.price > 0)).length;
+    if (!live.length) return `<div class="reseller-settlement-preview" style="margin-top:10px"><b style="color:#f0b64b">Your order menu is empty.</b> Until you add a breed under 🧬 Order menu, their page shows an apology instead of bottles.</div>`;
+    if (unpriced) return `<div class="reseller-settlement-preview" style="margin-top:10px">🧬 ${live.length} choice${live.length === 1 ? '' : 's'} on the menu · <b style="color:#f0b64b">${unpriced} without a price</b> — they will see “Price confirmed by the farm”. Set it under 🧬 Order menu if you want it fixed up front.</div>`;
+    return `<div class="reseller-settlement-preview" style="margin-top:10px">🧬 Their page will offer ${live.length} breed${live.length === 1 ? '' : 's'} from your order menu — stock does not gate their order, and you choose the boar.</div>`;
+  }
+
   function orderLinkSheetHTML(r, link) {
     const url = link ? orderLinkUrl(link.token) : '';
     const stats = link ? linkOrderStats(link.id) : { count: 0, pending: 0, lastAt: '' };
@@ -5307,6 +5347,7 @@
             </div>
             <button type="button" class="close-reminder" onclick="closeResellerModal('resellerOrderLinkModal')">×</button>
           </div>
+          ${link ? resellerOrderMenuHint() : ''}
 
           ${link ? `
             <label class="field" style="margin-top:12px">Their link (works on any phone)
@@ -5342,6 +5383,10 @@
   }
 
   window.arsShowResellerOrderLink = function (resellerId) {
+    /* opening the link sheet is intent, not a render: if the menu was only ever in memory,
+       this is the moment it has to reach the cloud, or their page shows an empty menu */
+    const seeded = ensureResellerOrderMenu(false).length && !F().semenOrderMenuSynced;
+    if (seeded) { F().semenOrderMenuSynced = true; save(); }
     renderOrderLinkSheet(resellerId, activeOrderLink(resellerId));
   };
 
@@ -5441,6 +5486,331 @@
     if (!waiting) return '';
     if (!unseen) return ` <button type="button" class="count-pill" onclick="window.openResellerOrderInbox()" title="${waiting} order${waiting === 1 ? '' : 's'} waiting for a decision" style="cursor:pointer;font-size:10.5px;text-transform:none;letter-spacing:0;padding:3px 9px">🛒 ${waiting} waiting</button>`;
     return ` <button type="button" class="count-pill" onclick="window.openResellerOrderInbox()" title="${unseen} unseen order${unseen === 1 ? '' : 's'} from reseller links — ${waiting} waiting for a decision" style="background:#f59e0b;color:#3a2500;animation:returnBlinkPulse 1.2s infinite alternate;cursor:pointer;font-size:10.5px;text-transform:none;letter-spacing:0;padding:3px 9px">🛒 ${unseen} new order${unseen > 1 ? 's' : ''}</button>`;
+  }
+
+  /* ═══════════════════════════════════════════════════════════════════════════
+     [FIX 189] THE ORDER MENU IS THE FARM'S, NOT THE COOLER'S — v231.
+
+     What the first live test on a phone taught us (two screenshots, same evening):
+       • the page listed only batches with bottles left, so a reseller could not ask
+         for what the farm does not have in the cooler right now — the farm decides
+         which boar to collect, and that decision must come after the order, not before;
+       • every card read ₱0.00, because a Semen Inventory batch records a collection
+         COST and has no selling price at all, so a catalogue built from batches could
+         only ever show zero.
+
+     So a reseller now orders a BREED from a menu the owner maintains (default:
+     Largewhite, Duroc, Duroc Pietrain, Hamruc Pietrain — rename, add, delete freely),
+     at the ₱/bottle the owner typed on that menu. No quantity is gated by stock;
+     nothing about stock, balances or invoices changes until the owner accepts and saves
+     a pick-up, and the pick-up save still validates what can actually be handed over.
+
+     Orders also ANNOUNCE themselves now: the badge, a chip on that reseller's own card,
+     and a pop-up on any screen with a beep and a vibration — once per order, so it
+     nags exactly as much as a human error is worth and no more.
+     ═══════════════════════════════════════════════════════════════════════════ */
+
+  /* Seeded once, then it is the farm's list — deleting everything stays deleted. */
+  const ORDER_BREED_DEFAULTS = ['Largewhite', 'Duroc', 'Duroc Pietrain', 'Hamruc Pietrain'];
+  const ORDER_LINE_MAX = 999;
+
+  /* A render must not write: this fills the rows in memory only. They reach the cloud when
+     the farm does something that means it — saving the menu, or handing out a link (the
+     moment a reseller's page starts mattering). v231 caught this because seeding-on-open put
+     an extra save() inside the hub and broke a "a refused save writes nothing" invariant. */
+  function ensureResellerOrderMenu(persist) {
+    ensureResellerData();
+    const f = F();
+    if ((f.semenOrderBreeds || []).length || f.semenOrderMenuConfigured) return f.semenOrderBreeds || [];
+    f.semenOrderBreeds = ORDER_BREED_DEFAULTS.map((name, i) => ({
+      id: 'rsobreed_' + Date.now().toString(36) + '_' + i,
+      farm_id: String(f.farm_id || (typeof farmId !== 'undefined' ? farmId : '') || ''),
+      name, price: 0, blurb: '', active: true, sort: i,
+      created_at: new Date().toISOString(), updated_at: new Date().toISOString()
+    }));
+    f.semenOrderMenuConfigured = true;
+    if (persist) save();
+    return f.semenOrderBreeds;
+  }
+
+  function orderMenuRows(includeRetired) {
+    const f = F();
+    /* an unnamed row is the editor's draft line, not a choice — it must never reach the
+       count, the hint, or a reseller's page (where it would read as a "Semen" breed at ₱0) */
+    const rows = (f.semenOrderBreeds || []).filter(r => r && String(r.name || '').trim());
+    rows.sort((a, b) => (+a.sort || 0) - (+b.sort || 0) || String(a.name || '').localeCompare(String(b.name || '')));
+    return includeRetired ? rows : rows.filter(r => r.active !== false);
+  }
+
+  function resellerOrderToolbarCount() {
+    const n = pendingResellerOrders().length;
+    return n ? ` (${n})` : '';
+  }
+
+  /* A breed with nothing in the cooler is still orderable; the office just deserves to
+     know it before they promise bottles. Read live, never stored on the order. */
+  function orderBreedStockNote(breed) {
+    const f = F();
+    const want = String(breed || '').trim().toLowerCase();
+    if (!want) return '';
+    const lots = (f.semen || []).filter(s => {
+      const b = String(s.breed || '').trim().toLowerCase();
+      const n = String(s.boar_name || s.boar || '').trim().toLowerCase();
+      return b === want || n === want || b.includes(want) || n.includes(want);
+    });
+    const onHand = lots.reduce((a, s) => a + lotOnHand(s), 0);
+    return onHand > 0 ? '' : 'none of this breed is in stock right now';
+  }
+
+  /* ── the menu editor ──────────────────────────────────────────────────────── */
+  function orderMenuRowHTML(r, i) {
+    const note = r.name ? orderBreedStockNote(r.name) : '';
+    return `<div class="adj-card" style="margin-bottom:8px">
+      <div class="adj-card-title"><span>Order choice ${i + 1}</span>
+        <span>${r.active === false ? '<span class="tag">hidden</span>' : '<span class="tag">on the menu</span>'}</span></div>
+      <label class="field">Breed / choice the reseller sees
+        <input class="suggest-input" type="text" id="omName_${i}" value="${escH(r.name || '')}" maxlength="48" placeholder="e.g. Duroc Pietrain"></label>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <label class="field">₱ per bottle
+          <input class="suggest-input" type="number" min="0" step="1" inputmode="decimal" id="omPrice_${i}" value="${+r.price || ''}" placeholder="400"></label>
+        <label class="field">Short note for them (optional)
+          <input class="suggest-input" type="text" id="omBlurb_${i}" value="${escH(r.blurb || '')}" maxlength="60" placeholder="e.g. 200+ million motile"></label>
+      </div>
+      <label class="res-check" style="display:flex;align-items:center;gap:8px;margin-top:8px;font-size:12.5px">
+        <input type="checkbox" id="omOn_${i}" ${r.active === false ? '' : 'checked'}> Show this on reseller order links
+      </label>
+      <div class="due-actions" style="justify-content:flex-start;margin-top:8px;flex-wrap:wrap">
+        <button type="button" class="btn ghost small" onclick="window.arsOrderMenuMove(${i},-1)">↑ earlier</button>
+        <button type="button" class="btn ghost small" onclick="window.arsOrderMenuMove(${i},1)">↓ later</button>
+        <button type="button" class="btn ghost small" style="color:var(--danger)" onclick="window.arsOrderMenuDelete(${i})">🗑 Delete</button>
+        ${note ? `<small class="field-hint" style="color:#f0b64b;margin:0 0 0 auto">📦 ${escH(note)}</small>` : ''}
+      </div>
+    </div>`;
+  }
+
+  function openResellerOrderMenu() {
+    const rows = ensureResellerOrderMenu().slice();
+    document.getElementById('resellerOrderMenuModal')?.remove();
+    document.body.insertAdjacentHTML('beforeend', `
+      <div class="due-modal-bg" id="resellerOrderMenuModal" style="z-index:9999999!important">
+        <form class="due-modal reseller-hub-wrap" style="text-align:left" onsubmit="window.saveResellerOrderMenu(event)">
+          <div class="modal-top">
+            <div>
+              <div class="eyebrow" style="color:var(--teal2);font-weight:800">🧬 ORDER MENU</div>
+              <h2>What your resellers may order</h2>
+              <p class="muted">This is what their order link shows — a list of breeds you choose, at your price. It is deliberately not your cooler: they may order a breed you have none of, and you decide which boar to collect. Unpriced lines are confirmed when you reply.</p>
+            </div>
+            <button type="button" class="close-reminder" onclick="window.arsOrderMenuCancel()">×</button>
+          </div>
+          <div id="omRows">${rows.map((r, i) => orderMenuRowHTML(r, i)).join('') || '<div class="adj-card">No choices yet. Add the first one below.</div>'}</div>
+          <div class="due-actions" style="margin-top:12px;flex-wrap:wrap">
+            <button type="button" class="btn ghost small" onclick="window.arsOrderMenuAdd()">＋ Add a breed</button>
+            <button type="button" class="btn ghost" onclick="window.arsOrderMenuCancel()">Cancel</button>
+            <button type="button" class="btn" style="background:var(--ok);color:#fff" onclick="window.saveResellerOrderMenu(event)">✓ Save menu</button>
+          </div>
+          <small class="field-hint">Saved as farm records, so the menu syncs to every device and to the reseller page (which reads it through the SQL in supabase/reseller_orders.sql — that must be installed for links to work).</small>
+        </form>
+      </div>
+    `);
+  }
+  window.openResellerOrderMenu = openResellerOrderMenu;
+
+  function menuDraft() {
+    const f = F();
+    const rows = (f.semenOrderBreeds || []).slice();
+    const out = [];
+    for (let i = 0; i < rows.length; i++) {
+      const name = String((document.getElementById('omName_' + i) || {}).value || '').trim().slice(0, 48);
+      const price = Math.max(0, +((document.getElementById('omPrice_' + i) || {}).value || 0) || 0);
+      const blurb = String((document.getElementById('omBlurb_' + i) || {}).value || '').trim().slice(0, 60);
+      const on = !!((document.getElementById('omOn_' + i) || {}).checked);
+      out.push({ ...rows[i], name, price, blurb, active: on });
+    }
+    return out;
+  }
+  function writeMenu(rows, msg) {
+    const f = F();
+    f.semenOrderBreeds = rows.map((r, i) => ({
+      ...r,
+      id: r.id || 'rsobreed_' + Date.now().toString(36) + '_' + i,
+      farm_id: String(f.farm_id || (typeof farmId !== 'undefined' ? farmId : '') || ''),
+      sort: i, updated_at: new Date().toISOString()
+    }));
+    f.semenOrderMenuConfigured = true;
+    f.semenOrderMenuSynced = true;
+    save();
+    renderAll();
+    if (msg) toast(msg);
+  }
+
+  window.saveResellerOrderMenu = function (e) {
+    if (e && e.preventDefault) e.preventDefault();
+    const rows = menuDraft().filter(r => r.name);
+    const seen = new Set();
+    for (const r of rows) {
+      const key = r.name.toLowerCase();
+      if (seen.has(key)) { toast(`⚠ “${r.name}” is listed twice — one name per choice, please.`); return; }
+      seen.add(key);
+    }
+    writeMenu(rows, `🧬 Order menu saved — ${rows.filter(r => r.active !== false).length} choice${rows.filter(r => r.active !== false).length === 1 ? '' : 's'} on your resellers' links.`);
+    openResellerOrderMenu();
+  };
+  /* Closing the editor without saving must not leave the draft line behind in their
+     records — it syncs, and the public page reads it. */
+  window.arsOrderMenuCancel = function () {
+    const f = F();
+    const rows = (f.semenOrderBreeds || []).filter(r => r && String(r.name || '').trim());
+    if (rows.length !== (f.semenOrderBreeds || []).length) {
+      f.semenOrderBreeds = rows;
+      save();
+      renderAll();
+    }
+    closeResellerModal('resellerOrderMenuModal');
+  };
+
+  window.arsOrderMenuAdd = function () {
+    const rows = (F().semenOrderBreeds || []).slice();
+    rows.push({ id: '', name: '', price: 0, blurb: '', active: true, created_at: new Date().toISOString() });
+    writeMenu(rows);
+    openResellerOrderMenu();
+    const i = rows.length - 1;
+    try { document.getElementById('omName_' + i)?.focus(); } catch (_) {}
+  };
+  window.arsOrderMenuMove = function (i, dir) {
+    const rows = menuDraft();
+    const j = i + dir;
+    if (j < 0 || j >= rows.length) return;
+    const t = rows[i]; rows[i] = rows[j]; rows[j] = t;
+    writeMenu(rows); openResellerOrderMenu();
+  };
+  window.arsOrderMenuDelete = function (i) {
+    const draft = menuDraft();
+    const row = draft[i] || {};
+    if (!window.confirm(`Remove “${row.name || 'this choice'}” from the order menu?\n\nOrders already sent keep their recorded breed and price, so nothing in your ledger changes. Their page will simply stop offering it.`)) return;
+    const rows = (F().semenOrderBreeds || []).filter((r, idx) => idx !== i);
+    writeMenu(rows, '🧬 Removed from the order menu.');
+    openResellerOrderMenu();
+  };
+
+  /* ── the notifier: a badge is not attention if nobody is looking at that screen ── */
+  const ORDER_NOTIFY_KEY = 'ars-order-notified';
+  function orderNotifyStore() {
+    const key = `${ORDER_NOTIFY_KEY}:${String((F() || {}).farm_id || (typeof farmId !== 'undefined' ? farmId : '') || 'farm')}`;
+    try { return JSON.parse(localStorage.getItem(key) || 'null'); } catch (_) { return null; }
+  }
+  function orderNotifySave(ids) {
+    const key = `${ORDER_NOTIFY_KEY}:${String((F() || {}).farm_id || (typeof farmId !== 'undefined' ? farmId : '') || 'farm')}`;
+    try { localStorage.setItem(key, JSON.stringify(ids.slice(-120))); } catch (_) {}
+  }
+  function orderBeep() {
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      const ac = new AC();
+      const o = ac.createOscillator(), g = ac.createGain();
+      o.type = 'sine'; o.frequency.value = 880;
+      g.gain.value = 0.06;
+      o.connect(g); g.connect(ac.destination);
+      o.start();
+      o.frequency.setValueAtTime(1180, ac.currentTime + 0.12);
+      o.stop(ac.currentTime + 0.3);
+      o.onended = () => { try { ac.close(); } catch (_) {} };
+    } catch (_) { /* a browser that will not play sound unsolicited still gets the sheet */ }
+  }
+
+  function resellerOrderNotifyTick() {
+    let fresh;
+    try { fresh = unseenResellerOrders(); } catch (_) { return; }
+    let known = orderNotifyStore();
+    if (known === null) {                 /* first run on this device: today's queue is not "new" */
+      orderNotifySave(fresh.map(o => o.id));
+      return;
+    }
+    const knownSet = new Set(known.map(String));
+    const arrivals = fresh.filter(o => !knownSet.has(String(o.id)));
+    if (!arrivals.length) return;
+    orderNotifySave(known.concat(arrivals.map(o => o.id)));
+    /* querySelector, not getElementById: "is that sheet mounted right now" is a question
+       about the appended sheet, and a browser answers it exactly. */
+    if (document.querySelector('#resellerOrderInbox')) return;   /* they are already in the queue */
+    openResellerOrderAlert(arrivals);
+  }
+
+  function orderAlertLineHTML(o) {
+    const t = +(o.total || (o.lines || []).reduce((a, l) => a + (+l.qty || 0) * (+l.rate || 0), 0));
+    const bottles = +(o.bottles || (o.lines || []).reduce((a, l) => a + (+l.qty || 0), 0) || 0);
+    return `<div class="adj-card">
+      <div class="adj-card-title"><span><b style="text-transform:none;letter-spacing:0;font-size:14px">${escH(o.reseller_name || 'A reseller')}</b></span><span>${bottles} bottle${bottles === 1 ? '' : 's'} · ${orderMoneyLabel(o).replace(/<b[^>]*>|<\/b>/g, '')}</span></div>
+      ${orderLineRowsHTML(o.lines)}
+      ${o.need_by ? `<small class="field-hint">🗓 wants it ${escH(o.need_by)}</small>` : ''}
+      ${o.note ? `<small class="field-hint">💬 “${escH(o.note)}”</small>` : ''}
+    </div>`;
+  }
+
+  /* Its own sheet, but the app's own shell — the same lesson as v228: an overlay built
+     from class names this app does not define is invisible on a phone. */
+  function openResellerOrderAlert(arrivals) {
+    document.getElementById('resellerOrderAlert')?.remove();
+    const n = arrivals.length;
+    document.body.insertAdjacentHTML('beforeend', `
+      <div class="due-modal-bg" id="resellerOrderAlert" style="z-index:99999999!important">
+        <div class="due-modal reseller-hub-wrap" style="text-align:left;max-width:560px">
+          <div class="modal-top">
+            <div>
+              <div class="eyebrow" style="color:#f0b64b;font-weight:800">🛒 New order${n > 1 ? 's' : ''} placed</div>
+              <h2>${escH(arrivals[0].reseller_name || 'A reseller')}${n > 1 ? ` + ${n - 1} more` : ''}</h2>
+              <p class="muted">Requests only — no bottle and no balance moved. Open the inbox to accept, decline or mark seen.</p>
+            </div>
+            <button type="button" class="close-reminder" onclick="closeResellerModal('resellerOrderAlert')">×</button>
+          </div>
+          ${arrivals.slice(0, 4).map(orderAlertLineHTML).join('')}
+          ${n > 4 ? `<small class="field-hint">…and ${n - 4} more in the inbox.</small>` : ''}
+          <div class="due-actions" style="margin-top:12px">
+            <button type="button" class="btn ghost" onclick="closeResellerModal('resellerOrderAlert')">Later</button>
+            <button type="button" class="btn" style="background:var(--ok);color:#fff" onclick="closeResellerModal('resellerOrderAlert');openResellerOrderInbox()">🛒 Open orders (${pendingResellerOrders().length})</button>
+          </div>
+        </div>
+      </div>
+    `);
+    try { if (navigator.vibrate) navigator.vibrate([180, 90, 180]); } catch (_) {}
+    orderBeep();
+    toast(`🛒 ${n} new order${n === 1 ? '' : 's'} from ${arrivals[0].reseller_name || 'a reseller'}`);
+  }
+
+  let orderNotifyArmed = false;   /* a flag, not the timer id: a mocked setInterval hands back
+                                     0, and re-arming on every hub open would pile listeners on
+                                     a real phone as well */
+  window.arsResellerOrderNotifyTick = resellerOrderNotifyTick;   /* also what the 20 s timer calls */
+  window.arsResellerOrderAlert = openResellerOrderAlert;
+  window.arsResellerOrderMenuRows = orderMenuRows;
+  function armResellerOrderNotifier() {
+    if (orderNotifyArmed) return;
+    orderNotifyArmed = true;
+    const tickNow = () => { try { resellerOrderNotifyTick(); } catch (_) {} };
+    tickNow();
+    /* 20 s: the sync head probe already pulls a farm-record write within ~30 s, and a
+       second transport would only cost them battery. Watching local state is free.
+       Every host hook is guarded, because this module is mounted by a page that may load
+       it before window/document listeners exist, and a throw here would break the hub. */
+    try { setInterval(tickNow, 20000); } catch (_) {}
+    try { if (window.addEventListener) window.addEventListener('focus', tickNow); } catch (_) {}
+    try { if (document.addEventListener) document.addEventListener('visibilitychange', () => { if (!document.hidden) tickNow(); }); } catch (_) {}
+  }
+
+  /* A chip on the reseller's own card, so the profile they opened says it too. */
+  function resellerOrderChipHTML(resellerId) {
+    const mine = resellerOrderBucket().filter(o => String(o.reseller_id) === String(resellerId) && orderStatusOf(o) === ORDER_PENDING);
+    if (!mine.length) return '';
+    const unseen = mine.filter(o => !o.seen_at).length;
+    return ` <button type="button" class="count-pill" onclick="event.stopPropagation();window.openResellerOrderInbox('${escH(resellerId)}')"
+      title="${unseen} unseen order${unseen === 1 ? '' : 's'} from this reseller"
+      style="${unseen ? 'background:#f59e0b;color:#3a2500;animation:returnBlinkPulse 1.2s infinite alternate' : ''};cursor:pointer;font-size:10.5px;text-transform:none;letter-spacing:0;padding:3px 8px">🛒 ${unseen || mine.length} order${(unseen || mine.length) === 1 ? '' : 's'}${unseen ? ' new' : ' waiting'}</button>`;
+  }
+
+  /* [FIX 189] armed once per page load; the tick only reads local state, so this costs
+     no extra cloud traffic — the sync heartbeat that already runs is what carries orders. */
+  if (typeof document !== 'undefined' && document.body) {
+    try { armResellerOrderNotifier(); } catch (_) {}
   }
 
 })();
