@@ -199,7 +199,13 @@
           updateSyncIndicator('synced', 'Synced', `✓ ${res?.count || 0} changed records verified with the cloud.`);
           /* [FIX 124] refresh the edge head so other devices see the change now */
           if (typeof ARSCloud.edgeHeadPut === 'function' && typeof ARSCloud.farmSyncHead === 'function') {
-            ARSCloud.farmSyncHead(fId).then(h => { if (h && h.ok) ARSCloud.edgeHeadPut(fId, h); }).catch(() => {});
+            ARSCloud.farmSyncHead(fId).then(h => {
+              if (h && h.ok) ARSCloud.edgeHeadPut(fId, h);
+              /* [FIX 186] This probe already existed to refresh the edge cache; hand
+                 the same result to the push preflight so the next save in a burst of
+                 edits can skip its row read too. No extra request. */
+              if (typeof ARSCloud.noteVerifiedHead === 'function') ARSCloud.noteVerifiedHead(fId, h);
+            }).catch(() => {});
           }
         }
       } catch (e) {
@@ -614,6 +620,10 @@
       service_worker_cache_name: null,
       online: navigator.onLine,
       cloud_baseline_verified: window.__arsCloudBaselineReady === true,
+      /* [FIX 186] Which preflight the last write used: 'head' = no row read at all,
+         'targeted' = only the rows being written, 'full'/'full-fallback' = the old
+         whole-farm download (large bulk pushes, or a narrow read that failed). */
+      push_preflight_mode: window.__arsPushPreflight || null,
       pending_local_changes: ARSCloud.hasDirtyChanges ? ARSCloud.hasDirtyChanges(farmId) : null,
       last_cloud_sync: window.STORE?.getItem('ars-last-cloud-sync') || null,
       last_successful_data_fetch: window.__arsLastSuccessfulSyncAt || null,

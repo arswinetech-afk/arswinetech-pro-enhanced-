@@ -35,33 +35,75 @@ window.STORE = STORE;
    ("Failed to execute 'setItem' … exceeded the quota"). Now: images are
    downscaled on upload, oversized stored images are migrated on boot, and
    every DB write is quota-safe with staged recovery. */
-window.arsDownscaleImage = function (dataUrl, maxDim = 1000, quality = 0.8, keepPng = false) {
+window.arsDownscaleImage = function (dataUrl, maxDim = 1000, quality = 0.8, keepPng = false, mime = null) {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => {
       try {
+        const type = mime || (keepPng ? 'image/png' : 'image/jpeg');
         const scale = Math.min(1, (maxDim || 1000) / Math.max(img.width || 1, img.height || 1));
-        if (scale === 1 && keepPng) { resolve(dataUrl); return; }
+        /* Only skip the re-encode when the caller asked for no format change —
+           a caller capping BYTES must always be allowed to re-encode. */
+        if (scale === 1 && keepPng && !mime) { resolve(dataUrl); return; }
         const canvas = document.createElement('canvas');
         canvas.width = Math.max(1, Math.round((img.width || 1) * scale));
         canvas.height = Math.max(1, Math.round((img.height || 1) * scale));
         const ctx = canvas.getContext('2d');
-        if (!keepPng) { ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, canvas.width, canvas.height); }
+        if (type === 'image/jpeg') { ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, canvas.width, canvas.height); }
         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        resolve(keepPng ? canvas.toDataURL('image/png') : canvas.toDataURL('image/jpeg', quality));
+        /* Browsers that cannot encode WebP fall back to PNG per spec, which is
+           exactly the old behaviour, so this can only ever help. */
+        const out = canvas.toDataURL(type, quality);
+        resolve(typeof out === 'string' && out.startsWith('data:image/') ? out : canvas.toDataURL('image/png'));
       } catch (e) { reject(e); }
     };
     img.onerror = () => reject(new Error('image load failed'));
     img.src = dataUrl;
   });
 };
+
+/* [FIX 186] SIZE-CAPPED IMAGES. arsDownscaleImage only shrank DIMENSIONS, so the
+   encoded result still depended on the photo: a 512px PNG logo routinely landed in
+   the synced `farm_logo` row at 150-400 KB, and a "compressed" reservation photo at
+   100-250 KB. Those bytes are re-downloaded by every device on every sync read, and
+   they are what pushed the device's 5 MB localStorage quota over the edge.
+   arsFitDataUrl keeps stepping the dimensions down until the encoded data URL fits
+   maxBytes, so the worst case per image is a known number instead of luck. It never
+   rejects on size and always returns *something*, so a caller's existing flow cannot
+   stall on an odd image. */
+window.arsFitDataUrl = async function (dataUrl, opts = {}) {
+  if (!window.arsDownscaleImage || typeof dataUrl !== 'string' || !dataUrl.startsWith('data:image/')) return dataUrl;
+  const maxBytes = opts.maxBytes || 150000;
+  const quality = opts.quality || 0.72;
+  const mime = opts.mime || null;
+  const keepPng = Boolean(opts.keepPng);
+  const floor = opts.minDim || 180;
+  let dim = opts.maxDim || 600;
+  let best = dataUrl;
+  for (let attempt = 0; attempt < 6; attempt++) {
+    let next = null;
+    try { next = await window.arsDownscaleImage(best, dim, quality, keepPng, mime); } catch (_) { return best; }
+    if (typeof next !== 'string' || !next.length) return best;
+    best = next;
+    if (best.length <= maxBytes || dim <= floor) return best;
+    dim = Math.max(floor, Math.round(dim * 0.72));
+  }
+  return best;
+};
+
 window.arsMigrateOversizedPhotos = function (done) {
   const jobs = [];
+  const fit = (url, opts) => (window.arsFitDataUrl ? window.arsFitDataUrl(url, opts) : window.arsDownscaleImage(url, opts.maxDim || 600, opts.quality || 0.72));
   Object.values(window.DB || {}).forEach(f => {
+    /* [FIX 186] thresholds lowered from 400 KB / 500 KB: anything above ~150 KB of
+       base64 is worth another pass, because the row is re-downloaded on every sync. */
     (f.reservations || []).forEach(r => {
-      if (r.photo && r.photo.length > 400000) jobs.push(() => window.arsDownscaleImage(r.photo, 1000, 0.8).then(s => { if (s && s.length < r.photo.length) r.photo = s; }).catch(() => {}));
+      if (r.photo && r.photo.length > 250000) jobs.push(() => fit(r.photo, { maxDim: 600, maxBytes: 200000, quality: 0.72 }).then(s => { if (s && s.length < r.photo.length) r.photo = s; }).catch(() => {}));
     });
-    if (f.logo && f.logo.length > 500000) jobs.push(() => window.arsDownscaleImage(f.logo, 512, 0.85, true).then(s => { if (s && s.length < f.logo.length) { f.logo = s; f.logo_url = s; } }).catch(() => {}));
+    (f.sows || []).concat(f.boars || [], f.piglets || []).forEach(r => {
+      if (r.photo && r.photo.length > 120000) jobs.push(() => fit(r.photo, { maxDim: 360, maxBytes: 90000, quality: 0.7 }).then(s => { if (s && s.length < r.photo.length) r.photo = s; }).catch(() => {}));
+    });
+    if (f.logo && f.logo.length > 120000) jobs.push(() => fit(f.logo, { maxDim: 448, maxBytes: 110000, quality: 0.86, mime: 'image/webp' }).then(s => { if (s && s.length < f.logo.length) { f.logo = s; f.logo_url = s; } }).catch(() => {}));
   });
   if (!jobs.length) { done && done(false); return; }
   Promise.all(jobs.map(j => j())).then(() => done && done(true)).catch(() => done && done(false));
@@ -3974,7 +4016,12 @@ function arsPickAnimalPhoto(rec, done) {
     const file = input.files && input.files[0];
     if (!file) return;
     try {
-      const url = await arsCompressImage(file);
+      let url = await arsCompressImage(file);
+      /* [FIX 186] ≤320px is small, but a busy photo can still encode to 100 KB+.
+         The record is re-downloaded by every device on every sync, so cap it. */
+      if (window.arsFitDataUrl && url.length > 90000) {
+        url = await window.arsFitDataUrl(url, { maxDim: 320, maxBytes: 90000, quality: 0.7 });
+      }
       rec.photo = url;
       save();
       toast(`📷 Photo saved — compressed to ${Math.max(1, Math.round(url.length / 1024))} KB.`);
