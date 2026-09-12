@@ -2440,8 +2440,7 @@ function dashboard() {
           </div>
           <div class="health-copy">
             <h2>${healthScore >= 90 ? 'Excellent' : healthScore >= 80 ? 'Good' : healthScore >= 60 ? 'Fair' : 'Needs Attention'}</h2>
-            <p>Farm health index for <b>${esc(f.name || "RM's Hog Farm")}</b> — 50% biosecurity · 30% mortality · 20% profit.</p>
-            <p class="muted" style="font-size:10.5px;margin-top:4px">🛡 Biosecurity ${H.bio} · 🩸 Mortality ${H.mort} (${H.mortalityHeads60} deaths · 60d) · ₱ Profit ${H.prof}</p>
+            <p>Farm health index for <b>${esc(f.name || "RM's Hog Farm")}</b></p>
             <button class="btn ghost" onclick="openFarmSummaryModal()">View breakdown →</button>
           </div>
           <div class="checklist">
