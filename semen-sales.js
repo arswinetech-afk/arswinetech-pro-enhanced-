@@ -3367,9 +3367,9 @@
     return resellerLineAmount(c);
   }
 
-  /* These forms are appended as .modal-overlay elements, not the app's #modalBg sheet,
-     so app.js's closeModal() (which takes no id) cannot dismiss them — the file's own
-     convention is to remove the element. */
+  /* Both sheets are their own .due-modal-bg layer (see openResellerReturnReplaceModal), not
+     the shared #modalBg sheet from app.js, so they are dismissed by removing the element:
+     closeModal() takes no id and would wipe the app's other modal instead. */
   function closeResellerModal(id) { const el = document.getElementById(id); if (el && el.remove) el.remove(); }
   window.closeResellerModal = closeResellerModal;
 
@@ -3418,7 +3418,7 @@
             <span style="flex:0 0 auto;font-size:12px;white-space:nowrap">${r.qty} × ₱${+r.rate||0} = <b>₱${(r.qty * (+r.rate || 0)).toFixed(2)}</b></span>
             <span style="flex:0 0 auto">${off
               ? `<button type="button" class="btn ghost small" onclick="window.rrUndelete(${lIdx},${i})">↩︎ Undo</button>`
-              : `<button type="button" class="btn ghost small" style="color:#dc2626" onclick="window.rrRemoveExisting(${lIdx},${i})" title="Cancel this replacement and put the ${r.qty} bottle(s) back into ${escH(onHandLot ? (onHandLot.semen_batch_no || onHandLot.id) : 'that batch')}">✕ Cancel</button>`}</span>
+              : `<button type="button" class="btn ghost small" style="color:var(--danger)" onclick="window.rrRemoveExisting(${lIdx},${i})" title="Cancel this replacement and put the ${r.qty} bottle(s) back into ${escH(onHandLot ? (onHandLot.semen_batch_no || onHandLot.id) : 'that batch')}">✕ Cancel</button>`}</span>
           </div>`;
         }).join('')}
       </div>`;
@@ -3428,27 +3428,27 @@
           const val = String(s.id || s.semen_batch_no || '');
           return `<option value="${escH(val)}" data-batch="${escH(s.semen_batch_no || '')}" ${String(row.semen_id) === val ? 'selected="selected"' : ''}>${escH(s.semen_batch_no || s.id)} — ${escH(s.boar_name || s.boar || '')} (${escH(s.breed || '—')}) · ₱${+(s.price_per_dose || 0)} · ${lotOnHand(s)} left</option>`;
         })).join('');
-        return `<div class="rr-row" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:5px 0;border-bottom:1px dashed var(--line)">
+        return `<div class="rr-row field" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:5px 0;border-bottom:1px dashed var(--line)">
           <select class="input" style="flex:1 1 165px;min-width:0;padding:6px 8px;font-size:12px" onchange="window.rrPick(${lIdx},${i},this.value)">${opts}</select>
           <input class="input rr-num" type="number" min="1" step="1" value="${+row.qty || 1}" style="flex:0 1 58px;min-width:0;padding:6px 8px;font-size:12px;text-align:center" oninput="window.rrQty(${lIdx},${i},this.value)" title="Bottles of this batch" />
           <div style="position:relative;flex:1 1 92px;min-width:0"><span style="position:absolute;left:8px;top:6px;font-size:11px;color:var(--muted)">₱</span><input class="input rr-num" type="number" min="0" step="0.01" value="${+row.rate || 0}" style="width:100%;padding:6px 8px 6px 18px;font-size:12px" oninput="window.rrRate(${lIdx},${i},this.value)" title="Price per bottle — prefilled from the batch, change it only for a price adjustment" /></div>
           <span class="rr-lineamt" style="flex:0 0 auto;font-size:11.5px;font-weight:bold;white-space:nowrap;text-align:right">₱${((+row.qty || 0) * (+row.rate || 0)).toFixed(2)}</span>
-          <button type="button" class="btn ghost small" style="flex:0 0 auto;color:#dc2626;padding:4px 6px" onclick="window.rrDelRow(${lIdx},${i})" title="Remove this row before saving">✕</button>
+          <button type="button" class="btn ghost small" style="flex:0 0 auto;color:var(--danger);padding:4px 6px" onclick="window.rrDelRow(${lIdx},${i})" title="Remove this row before saving">✕</button>
         </div>`;
       }).join('');
 
-      return `<div class="rr-card" data-line="${lIdx}" data-qty="${+l.qty || 0}" data-rate="${+l.rate || 0}" data-returned="${Math.max(0, +l.returned_qty || 0)}" style="padding:10px;border:1px solid var(--line);border-radius:8px;margin-bottom:8px;background:var(--panel)">
+      return `<div class="rr-card adj-card" data-line="${lIdx}" data-qty="${+l.qty || 0}" data-rate="${+l.rate || 0}" data-returned="${Math.max(0, +l.returned_qty || 0)}" style="margin-bottom:8px">
         <div class="rr-head" style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap">
           <div><b>${escH(l.boar || 'Unknown Boar')}</b> <small class="muted">${escH(l.breed || '')}</small><br>
             <small class="muted">${escH(l.semen_batch_no || '')} — ${+l.qty || 0} × ₱${+l.rate || 0} = ₱${(+l.qty || 0) * (+l.rate || 0)}</small></div>
           <div class="rr-state" style="font-size:11px;text-align:right"></div>
         </div>
-        <div class="rr-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px">
-          <label style="font-size:11px;font-weight:bold">Return qty
+        <div class="rr-grid reminder-fields" style="gap:8px;margin-top:10px">
+          <label class="field" style="font-size:11px;font-weight:bold">Return qty
             <input class="input rr-retqty" type="number" min="0" max="${returnable}" step="1" value="${retQty}" style="padding:6px 8px;font-size:13px" oninput="window.rrRetQty(${lIdx},this.value)" ${isVoided ? 'readonly' : ''} />
             <small class="muted" style="font-weight:normal"> of ${+l.qty || 0} · ${returnable} still returnable</small></label>
-          <label style="font-size:11px;font-weight:bold">Reason
-            <select class="input" style="padding:6px 8px;font-size:12px" onchange="window.rrReason(${lIdx},this.value)">
+          <label class="field" style="font-size:11px;font-weight:bold">Reason
+            <select class="input" style="font-size:12px" onchange="window.rrReason(${lIdx},this.value)">
               <option value="">— select reason —</option>
               <option ${d.ret[lIdx]?.reason === 'Unused / Unsold' ? 'selected' : ''}>Unused / Unsold</option>
               <option ${d.ret[lIdx]?.reason === 'Damaged' ? 'selected' : ''}>Damaged</option>
@@ -3458,15 +3458,15 @@
               <option ${d.ret[lIdx]?.reason === 'Other' ? 'selected' : ''}>Other</option>
             </select></label>
         </div>
-        <label style="font-size:11px;font-weight:bold;display:block;margin-top:6px">What happens to the returned stock
-          <select class="input" style="padding:6px 8px;font-size:12px" onchange="window.rrAction(${lIdx},this.value)">
+        <label class="field" style="font-size:11px;font-weight:bold;display:block;margin-top:8px">What happens to the returned stock
+          <select class="input" style="font-size:12px" onchange="window.rrAction(${lIdx},this.value)">
             <option value="discard" ${((d.ret[lIdx]?.action || 'discard') === 'discard') ? 'selected' : ''}>Discard — not restocked, no credit back</option>
             <option value="restock" ${((d.ret[lIdx]?.action || '') === 'restock') ? 'selected' : ''}>Restock — add back into ${escH(l.semen_batch_no || 'that batch')}</option>
           </select></label>
         <div class="rr-repl" style="margin-top:8px">
           <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
             <span style="font-size:11px;font-weight:bold">Replacement (any number of batches)</span>
-            <button type="button" class="btn ghost small" style="color:#166534" onclick="window.rrAddRow(${lIdx})" ${isVoided ? 'disabled' : ''}>+ Add replacement batch</button>
+            <button type="button" class="btn ghost small" style="color:#b7e9c7" onclick="window.rrAddRow(${lIdx})" ${isVoided ? 'disabled' : ''}>+ Add replacement batch</button>
           </div>
           <div class="rr-adds" data-lidx="${lIdx}">${addRows || (storedReps.length ? '' : '<small class="muted">No replacement added — the returned bottles are a credit only.</small>')}</div>
           ${storedRows}
@@ -3474,20 +3474,34 @@
       </div>`;
     }
 
+    /* The sheet is built from this app's own modal system, exactly like openResellerPickupModal():
+       .due-modal-bg is what makes the layer fixed, dimmed and centred; the inline z-index lifts it
+       over the reseller hub, which carries the same 9999999; .due-modal.reseller-hub-wrap is the
+       880px / 94vh panel that scrolls. v227 used .modal-overlay / .modal / .modal-hd / .modal-bd /
+       .modal-ft — no stylesheet in this app defines those, so the form appended unstyled *underneath*
+       the hub and every ↩ Return / ✎ Edit tap looked dead. Keep these class names. */
     const modal = document.createElement('div');
     modal.id = 'resellerReturnModal';
-    modal.className = 'modal-overlay show';
-    modal.innerHTML = `<div class="modal" style="max-width:760px">
-      <div class="modal-hd"><h3>↩︎ RETURN &amp; REPLACE #${txId}${isVoided ? ' <small class="muted">(void — read-only)</small>' : ''}</h3><button type="button" class="btn ghost small" onclick="window.closeResellerModal('resellerReturnModal')">✕</button></div>
-      <div class="modal-bd" style="max-height:70vh;overflow:auto">
-        <div style="padding:8px;background:var(--info-bg);border-radius:6px;margin-bottom:10px">
+    modal.className = 'due-modal-bg';
+    modal.style.cssText = 'z-index:9999999!important';
+    modal.innerHTML = `<div class="due-modal reseller-hub-wrap" style="text-align:left">
+      <div class="modal-top">
+        <div>
+          <div class="eyebrow" style="color:var(--teal2);font-weight:700">↩︎ RETURN &amp; REPLACE — PICKUP #${escH(String(txId))}</div>
+          <h2>${escH(reseller.name)}</h2>
+          ${isVoided ? '<p class="muted" style="margin:5px 0 0">This pick-up is voided — the form is read-only.</p>' : ''}
+        </div>
+        <button type="button" class="close-reminder" onclick="window.closeResellerModal('resellerReturnModal')">×</button>
+      </div>
+      <div class="modal-bd">
+        <div class="reseller-settlement-preview" style="margin:14px 0 10px;padding:10px 12px">
           <b>${escH(reseller.name)}</b> · ${escH(tx.tx_no || '')} · ${fmtDate(tx.timestamp)}<br>
           <small class="muted">Returned bottles are deducted from what is owed; every replacement batch is added at its own price. Adjustments are cumulative and can be re-opened — a replacement row can be cancelled here and the stock returns to its batch.</small>
         </div>
         ${lines.map(renderLineBlock).join('')}
-        <div class="rr-totals" style="margin-top:10px;padding:8px;border:1px dashed var(--line);border-radius:8px"></div>
+        <div class="rr-totals reseller-settlement-preview" style="margin-top:12px"></div>
         <button type="button" class="btn ghost small" style="margin-top:6px" onclick="document.getElementById('returnAdjustmentPanel').style.display='block';this.style.display='none'">Show previous adjustment notes</button>
-        <div id="returnAdjustmentPanel" style="display:none;margin-top:8px;padding:8px;background:#fefce8;border:1px solid #fde68a;border-radius:6px">
+        <div id="returnAdjustmentPanel" class="adj-card" style="display:none;margin-top:8px">
           <div style="font-size:11px;font-weight:bold;margin-bottom:4px">ADJUSTMENT HISTORY FOR THIS PICKUP:</div>
           <ul style="font-size:11.5px;margin:4px 0 0 16px">
             ${lines.map((l, idx) => {
@@ -3498,11 +3512,11 @@
           <small class="muted">${escH(tx.adjustment_notes || '')}</small>
         </div>
       </div>
-      <div class="modal-ft" style="display:flex;gap:8px;justify-content:space-between">
+      <div class="due-actions" style="margin-top:16px">
         <button type="button" class="btn ghost small" onclick="window.closeResellerModal('resellerReturnModal')">Cancel</button>
         <div style="display:flex;gap:8px">
           <button type="button" class="btn ghost small" onclick="window.openEditResellerTxModal('${tx.id}')">✎ Edit pickup record</button>
-          <button type="button" class="btn" style="background:#166534;color:#fff" onclick="window.saveResellerReturnReplace(event,'${tx.id}')" ${isVoided ? 'disabled' : ''}>💾 Save Adjustment</button>
+          <button type="button" class="btn" style="background:var(--ok);color:#fff" onclick="window.saveResellerReturnReplace(event,'${tx.id}')" ${isVoided ? 'disabled' : ''}>💾 Save Adjustment</button>
         </div>
       </div>
     </div>`;
@@ -3543,8 +3557,8 @@
       const card = modal.querySelector(`.rr-card[data-line="${lIdx}"]`);
       if (card) {
         const st = card.querySelector('.rr-state');
-        if (st) st.innerHTML = `<span class="muted">returned ${retNow} → <b>${retNew}</b>${over ? ` <span style="color:#b45309">(only ${maxRet} still returnable here)</span>` : ''}</span>
-          ${adds.length ? `<div style="color:#166534">+ ${adds.reduce((a, r) => a + r.qty, 0)} replacing = ₱${replMoney.toFixed(2)}</div>` : ''}
+        if (st) st.innerHTML = `<span class="muted">returned ${retNow} → <b>${retNew}</b>${over ? ` <span style="color:#f0b64b">(only ${maxRet} still returnable here)</span>` : ''}</span>
+          ${adds.length ? `<div style="color:#b7e9c7">+ ${adds.reduce((a, r) => a + r.qty, 0)} replacing = ₱${replMoney.toFixed(2)}</div>` : ''}
           <div>line: ₱${before.toFixed(2)} → <b>₱${amount.toFixed(2)}</b></div>`;
         const inp = card.querySelector('.rr-retqty');
         if (inp && String(inp.max) !== String(maxRet)) inp.max = String(maxRet);
@@ -3565,9 +3579,9 @@
       const balNew = Math.max(0, +(willTotal - disc - paid).toFixed(2));
       totals.innerHTML = `<div style="display:grid;grid-template-columns:1fr auto;gap:2px 12px;font-size:12.5px">
         <div class="muted">Invoice if saved</div><b>₱${wasTotal.toFixed(2)} → ₱${willTotal.toFixed(2)}</b>
-        <div class="muted">Balance after this adjustment</div><b style="color:${balNew > balNow ? '#b45309' : '#166534'}">₱${balNow.toFixed(2)} → ₱${balNew.toFixed(2)}</b>
+        <div class="muted">Balance after this adjustment</div><b style="color:${balNew > balNow ? '#f0b64b' : '#b7e9c7'}">₱${balNow.toFixed(2)} → ₱${balNew.toFixed(2)}</b>
         ${tx.total_manual ? '<div class="muted">Manual correction on this record</div><b>kept, moved by the line change</b>' : ''}
-        ${stockWarn ? `<div style="grid-column:1/-1;font-size:11px;color:#b45309">⚠ ${stockWarn} ${stockWarn === 1 ? 'entry needs' : 'entries need'} fixing (quantity beyond what is returnable, or beyond the batch on hand) — save will be refused until ${stockWarn === 1 ? 'it is' : 'they are'} corrected.</div>` : ''}
+        ${stockWarn ? `<div style="grid-column:1/-1;font-size:11px;color:#f0b64b">⚠ ${stockWarn} ${stockWarn === 1 ? 'entry needs' : 'entries need'} fixing (quantity beyond what is returnable, or beyond the batch on hand) — save will be refused until ${stockWarn === 1 ? 'it is' : 'they are'} corrected.</div>` : ''}
       </div>`;
     }
   }
@@ -3631,10 +3645,10 @@
   /* Re-render from the draft (batch lists, totals, row visibility are all derived). */
   function openResellerReturnReplaceModalRerender() {
     if (!activeReturnTxId) return;
-    const keepScroll = document.querySelector('#resellerReturnModal .modal-bd')?.scrollTop || 0;
+    const keepScroll = document.querySelector('#resellerReturnModal .due-modal')?.scrollTop || 0;
     closeResellerModal('resellerReturnModal');
     openResellerReturnReplaceModal(activeReturnTxId);
-    const bd = document.querySelector('#resellerReturnModal .modal-bd');
+    const bd = document.querySelector('#resellerReturnModal .due-modal');
     if (bd) bd.scrollTop = keepScroll;
   }
 
@@ -4196,51 +4210,60 @@
         <div style="display:flex;justify-content:space-between;gap:8px">
           <span><b>${escH(l.boar || l.semen_batch_no || 'Batch ' + (i + 1))}</b>
             <small class="muted">${escH(l.semen_batch_no || '')} · ${+l.qty || 0} × ₱${+l.rate || 0}</small></span>
-          <span>₱${mine.toFixed(2)}${bad ? ` <b style="color:#b45309"> → ₱${right.toFixed(2)}</b>` : ''}</span>
+          <span>₱${mine.toFixed(2)}${bad ? ` <b style="color:#f0b64b"> → ₱${right.toFixed(2)}</b>` : ''}</span>
         </div>
         ${(+l.returned_qty || 0) > 0 ? `<small class="muted">↩︎ ${+l.returned_qty || 0} returned${l.return_reason ? ` · ${escH(l.return_reason)}` : ''}</small>` : ''}
-        ${reps.map(r => `<div style="margin-left:10px;font-size:11px;color:#166534">↳ replacing ${r.qty} × ${escH(r.boar)}${r.batch_no ? ` (${escH(r.batch_no)})` : ''} @ ₱${+r.rate || 0} = ₱${(r.qty * (+r.rate || 0)).toFixed(2)}</div>`).join('')}
+        ${reps.map(r => `<div style="margin-left:10px;font-size:11px;color:#b7e9c7">↳ replacing ${r.qty} × ${escH(r.boar)}${r.batch_no ? ` (${escH(r.batch_no)})` : ''} @ ₱${+r.rate || 0} = ₱${(r.qty * (+r.rate || 0)).toFixed(2)}</div>`).join('')}
       </div>`;
     }).join('');
 
+    /* Same shell as the return form — see openResellerReturnReplaceModal for why it has to be. */
     const modal = document.createElement('div');
-    modal.className = 'modal-overlay show';
+    modal.className = 'due-modal-bg';
+    modal.style.cssText = 'z-index:9999999!important';
     modal.id = 'editResellerTxModal';
-    modal.innerHTML = `<div class="modal" style="max-width:640px">
-      <div class="modal-hd"><h3>✎ EDIT PICKUP #${txId}</h3><button type="button" class="btn ghost small" onclick="window.closeResellerModal('editResellerTxModal')">✕</button></div>
-      <div class="modal-bd" style="max-height:70vh;overflow:auto">
+    modal.innerHTML = `<div class="due-modal reseller-hub-wrap" style="text-align:left">
+      <div class="modal-top">
+        <div>
+          <div class="eyebrow" style="color:var(--teal2);font-weight:700">✎ EDIT PICK-UP RECORD #${escH(String(txId))}</div>
+          <h2>${escH((reseller && reseller.name) || 'Reseller')}</h2>
+          <p class="muted" style="margin:5px 0 0">Correct a mis-keyed line, a hand-offset total or the status. Returns and replacements are recorded in ↩ Return &amp; Replace.</p>
+        </div>
+        <button type="button" class="close-reminder" onclick="window.closeResellerModal('editResellerTxModal')">×</button>
+      </div>
+      <div class="modal-bd">
         <form id="editResellerTxForm" onsubmit="window.saveEditResellerTx(event,'${tx.id}')">
-          <div style="padding:8px;background:#fefce8;border:1px solid #fde68a;border-radius:8px;font-size:12px;margin-bottom:10px">
+          <div class="adj-card" style="font-size:12px;margin:12px 0 10px">
             <b>${escH((reseller && reseller.name) || 'Reseller')}</b> · ${escH(tx.tx_no || '')} · ${escH(tx.type || 'pickup')}
-            ${tx.voided ? ' · <b style="color:#b45309">VOIDED</b>' : ''}
-            ${tx.total_manual ? ' · <b style="color:#166534">hand-corrected total</b>' : ''}
+            ${tx.voided ? ' · <b style="color:#f0b64b">VOIDED</b>' : ''}
+            ${tx.total_manual ? ' · <b style="color:#b7e9c7">hand-corrected total</b>' : ''}
           </div>
           ${lines.length ? `<div style="font-size:11px;font-weight:bold;margin-bottom:4px">LINE BREAKDOWN (what the invoice is built from)</div>
             <div style="border:1px solid var(--line);border-radius:8px;padding:0 8px;margin-bottom:6px">${lineRows}</div>
-            <div style="font-size:11px" class="muted">Lines add up to <b>₱${storedLines.toFixed(2)}</b>${Math.abs(driftLines) > 0.004 ? ` · recomputed from returns/replacements: <b style="color:#b45309">₱${derivedLines.toFixed(2)}</b>` : ''}${Math.abs(driftTotal) > 0.004 ? ` · invoice currently shows <b style="color:#b45309">₱${(+tx.total_amount || 0).toFixed(2)}</b> (${driftTotal > 0 ? '+' : '−'}₱${Math.abs(driftTotal).toFixed(2)} vs lines)` : ''}</div>`
+            <div style="font-size:11px" class="muted">Lines add up to <b>₱${storedLines.toFixed(2)}</b>${Math.abs(driftLines) > 0.004 ? ` · recomputed from returns/replacements: <b style="color:#f0b64b">₱${derivedLines.toFixed(2)}</b>` : ''}${Math.abs(driftTotal) > 0.004 ? ` · invoice currently shows <b style="color:#f0b64b">₱${(+tx.total_amount || 0).toFixed(2)}</b> (${driftTotal > 0 ? '+' : '−'}₱${Math.abs(driftTotal).toFixed(2)} vs lines)` : ''}</div>`
             : '<small class="muted">This record has no line breakdown, so its total can only be corrected by hand below.</small>'}
-          ${lines.length && (Math.abs(driftLines) > 0.004) ? `<label class="check" style="display:flex;gap:6px;align-items:flex-start;margin-top:8px;font-size:12px">
+          ${lines.length && (Math.abs(driftLines) > 0.004) ? `<label class="check res-check" style="display:flex;gap:6px;align-items:flex-start;margin-top:10px;font-size:12px">
               <input type="checkbox" id="etx_rebuild" style="margin-top:2px" />
               <span><b>Rebuild the lines</b> — recompute every line from its dispatch quantity, returns and replacement rows (fixes a line total that drifted from what was actually handed over).</span>
             </label>` : ''}
-          <div class="grid2" style="gap:10px;margin-top:10px">
-            <label>Pickup date &amp; time
+          <div class="reminder-fields" style="gap:10px;margin-top:12px">
+            <label class="field">Pickup date &amp; time
               <input class="input" id="etx_timestamp" type="datetime-local" value="${escH(dtVal)}" /></label>
-            <label>Total amount (₱)
+            <label class="field">Total amount (₱)
               <input class="input" id="etx_total" type="number" step="0.01" min="0" value="${+tx.total_amount || 0}" /></label>
-            <label>Paid to date (₱) <small class="muted">hand override — recorded payments are not rewritten</small>
+            <label class="field">Paid to date (₱) <small class="muted">hand override — recorded payments are not rewritten</small>
               <input class="input" id="etx_paid" type="number" step="0.01" min="0" value="${+paid || 0}" /></label>
-            <label>Discount / readjustment applied (₱)
+            <label class="field">Discount / readjustment applied (₱)
               <input class="input" id="etx_disc" type="number" step="0.01" min="0" value="${+disc || 0}" readonly title="Set this with the discount tool, not here" /></label>
           </div>
-          <label style="display:block;margin-top:8px;font-size:12px">Internal note <textarea class="input" id="etx_notes" rows="2">${escH(tx.notes || '')}</textarea></label>
-          <label style="display:block;margin-top:8px;font-size:12px">Reason for changing the amount <small class="muted">(required when the total is not what the lines add up to — it is stored with the record)</small>
+          <label class="field" style="display:block;margin-top:8px;font-size:12px">Internal note <textarea class="input" id="etx_notes" rows="2">${escH(tx.notes || '')}</textarea></label>
+          <label class="field" style="display:block;margin-top:8px;font-size:12px">Reason for changing the amount <small class="muted">(required when the total is not what the lines add up to — it is stored with the record)</small>
             <textarea class="input" id="etx_reason" rows="2" placeholder="e.g. 2 × B1LW @₱400 replacement charged by mistake in the old return form; restored by hand."></textarea></label>
-          <div style="margin-top:8px;padding:8px;background:var(--line-soft);border-radius:8px;font-size:12px">
-            <div class="muted">After saving: billed ₱<b id="etx_prev_total"></b> · balance <b id="etx_prev_bal" style="color:#b45309">₱${Math.max(0, (+tx.total_amount || 0) - disc - paid).toFixed(2)}</b></div>
+          <div class="adj-card" style="margin-top:10px;font-size:12px">
+            <div class="muted">After saving: billed ₱<b id="etx_prev_total"></b> · balance <b id="etx_prev_bal" style="color:#f0b64b">₱${Math.max(0, (+tx.total_amount || 0) - disc - paid).toFixed(2)}</b></div>
             ${tx.total_manual ? `<div style="margin-top:4px;font-size:11.5px">This record carries a hand correction of <b>${(+tx.total_amount - storedLines) >= 0 ? '+' : '−'}₱${Math.abs(+tx.total_amount - storedLines).toFixed(2)}</b> over its lines — future adjustments move that figure instead of erasing it. Save the exact line total (₱${(Math.abs(driftLines) > 0.004 ? derivedLines : storedLines).toFixed(2)}) with a reason to drop the correction.</div>` : ''}
           </div>
-          <div class="modal-ft" style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px">
+          <div class="due-actions" style="margin-top:14px">
             <button type="button" class="btn ghost" onclick="window.closeResellerModal('editResellerTxModal')">Cancel</button>
             <button type="submit" class="btn">💾 Save changes</button>
           </div>

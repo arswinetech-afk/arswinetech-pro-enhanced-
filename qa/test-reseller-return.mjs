@@ -20,6 +20,8 @@
  *   6. a hand-corrected invoice total survives the next adjustment as an offset
  *   7. legacy records (one replacement in replaced_qty/replacement_rate) keep billing
  *      exactly as before and are upgraded in place when touched
+ *   8. both forms are built from this app's real modal classes (.due-modal-bg / .due-modal) —
+ *      a JS-only bug hunt missed the v227 regression, so the markup is asserted, not trusted
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -80,8 +82,14 @@ function boot(db) {
     ARSCloud: { syncFarmRecord: async () => ({ success: true }), verifyFarmSave: async () => ({ success: true }), saveLocalRecovery() {} },
     __saves: 0, __toasts: toasts, __registry: new Map()
   };
+  ctx.__sheets = [];          /* every element appended to <body>: the modal shells, for [13] */
+  const __body = fakeEl('body');
+  __body.appendChild = (el) => {
+    if (el) ctx.__sheets.push({ id: el.id || '', cls: String(el.className || ''), css: String((el.style && el.style.cssText) || ''), html: String(el.innerHTML || '') });
+    return el;
+  };
   ctx.document = {
-    body: fakeEl('body'),
+    body: __body,
     documentElement: fakeEl('html'),
     createElement: (tag) => fakeEl(tag),
     getElementById: (id) => {
@@ -487,6 +495,59 @@ console.log('\n[FIX 187] reseller return & replace\n');
   eq('[12] mirrors refreshed for hub and receipt', tx.lines[0].replaced_qty, 2);
   eq('[12] balance recomputed', tx.balance, 3050);
   ok('[12] and the drift is no longer hidden', ctx.arsResellerReturnMath.derive(tx).drift === 0, JSON.stringify(ctx.arsResellerReturnMath.derive(tx)));
+}
+
+
+/* ── [13] the sheets must use THIS app's modal CSS, not invented class names ──────
+   The v227 regression was not in the arithmetic: both new forms were wrapped in
+   .modal-overlay / .modal / .modal-hd / .modal-bd / .modal-ft, and no stylesheet in this
+   repo defines those (app.css is the only one and never mentions modal-overlay). The form
+   therefore appended unstyled *below* the reseller hub, which sits on .due-modal-bg at
+   z-index:9999999 — on a phone the tap opened nothing you could see. A vm harness cannot
+   miss a missing CSS rule, so the shell itself is asserted here. */
+{
+  const db = seed();
+  const ctx = boot(db);
+  ctx.openResellerReturnReplaceModal('RTX-1');
+  ctx.rrAddRow(0);                    // a replacement row must exist, else its controls are not rendered
+  ctx.rrPick(0, 0, 'SEM-LW');
+  ctx.openEditResellerTxModal('RTX-1');
+  const css = fs.readFileSync(path.join(ROOT, 'app.css'), 'utf8');
+  const last = id => [...ctx.__sheets].reverse().find(s => s.id === id);   // the rerender re-appends
+  const ret = last('resellerReturnModal');
+  const edt = last('editResellerTxModal');
+  ok('[13] the ↩ Return / Replace sheet was actually appended', !!ret);
+  ok('[13] the ✎ Edit sheet was actually appended', !!edt);
+
+  /* unstyled hooks this file deliberately keeps for its own querySelectors */
+  const HOOKS = new Set(['modal-bd', 'rr-head', 'rr-card', 'rr-totals', 'rr-row', 'rr-grid', 'rr-state', 'rr-retqty',
+    'rr-num', 'rr-rate', 'rr-lineamt', 'rr-repl', 'rr-adds', 'rr-stored', 'small', 'input', 'check']);
+  const lint = (name, s) => {
+    ok(`${name}: layer is .due-modal-bg (fixed, dimmed, centred)`, s.cls === 'due-modal-bg', s.cls);
+    ok(`${name}: lifted over the hub with the app's own z-index`, /z-index:\s*9999999/.test(s.css), s.css);
+    ok(`${name}: panel is .due-modal.reseller-hub-wrap (scrolls, 880px)`, /class="due-modal reseller-hub-wrap"/.test(s.html));
+    ok(`${name}: header uses .modal-top / .eyebrow / .close-reminder`, /class="modal-top"/.test(s.html) && /class="eyebrow"/.test(s.html) && /class="close-reminder"/.test(s.html));
+    ok(`${name}: footer uses .due-actions so phones get full-width buttons`, /class="due-actions"/.test(s.html));
+    ok(`${name}: no class this app does not define`, !/modal-overlay|class="modal"|modal-hd|modal-ft/.test(s.html));
+    const tokens = new Set();
+    for (const m of s.html.matchAll(/class="([^"$]*)"/g)) m[1].trim().split(/\s+/).forEach(t => { if (t) tokens.add(t); });
+    const undef = [...tokens].filter(t => !HOOKS.has(t) && !css.includes('.' + t));
+    ok(`${name}: every styled class exists in app.css`, !undef.length, undef.join(', '));
+  };
+  if (ret) lint('[13] return sheet', ret);
+  if (edt) lint('[13] edit sheet', edt);
+
+  /* the money controls still need to be found inside the new shell */
+  const controls = (ret ? ret.html : '') + (edt ? edt.html : '');
+  ok('[13] the return qty box, batch picker and price box are still in the sheet',
+    /rr-retqty/.test(controls) && /window\.rrPick\(/.test(controls) && /window\.rrRate\(/.test(controls));
+  ok('[13] save is still wired to the real handler', /window\.saveResellerReturnReplace\(event,/.test(ret ? ret.html : '') && /window\.saveEditResellerTx\(event,/.test(edt ? edt.html : ''));
+  ok('[13] controls sit inside .field so app.css styles them for the dark sheet', /class="field"/.test(controls) && /class="rr-row field"/.test(controls));
+
+  if (process.env.ARS_DUMP_SHEETS) {
+    fs.writeFileSync('/tmp/ret-sheet.html', ret ? ret.html : '');
+    fs.writeFileSync('/tmp/edt-sheet.html', edt ? edt.html : '');
+  }
 }
 
 console.log(`\n${failures ? 'FAILED' : 'OK'} — ${checks - failures}/${checks} checks passed\n`);
