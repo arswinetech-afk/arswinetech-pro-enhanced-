@@ -1,4 +1,4 @@
-# FIX 188 / FIX 189 — Reseller order links and the farm's order menu (v230 → v233)
+# FIX 188 / FIX 189 — Reseller order links and the farm's order menu (v230 → v234)
 
 > Your question: *"Is it possible to send a link where this link will have like an ordering
 > counter page, whereas the reseller can simply place their order and once they click
@@ -13,6 +13,46 @@
 > **v232** is that same build with a fixable install: pasting the SQL onto a farm that already
 > had v230 died with `42P13 cannot change return type of existing function`, because v231
 > changed what the catalogue function returns. Build `v232-reseller-sql-recreate-2026-09-12`.
+
+## v234 — five years of orders, and what a reseller's page is allowed to remember
+
+Their question was the right one to ask before it becomes a problem: *the recent-orders list is
+useful today, but what happens after years of orders — does it just keep eating memory?*
+
+Two different things grow, and only one of them needs a feature:
+
+- **The reseller's page cannot grow.** `ars_order_status()` ends in `limit 10` and a link can only
+  ever read orders placed through it, so a five-year-old farm and a one-day-old farm cost the same
+  phone call: at most ten rows, whatever the history. The page now also *refuses to render* more
+  than **three** until they tap `Show N more ↓` — which is what they asked for, and it doubles as
+  the reason the fixed basket bar has nothing to hide behind. When there is something behind the
+  ten, the SQL returns `older` and the list says `7 older orders behind this list — your page only
+  ever loads the last 10, the farm keeps them all`, instead of silently truncating.
+- **The farm's records do grow, and that is fine, on purpose.** An order row is 854 bytes of JSON
+  for an 8-bottle, 3-line order — about 0.8 MB per thousand orders before Postgres's row overhead.
+  Five years at three orders a week is roughly 780 rows, under a megabyte, in a database whose
+  free tier starts at 500 MB and whose expensive residents are photos and weight history. Nothing
+  about the reseller page reads that table unbounded, so there is no cliff to fall off.
+  **No auto-delete was added, and I would resist adding one:** these rows are the customer-facing
+  paper trail for a request that moved money — pruning it on a timer is how a farm loses an
+  argument three years later. If you ever want a control, the honest shape is "clear handled
+  requests older than 12 months" as an explicit button in 🔗 Links, with the pick-up ledger left
+  alone, because that is the record that actually bills.
+- **The farm's own inbox had the same wall in it.** `Handled recently` used to draw eight cards
+  with no way to see the rest and no mention that the rest existed. It is six cards with a
+  `9 total` count in the header and `Show 3 older ↓` below; expanding keeps the reseller you
+  tapped in from, and the header stops saying "recently" when nothing is hidden.
+
+`What they ordered` is now printed in small text on every row (`2× Largewhite · 3× Duroc ·
+3× Duroc Pietrain`). It is deliberately **frozen at placement** inside `ars_place_order` — a
+denormalized `summary` on the order, not a join to your menu — because renaming "Duroc Pietrain"
+next month must not rewrite what a reseller is looking at from March. Rows that predate this
+build simply omit the line; nothing about them is invented.
+
+One stale promise went with it: the inbox still told you *"prices are re-read from today's batch
+price"* — true in v230, false since v231, and exactly the kind of sentence that makes a farm
+stop reading the screen. It now says each line carries the ₱/bottle that was on 🧬 Order menu
+when the order was sent.
 
 ## v233 — the last row of the reseller's page was unreachable behind the basket bar
 
@@ -156,13 +196,13 @@ revocable** · **Phase 1 now**.
 |---|---|
 | `order.html` *(new, root)* | The reseller's ordering page. Own `<style>` on purpose: a future `app.css` change can never break a link you already handed out. v231: the heading asks *"Which breeds do you need?"*, the bottles-left pill is gone. v233: the room for the fixed bar is a measured CSS variable with a 160px fallback, and the pick-up date is optional. |
 | `order-page.js` → `js/order-page.js` *(new)* | Token parsing, cart maths, the quantity-only `rpc` calls, their own status list. v231: the cart is capped at 999/line with a stated reason and a retired breed is dropped with one; no stock figure exists anywhere in the file. v233: `localDay()` for every date it shows or accepts, `syncBarSpace()` measuring the basket bar, and "price to confirm" instead of ₱0.00. |
-| `supabase/reseller_orders.sql` *(new)* | The install you paste once: 3 partial indexes + 4 `security definer` functions. No new table. v231: the catalogue reads the farm's menu, `ars_place_order` takes the menu price and touches no stock, and its loop variable is `jsonb` (the `record ->>` fix). |
+| `supabase/reseller_orders.sql` *(new)* | The install you paste once: 3 partial indexes + 4 `security definer` functions. No new table. v231: the catalogue reads the farm's menu, `ars_place_order` takes the menu price and touches no stock, and its loop variable is `jsonb` (the `record ->>` fix). v234: `ars_order_status` gains `summary` + `older` beside its `limit 10`, and placement freezes the line list. **Re-paste needed.** |
 | `semen-sales.js` | Badge in the Registered Resellers KPI box · `🛒 Order link` per reseller · the order inbox · link create/pause/supersede + QR/copy/share · `acceptResellerOrder` → prefilled pick-up (one-shot `pendingPickupPrefill`) · decline with a reason · `👁 Seen`. **v231:** `🧬 Order menu` editor in the toolbar (+ `🛒 Orders (N)`), `ensureResellerOrderMenu` seeded once and never re-seeded behind an empty list, the `🛒 N order new` chip on each reseller's card, the pop-up + beep + vibration with `ars-order-notified:<farmId>`, breed-shaped prefill with the batch left blank, `ordered_rate` so a batch pick cannot re-price an accepted order, and the link sheet's menu warning. |
 | `client.js` | `entityMap` += `semenResellerOrders: 'semen_reseller_order'`, `semenResellerOrderLinks: 'semen_reseller_order_link'`, `semenOrderBreeds: 'semen_order_breed'` — so orders, links and the menu sync, back up and restore like every other record (the menu must sync: the public page reads it from the cloud). |
 | `app.js` | `sanitizeFarm` initialises the three buckets, as it does for all the others. |
 | `sw.js` | `/order.html` and `/js/order-page.js` bypass the app cache (a reseller must never get yesterday's page, and offline must not hand them your login screen). |
-| `_headers`, `config.js` | `order.html` served `no-cache` + `X-Robots-Tag: noindex`; version `v233-reseller-page-scroll-2026-09-13`. |
-| `qa/build-deploy-layout.sh`, `qa/test-reseller-orders.mjs` | the page is copied into the deploy layout; 213 checks. |
+| `_headers`, `config.js` | `order.html` served `no-cache` + `X-Robots-Tag: noindex`; version `v234-reseller-order-history-2026-09-13`. |
+| `qa/build-deploy-layout.sh`, `qa/test-reseller-orders.mjs` | the page is copied into the deploy layout; 234 checks. |
 
 No `_worker.js` change is needed: it only special-cases `/ars-head` and otherwise falls
 through to `env.ASSETS.fetch(request)`, so `/order.html` is served as a static asset.
@@ -221,7 +261,7 @@ lists their own recent orders as `Waiting for the farm` / `Accepted — ready to
 
 ## Checks that ran
 
-`node qa/test-reseller-orders.mjs` → **213/213** (page arithmetic with no stock in it and the
+`node qa/test-reseller-orders.mjs` → **234/234** (page arithmetic with no stock in it and the
 999 cap; the payload that leaves the phone; the fake-browser end-to-end incl. an unpriced breed
 admitted as "Price confirmed by the farm"; link lifecycle incl. supersede and pause; the menu —
 seeded once, emptied stays emptied, duplicates refused, a draft line pruned on cancel, and a

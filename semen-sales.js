@@ -5130,16 +5130,26 @@
   }
 
   /* ── the inbox sheet (what the badge opens) ───────────────────────────────── */
-  function openResellerOrderInbox(onlyResellerId) {
+  const HANDLED_SHOWN = 6;
+  let inboxShowAllHandled = false, inboxFilterId = '';
+  function openResellerOrderInbox(onlyResellerId, keepState) {
     ensureResellerData();
+    /* a fresh open forgets the expansion; the Show-older toggle re-enters with keepState so
+       it does not un-expand itself on the way back in */
+    if (onlyResellerId !== undefined && !keepState) inboxShowAllHandled = false;
+    if (onlyResellerId !== undefined) inboxFilterId = onlyResellerId || '';
     const f = F();
     const who = onlyResellerId ? (f.semenResellers || []).find(r => String(r.id) === String(onlyResellerId)) : null;
     const keep = o => !onlyResellerId || String(o.reseller_id) === String(onlyResellerId);
     const all = resellerOrderBucket().filter(keep);
     const pending = pendingResellerOrders().filter(keep);
-    const handled = all.filter(o => orderStatusOf(o) !== ORDER_PENDING)
-      .sort((a, b) => String(b.decided_at || b.placed_at || '').localeCompare(String(a.decided_at || a.placed_at || '')))
-      .slice(0, 8);
+    const handledAll = all.filter(o => orderStatusOf(o) !== ORDER_PENDING)
+      .sort((a, b) => String(b.decided_at || b.placed_at || '').localeCompare(String(a.decided_at || a.placed_at || '')));
+    /* Five years of accepted and declined requests is a long, long card. The queue a farm acts
+       on is always the pending one, so handled history is a list you open on purpose — and it
+       says how much is behind it instead of quietly cutting. */
+    const handled = inboxShowAllHandled ? handledAll.slice(0, 40) : handledAll.slice(0, HANDLED_SHOWN);
+    const handledMore = Math.max(0, handledAll.length - handled.length);
 
     document.getElementById('resellerOrderInbox')?.remove();
     document.body.insertAdjacentHTML('beforeend', `
@@ -5149,7 +5159,7 @@
             <div>
               <div class="eyebrow" style="color:var(--teal2);font-weight:800">🛒 Order-link requests</div>
               <h2>${who ? escH(who.name || 'This reseller') + (pending.length ? ` — ${pending.length} order${pending.length > 1 ? 's' : ''} waiting` : ' — nothing waiting') : (pending.length ? pending.length + ' order' + (pending.length > 1 ? 's' : '') + ' waiting' : 'Nothing waiting')}</h2>
-              <p class="muted">Requests only — no bottle and no balance moves until you save a pick-up. Prices are re-read from today's batch price, so a change you made after they ordered is honoured.</p>
+              <p class="muted">Requests only — no bottle and no balance moves until you save a pick-up. Each line carries the ₱/bottle that was on your 🧬 order menu when they sent it, so re-pricing the menu afterwards does not touch a request that already arrived.</p>
             </div>
             <button type="button" class="close-reminder" onclick="closeResellerModal('resellerOrderInbox')">×</button>
           </div>
@@ -5158,8 +5168,12 @@
             : `<div class="adj-card">No pending orders ${who ? 'from ' + escH(who.name || 'this reseller') : 'right now'}. When a reseller sends one from their link it lands here, the badge on “Registered Resellers” lights up, and a pop-up interrupts whatever screen you are on.</div>`}
 
           ${handled.length ? `<div class="adj-card">
-            <div class="adj-card-title"><span>Handled recently</span></div>
+            <div class="adj-card-title"><span>Handled${inboxShowAllHandled ? '' : ' recently'}</span><span>${handledAll.length} total</span></div>
             ${handled.map(o => orderCardHTML(o, false)).join('')}
+            ${handledMore > 0 || inboxShowAllHandled ? `<div class="due-actions" style="justify-content:center;margin-top:8px">
+              ${handledMore > 0 ? `<button type="button" class="btn ghost small" onclick="window.arsToggleHandledOrders()">Show ${handledMore} older ↓</button>` : ''}
+              ${inboxShowAllHandled ? `<button type="button" class="btn ghost small" onclick="window.arsToggleHandledOrders()">Show fewer ↑</button>` : ''}
+            </div>` : ''}
           </div>` : ''}
 
           <div class="due-actions" style="margin-top:14px">
@@ -5175,6 +5189,11 @@
 
   function openResellerOrderInboxFor(resellerId) { openResellerOrderInbox(resellerId); }
   window.openResellerOrderInboxFor = openResellerOrderInboxFor;
+  /* the toggle re-enters with no id, so the filter they came in with survives the re-render */
+  window.arsToggleHandledOrders = function () {
+    inboxShowAllHandled = !inboxShowAllHandled;
+    openResellerOrderInbox(inboxFilterId, true);
+  };
 
   function patchOrder(orderId, changes, msg) {
     ensureResellerData();

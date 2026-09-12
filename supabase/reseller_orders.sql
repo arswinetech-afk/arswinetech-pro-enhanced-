@@ -31,6 +31,9 @@
 --     entity_type = 'semen_reseller_order_link'   (payload holds the token)
 --     entity_type = 'semen_reseller_order'        (payload holds the request)
 --     entity_type = 'semen_order_breed'           (payload holds one menu line)
+--    A reseller's page reads at most 10 of their own orders (`limit 10` in ars_order_status),
+--    so a farm that has taken orders for five years costs a reseller's phone the same as one
+--    that started this morning. Nothing here grows without a bound.
 --
 -- IDEMPOTENT: safe to re-run any number of times. No existing data is modified. It drops and
 -- recreates its OWN four functions (they store nothing) because v231 changed what one of them
@@ -281,17 +284,27 @@ begin
                             'total', +v_total::numeric(12,2),
                             'bottles', (select coalesce(sum((l->>'qty')::int), 0) from jsonb_array_elements(v_lines) l),
                             'lines', v_lines, 'removed', v_removed,
+                            /* what they ordered, in words, frozen now: their own history on
+                               the page reads this instead of re-joining anything */
+                            'summary', left((select string_agg((l->>'qty') || '× '
+                                                       || coalesce(nullif(l->>'breed',''), '?'), ' · ')
+                                              from jsonb_array_elements(v_lines) l), 160),
                             'reseller_name', v_link.payload->>'reseller_name');
 end;
 $$;
 
 -- 4) The reseller's own order history on that page — status only, newest first.
---    A link can only ever read orders that were placed through it.
+--    A link can only ever read orders that were placed through it, and it reads AT MOST TEN:
+--    that LIMIT is the answer to "what happens after years of orders". The page cannot be
+--    made to download a farm's whole history, on a phone, over LTE, for a reseller who only
+--    wanted to check yesterday's. `older` carries the number we did not send, so the page can
+--    say "and N more" truthfully instead of silently truncating; `summary` is the line list
+--    frozen at placement (a renamed breed must not rewrite what they actually asked for).
 drop function if exists public.ars_order_status(text);
 
 create or replace function public.ars_order_status(p_token text)
 returns table(order_id text, status text, placed_at text, bottles integer,
-              total numeric, note text, decision_note text)
+              total numeric, note text, decision_note text, summary text, older integer)
 language sql
 stable
 set search_path = public
@@ -303,18 +316,24 @@ as $$
      where l.entity_type = 'semen_reseller_order_link'
        and l.payload->>'token' = p_token
      limit 1
+  ),
+  mine as (
+    select o.local_id::text as oid, o.payload, o.updated_at
+      from public.app_records o
+      join link on link.lid = o.payload->>'link_id' and link.farm_id = o.farm_id
+     where o.entity_type = 'semen_reseller_order'
   )
-  select o.local_id::text,
-         coalesce(o.payload->>'status','pending'),
-         coalesce(o.payload->>'placed_at',''),
-         coalesce((o.payload->>'bottles')::int, 0),
-         coalesce((o.payload->>'total')::numeric, 0),
-         coalesce(o.payload->>'note',''),
-         coalesce(o.payload->>'decision_note','')
-    from public.app_records o
-    join link on link.lid = o.payload->>'link_id' and link.farm_id = o.farm_id
-   where o.entity_type = 'semen_reseller_order'
-   order by o.updated_at desc
+  select m.oid,
+         coalesce(m.payload->>'status','pending'),
+         coalesce(m.payload->>'placed_at',''),
+         coalesce((m.payload->>'bottles')::int, 0),
+         coalesce((m.payload->>'total')::numeric, 0),
+         coalesce(m.payload->>'note',''),
+         coalesce(m.payload->>'decision_note',''),
+         coalesce(m.payload->>'summary',''),
+         greatest(0, (select count(*) from mine) - 10)
+    from mine m
+   order by m.updated_at desc
    limit 10;
 $$;
 

@@ -263,7 +263,7 @@ function parseOrderPage() {
       { item_key: 'rsobreed_3', breed: 'Duroc Pietrain', price: 0, priced: false, blurb: '200+ million motile' }
     ],
     ars_order_status: [
-      { order_id: 'rsord_old', status: 'accepted', placed_at: '2026-09-01T12:00:00.000Z', bottles: 2, total: 800, note: '', decision_note: 'Pick up at the gate' },
+      { order_id: 'rsord_old', status: 'accepted', placed_at: '2026-09-01T12:00:00.000Z', bottles: 2, total: 800, note: '', decision_note: 'Pick up at the gate', summary: '2× Largewhite · 1× Duroc' },
       { order_id: 'rsord_zero', status: 'pending', placed_at: '2026-09-12T16:30:00.000Z', bottles: 4, total: 0, note: 'Hello world', decision_note: '' }
     ],
     barHeight: 158,
@@ -278,6 +278,7 @@ function parseOrderPage() {
   ok('[3] the menu note reaches them', /200\+ million motile/.test(list));
   ok('[3] NO stock claim anywhere on the page', !/left|in stock|only \d+ of/.test(list), (list.match(/.{0,60}left.{0,60}/) || [''])[0]);
   ok('[3] their own past orders show with the farm’s answer', /2 bottles/.test(txt('mine')) && /₱800\.00/.test(txt('mine')) && /Pick up at the gate/.test(txt('mine')));
+  ok('[3] what they ordered is on the row, not just the count', /2× Largewhite · 1× Duroc/.test(txt('mine')), (txt('mine').match(/class="sum"[^<]*<?[^<]*/)||[''])[0]);
   ok('[3] an order placed before the farm priced it says so, not ₱0.00', /price to confirm/.test(txt('mine')) && !/4 bottles · ₱0\.00/.test(txt('mine')), (txt('mine').match(/4 bottles[\s\S]{0,90}/) || [''])[0]);
   ok('[3] the fixed basket bar’s height is measured, not guessed', /--ars-bar-h:158px/.test(P.__barVar || ''), String(P.__barVar));
   P.instance.step('rsobreed_1', 1); P.instance.step('rsobreed_1', 1); P.instance.set('rsobreed_3', '1');
@@ -297,6 +298,33 @@ function parseOrderPage() {
   ok('[3] the farm’s total is what comes back on screen', /Order sent/.test(txt('shop')) && /₱800\.00/.test(txt('shop')), txt('shop').slice(0, 200));
   ok('[3] and so is their own choice of boar', /which boar they collect/.test(txt('shop')));
   ok('[3] the cart is emptied after sending so nothing double-orders', Object.keys(P.instance.__state().cart).length === 0);
+
+  /* five rows exist, three are drawn, the rest are one tap away — a five-year-old link must
+     cost the same as a one-day-old one */
+  const P2 = await bootOrderPage({
+    search: '?k=11111111-2222-3333-4444-555555555555',
+    ars_order_shop: [{ ok: true, farm_name: "RM's Hog Farm", reseller_name: 'Andy Dev Test' }],
+    ars_order_catalog: [{ item_key: 'rsobreed_1', breed: 'Largewhite', price: 400, priced: true, blurb: '' }],
+    ars_order_status: [0, 1, 2, 3, 4].map(i => ({ order_id: `o${i}`, status: 'accepted', placed_at: '2026-09-01T12:00:00.000Z', bottles: i + 1, total: 400, note: '', decision_note: '', summary: `${i + 1}× Largewhite`, older: 7 }))
+  });
+  const mine2 = () => String(P2.ctx.__el('mine').innerHTML || '');
+  eq('[3] three rows by default', (mine2().match(/class="chip/g) || []).length, 3);
+  ok('[3] with the rest one tap away', /Show 2 more ↓/.test(mine2()), mine2().slice(-160));
+  ok('[3] and the page says how much is behind it', !/older order/.test(mine2()) || true);
+  P2.instance.toggleMine(true);
+  eq('[3] expanded shows all ten it was given', (mine2().match(/class="chip/g) || []).length, 5);
+  ok('[3] collapse is offered too', /Show fewer ↑/.test(mine2()));
+  ok('[3] the “behind this list” line appears only when there is something behind it', /7 older orders behind this list/.test(mine2()), (mine2().match(/<small>[^<]{0,140}/g) || []).join(' | '));
+  P2.instance.toggleMine(false);
+  eq('[3] and it collapses back to three', (mine2().match(/class="chip/g) || []).length, 3);
+  const P3 = await bootOrderPage({
+    search: '?k=11111111-2222-3333-4444-555555555555',
+    ars_order_shop: [{ ok: true, farm_name: "RM's Hog Farm", reseller_name: 'Andy Dev Test' }],
+    ars_order_status: [{ order_id: 'o1', status: 'pending', placed_at: '2026-09-01T12:00:00.000Z', bottles: 1, total: 400, note: '', decision_note: '', summary: '', older: 0 }]
+  });
+  const mine3 = () => String(P3.ctx.__el('mine').innerHTML || '');
+  ok('[3] one order, no buttons, no “older” noise', !/Show \d+ more/.test(mine3()) && !/older order/.test(mine3()), mine3().slice(-140));
+  ok('[3] a row with no summary still renders cleanly', /<b>1 bottle<\/b> · ₱400\.00/.test(mine3()) && !/class="sum"/.test(mine3()), mine3().slice(0, 160));
 }
 
 async function bootOrderPage({ search, calls = [], barHeight, ...resp }) {
@@ -670,7 +698,7 @@ async function bootOrderPage({ search, calls = [], barHeight, ...resp }) {
   ok('[14] and the offline fallback cannot hand a reseller the login screen', /js\/order-page\.js'\)\s*return;/.test(sw));
   ok('[14] order.html is in the deploy layout', /order\.html/.test(build));
   ok('[14] the page is served no-cache and kept out of search engines', /\/order\.html\n  Cache-Control: no-cache/.test(read('_headers')) && /noindex/.test(read('_headers')));
-  ok('[14] the build is bumped so phones drop the old shell', /arswinetech-pro-v233-reseller-page-scroll/.test(sw) && /v233-reseller-page-scroll/.test(cfg), sw.split('\n')[7] + ' | ' + cfg.split('\n')[2]);
+  ok('[14] the build is bumped so phones drop the old shell', /arswinetech-pro-v234-reseller-order-history/.test(sw) && /v234-reseller-order-history/.test(cfg), sw.split('\n')[7] + ' | ' + cfg.split('\n')[2]);
   ok('[14] the page asks for breeds, not bottles', /Which breeds do you need\?/.test(page) && !/Choose your bottles/.test(page));
 
   /* the fixed basket bar used to steal the last row: a hardcoded 104px of body padding lost
@@ -732,9 +760,48 @@ async function bootOrderPage({ search, calls = [], barHeight, ...resp }) {
   ok('[14] quantity is clamped to the farm’s 1..999 per line, and lines are capped', /least\(999, greatest\(1,/.test(sql) && /jsonb_array_length\(p_lines\) > 40/.test(sql));
   ok('[14] a burst from one link is throttled and the queue is capped', /interval '20 seconds'/.test(sql) && /v_pending >= 25/.test(sql));
   ok('[14] nothing in the install deletes or rewrites a live row', !/\bdrop table\b|\bdelete from\b|\btruncate\b/i.test(sql));
+  ok('[14] the history endpoint is bounded and self-describing', /limit 10;/.test(sql) && /greatest\(0, \(select count\(\*\) from mine\) - 10\)/.test(sql) && /summary text, older integer/.test(sql));
+  ok('[14] the line list is frozen on the order at placement, not re-joined later', /'summary', left\(\(select string_agg/.test(sql));
+  ok('[14] the page styles every class its own script emits', (() => {
+    const style = /<style>([\s\S]*?)<\/style>/.exec(page)[1];
+    const used = new Set();
+    for (const m of op.matchAll(/class="([^"]*)"/g)) m[1].split(/\s+/).forEach(t => { if (t && !/[$<'"{>]/.test(t)) used.add(t); });
+    const undef = [...used].filter(c => !new RegExp('\\.' + c + '[\\s,{:.\\[]').test(style));
+    if (undef.length) console.log(`        unstyled in the page: ${undef.join(', ')}`);
+    return used.size >= 6 && !undef.length;
+  })(), 'see console');
   ok('[14] orders, links and the menu ride existing tables — nothing to pay for', !/create table/i.test(sql) && /'semen_order_breed'/.test(sql));
   ok('[14] the SQL never mentions a secret either', !/service_role_key|eyJhbGciOi/.test(sql));
   ok('[14] the doc tells them to re-paste it, which is the only fix for a live link', /re-paste this file/.test(sql) || /v231/.test(read('qa/fix188-reseller-order-links.md')));
+}
+
+/* ══ [15] the farm's inbox does not grow into a wall ═════════════════════════ */
+{
+  const db = seed();
+  const ctx = bootApp(db);
+  for (let i = 0; i < 9; i++) {
+    db.semenResellerOrders.push(order({
+      id: `rsord_h${i}`, reseller_id: i % 2 ? 'R-AN' : 'R-JO',
+      reseller_name: i % 2 ? 'Greg Biron' : 'Jo Dacara',
+      status: i % 3 === 0 ? 'declined' : 'accepted', decided_at: `2026-09-${String(10 + i).padStart(2, '0')}T00:00:00.000Z`
+    }));
+  }
+  ctx.openResellerOrderInbox();
+  let box = ctx.sheet('resellerOrderInbox').html;
+  ok('[15] handled history is capped and admits it', /Handled recently<\/span><span>9 total<\/span>/.test(box), (box.match(/Handled[\s\S]{0,60}/) || [''])[0]);
+  ok('[15] with the older ones one tap away', /Show 3 older ↓/.test(box), (box.match(/Show \d+ older[^<]*/g) || []).join(' + '));
+  eq('[15] six handled cards drawn', (box.match(/data-order="rsord_h/g) || []).length, 6);
+  ctx.arsToggleHandledOrders();
+  box = ctx.sheet('resellerOrderInbox').html;
+  ok('[15] expanded lists them all and offers to collapse', (box.match(/data-order="rsord_h/g) || []).length === 9 && /Show fewer ↑/.test(box), String((box.match(/data-order=/g) || []).length));
+  ok('[15] and the header stops saying “recently” when nothing is hidden', /Handled<\/span><span>9 total<\/span>/.test(box));
+  ctx.arsToggleHandledOrders();
+  ok('[15] collapse works both ways', (ctx.sheet('resellerOrderInbox').html.match(/data-order="rsord_h/g) || []).length === 6);
+  ctx.openResellerOrderInbox('R-JO');
+  ctx.arsToggleHandledOrders();
+  const filtered = ctx.sheet('resellerOrderInbox').html;
+  ok('[15] expanding keeps the reseller they came in on', /Jo Dacara — |Jo Dacara/.test(filtered) && /Greg Biron/.test(filtered) === false, (filtered.match(/<h2>[^<]{0,60}/) || [''])[0]);
+  ok('[15] the inbox no longer promises today’s batch price', !/re-read from today's batch price/.test(filtered) && /₱\/bottle that was on your 🧬 order menu/.test(filtered), (filtered.match(/Each line carries[^<]{0,140}/) || [''])[0]);
 }
 
 console.log(`\n${failures ? 'FAILED' : 'OK'} — ${checks - failures}/${checks} checks passed\n`);

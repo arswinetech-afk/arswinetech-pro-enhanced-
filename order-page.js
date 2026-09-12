@@ -186,12 +186,38 @@ window.ArsOrderPage = (function () {
     return t;
   }
 
+  /* Three rows and a button, not an endless list. A link opened in Messenger on LTE should
+     cost the same on a farm's fifth anniversary as on its first day — the SQL already refuses
+     to send more than ten (`limit 10`), and this refuses to render more than three until they
+     ask, which is also what keeps the fixed basket bar off the last row on a small screen. */
+  const MINE_SHOWN = 3;
+  let mineRows = [], mineOlder = 0, mineOpen = false;
+
   function paintOrders(rows) {
     const list = Array.isArray(rows) ? rows : (rows && rows.rows) || [];
-    if (!list.length) { els.mine.innerHTML = `<li><span>No orders from this link yet.</span></li>`; syncBarSpace(); return; }
-    els.mine.innerHTML = list.map(r => {
-      return orderRowHTML(r);
-    }).join('');
+    mineRows = list;
+    mineOlder = Math.max(0, +((list[0] || {}).older) || 0);
+    renderMine();
+    syncBarSpace();
+  }
+
+  function renderMine() {
+    if (!mineRows.length) { els.mine.innerHTML = `<li><span>No orders from this link yet.</span></li>`; return; }
+    const shown = mineOpen ? mineRows : mineRows.slice(0, MINE_SHOWN);
+    const extra = mineRows.length - shown.length;
+    els.mine.innerHTML = shown.map(r => orderRowHTML(r)).join('') + (() => {
+      if (extra > 0) return `<li class="more"><button type="button" onclick="ArsOrderPage.toggleMine(true)">Show ${extra} more ↓</button></li>`;
+      const bits = [];
+      if (mineOpen && mineRows.length > MINE_SHOWN) bits.push(`<button type="button" onclick="ArsOrderPage.toggleMine(false)">Show fewer ↑</button>`);
+      if (mineOlder > 0) bits.push(`<small>${mineOlder} older order${mineOlder === 1 ? '' : 's'} behind this list — your page only ever loads the last ${Math.min(10, mineRows.length)}, the farm keeps them all.</small>`);
+      if (!bits.length) return '';
+      return `<li class="more">${bits.join('')}</li>`;
+    })();
+  }
+
+  function toggleMine(open) {
+    mineOpen = open !== false;
+    renderMine();
     syncBarSpace();
   }
 
@@ -203,7 +229,8 @@ window.ArsOrderPage = (function () {
        that breed on its menu yet. Say that, on both sides of the transaction. */
     const amount = !(+r.total > 0) && bottles > 0
       ? '<span style="color:#f0b64b">price to confirm</span>' : money(r.total);
-    return `<li><span><b>${bottles} bottle${bottles === 1 ? '' : 's'}</b> · ${amount}${when ? ` · <span style="color:#9dc3bf">${esc(when)}</span>` : ''}${r.note ? `<br><span style="color:#9dc3bf">“${esc(r.note)}”</span>` : ''}${r.decision_note ? `<br><span style="color:#f0b64b">Farm: ${esc(r.decision_note)}</span>` : ''}</span><span class="chip ${st.key}">${st.label}</span></li>`;
+    const sum = String(r.summary || '').trim();
+    return `<li><span><b>${bottles} bottle${bottles === 1 ? '' : 's'}</b> · ${amount}${when ? ` · <span style="color:#9dc3bf">${esc(when)}</span>` : ''}${sum ? `<span class="sum">${esc(sum)}</span>` : ''}${r.note ? `<br><span style="color:#9dc3bf">“${esc(r.note)}”</span>` : ''}${r.decision_note ? `<br><span style="color:#f0b64b">Farm: ${esc(r.decision_note)}</span>` : ''}</span><span class="chip ${st.key}">${st.label}</span></li>`;
   }
 
   function refreshOrders() {
@@ -304,7 +331,7 @@ window.ArsOrderPage = (function () {
     init, step, set, submit,
     /* pure, unit-tested */
     parseToken, clampCart, cartTotals, rpcBody, statusOf, money, itemKey,
-    localDay, orderRowHTML,
+    localDay, orderRowHTML, toggleMine, renderMine,
     __state: () => ({ token, catalog, cart })
   };
 })();
