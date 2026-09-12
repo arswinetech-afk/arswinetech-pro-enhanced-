@@ -215,6 +215,15 @@ console.log('\n[FIX 189] reseller order menu · links · notifications\n');
   ok('[1] a retired breed leaves the cart with a plain reason', gone.cart.rsobreed_XX === undefined && gone.cart.rsobreed_3 === 4, JSON.stringify(gone.cart));
   ok('[1] and it says “this farm’s menu”', /no longer on this farm/.test(gone.warnings.join(' ')), gone.warnings.join(' | '));
   ok('[1] nothing in the page mentions bottles left', !/on_hand|left<\/span>/.test(read('order-page.js')));
+
+  /* the day a reseller is shown, in their own timezone — the bug was `toISOString()`,
+     which called yesterday "today" every PH evening between midnight and 8 AM */
+  const day = (v, o) => String(P.localDay(v, o));
+  ok('[1] midnight in Manila is the next day, not the UTC one', day('2026-09-12T16:30:00.000Z', -480) === '2026-09-13', day('2026-09-12T16:30:00.000Z', -480));
+  ok('[1] noon is the same day everywhere', day('2026-09-13T12:00:00.000Z', -480) === '2026-09-13', day('2026-09-13T12:00:00.000Z', -480));
+  ok('[1] and a west-of-UTC offset does not gain a day', day('2026-09-13T15:30:00.000Z', 120) === '2026-09-13', day('2026-09-13T15:30:00.000Z', 120));
+  ok('[1] the UTC string alone would have been the day before', P.localDay('2026-09-12T16:30:00.000Z', -480) !== '2026-09-12T16:30:00.000Z'.slice(0, 10));
+  ok('[1] an unparseable stamp is empty, not NaN-NaN-NaN', day('not a date', -480) === '', day('not a date', -480));
 }
 
 /* ══ [2] the payload that leaves the reseller's phone ═════════════════════════ */
@@ -253,7 +262,11 @@ function parseOrderPage() {
       { item_key: 'rsobreed_1', breed: 'Largewhite', price: 400, priced: true, blurb: '' },
       { item_key: 'rsobreed_3', breed: 'Duroc Pietrain', price: 0, priced: false, blurb: '200+ million motile' }
     ],
-    ars_order_status: [{ order_id: 'rsord_old', status: 'accepted', placed_at: '2026-09-01T00:00:00.000Z', bottles: 2, total: 800, note: '', decision_note: 'Pick up at the gate' }],
+    ars_order_status: [
+      { order_id: 'rsord_old', status: 'accepted', placed_at: '2026-09-01T12:00:00.000Z', bottles: 2, total: 800, note: '', decision_note: 'Pick up at the gate' },
+      { order_id: 'rsord_zero', status: 'pending', placed_at: '2026-09-12T16:30:00.000Z', bottles: 4, total: 0, note: 'Hello world', decision_note: '' }
+    ],
+    barHeight: 158,
     ars_place_order: [{ ok: true, order_id: 'rsord_new', total: 800, bottles: 3, lines: [], removed: [] }],
     calls
   });
@@ -264,7 +277,9 @@ function parseOrderPage() {
   ok('[3] an unpriced breed is admitted, not shown as ₱0.00', /Price confirmed by the farm/.test(list) && !/₱0\.00 a bottle/.test(list), list.slice(list.indexOf('Duroc Pietrain'), list.indexOf('Duroc Pietrain') + 200));
   ok('[3] the menu note reaches them', /200\+ million motile/.test(list));
   ok('[3] NO stock claim anywhere on the page', !/left|in stock|only \d+ of/.test(list), (list.match(/.{0,60}left.{0,60}/) || [''])[0]);
-  ok('[3] their own past orders show with the farm’s answer', /2 bottles/.test(txt('mine')) && /Pick up at the gate/.test(txt('mine')));
+  ok('[3] their own past orders show with the farm’s answer', /2 bottles/.test(txt('mine')) && /₱800\.00/.test(txt('mine')) && /Pick up at the gate/.test(txt('mine')));
+  ok('[3] an order placed before the farm priced it says so, not ₱0.00', /price to confirm/.test(txt('mine')) && !/4 bottles · ₱0\.00/.test(txt('mine')), (txt('mine').match(/4 bottles[\s\S]{0,90}/) || [''])[0]);
+  ok('[3] the fixed basket bar’s height is measured, not guessed', /--ars-bar-h:158px/.test(P.__barVar || ''), String(P.__barVar));
   P.instance.step('rsobreed_1', 1); P.instance.step('rsobreed_1', 1); P.instance.set('rsobreed_3', '1');
   ok('[3] the basket counts breeds, not batches', /3 bottles · 2 breeds/.test(txt('basket')), txt('basket'));
   ok('[3] an unpriced line keeps the total honest at ₱800', /₱800\.00/.test(txt('sum')), txt('sum'));
@@ -284,7 +299,7 @@ function parseOrderPage() {
   ok('[3] the cart is emptied after sending so nothing double-orders', Object.keys(P.instance.__state().cart).length === 0);
 }
 
-async function bootOrderPage({ search, calls = [], ...resp }) {
+async function bootOrderPage({ search, calls = [], barHeight, ...resp }) {
   const registry = new Map();
   const ctx = {
     console, Date, Math, JSON, Object, Array, String, Number, Boolean, isFinite, parseInt, parseFloat, RegExp, Promise, Error, Set, Map, isNaN, encodeURIComponent,
@@ -304,13 +319,20 @@ async function bootOrderPage({ search, calls = [], ...resp }) {
   ctx.__el = id => { if (!registry.has(id)) registry.set(id, fakeEl('div')); return registry.get(id); };
   ctx.__html = id => String(ctx.__el(id).textContent || '') + String(ctx.__el(id).innerHTML || '');
   const root = fakeEl('div');
-  ctx.document = { getElementById: id => ctx.__el(id), querySelector: sel => ctx.__el(String(sel).replace('#', '')), addEventListener: () => {}, body: fakeEl('body'), documentElement: fakeEl('html'), createElement: t => fakeEl(t) };
+  const barVar = [];
+  ctx.document = {
+    getElementById: id => ctx.__el(id),
+    querySelector: sel => (/^#[A-Za-z0-9_]+$/.test(String(sel)) ? (registry.has(sel.slice(1)) ? ctx.__el(sel.slice(1)) : null) : null),
+    addEventListener: () => {}, body: fakeEl('body'), createElement: t => fakeEl(t),
+    documentElement: { style: { setProperty: (k, v) => barVar.push(`${k}:${v}`) } }
+  };
+  if (barHeight) Object.assign(ctx.__el('bar'), { offsetHeight: barHeight });
   ctx.window = ctx; ctx.globalThis = ctx;
   vm.createContext(ctx);
   vm.runInContext(read('order-page.js'), ctx, { filename: 'order-page.js' });
   ctx.ArsOrderPage.init();
   await tick(); await tick();
-  return { ctx, instance: ctx.ArsOrderPage, __el: ctx.__el, __html: ctx.__html };
+  return { ctx, instance: ctx.ArsOrderPage, __el: ctx.__el, __html: ctx.__html, __barVar: barVar.join(' | ') };
 }
 
 /* ══ [4] link lifecycle + the menu it depends on ══════════════════════════════ */
@@ -648,8 +670,23 @@ async function bootOrderPage({ search, calls = [], ...resp }) {
   ok('[14] and the offline fallback cannot hand a reseller the login screen', /js\/order-page\.js'\)\s*return;/.test(sw));
   ok('[14] order.html is in the deploy layout', /order\.html/.test(build));
   ok('[14] the page is served no-cache and kept out of search engines', /\/order\.html\n  Cache-Control: no-cache/.test(read('_headers')) && /noindex/.test(read('_headers')));
-  ok('[14] the build is bumped so phones drop the old shell', /arswinetech-pro-v232-reseller-sql-recreate/.test(sw) && /v232-reseller-sql-recreate/.test(cfg), sw.split('\n')[7] + ' | ' + cfg.split('\n')[2]);
+  ok('[14] the build is bumped so phones drop the old shell', /arswinetech-pro-v233-reseller-page-scroll/.test(sw) && /v233-reseller-page-scroll/.test(cfg), sw.split('\n')[7] + ' | ' + cfg.split('\n')[2]);
   ok('[14] the page asks for breeds, not bottles', /Which breeds do you need\?/.test(page) && !/Choose your bottles/.test(page));
+
+  /* the fixed basket bar used to steal the last row: a hardcoded 104px of body padding lost
+     to a two-line hint. The height is measured now, with a fallback that is already enough. */
+  ok('[14] the page leaves room for the bar it cannot see', /padding-bottom:calc\(var\(--ars-bar-h,\d+px\)/.test(page), (page.match(/padding-bottom:[^;]+/) || [''])[0]);
+  ok('[14] and its fallback is already taller than a two-line bar', (() => {
+    const m = /--ars-bar-h,(\d+)px\)/.exec(page);
+    return !!m && +m[1] >= 140;
+  })(), (page.match(/--ars-bar-h,\d+px/) || ['none'])[0]);
+  ok('[14] anchors scroll clear of it too', /scroll-padding-bottom:calc\(var\(--ars-bar-h/.test(page));
+  ok('[14] the script publishes the measured height', /setProperty\('--ars-bar-h'/.test(op) && /offsetHeight/.test(op));
+  ok('[14] and re-measures when the bar changes shape', /ResizeObserver/.test(op) && /addEventListener\('resize'/.test(op) && /orientationchange/.test(op));
+  ok('[14] a page without JS still scrolls (CSS does the work)', (page.match(/--ars-bar-h/g) || []).length >= 2);
+  ok('[14] the pick-up date is optional and never pre-filled with a guessed day', /els\.needBy\.value = '';/.test(op) && /\(optional\)/.test(page) && !/els\.needBy\.value = today/.test(op));
+  ok('[14] no date in the page’s code comes from toISOString (the PH off-by-one)', !/toISOString\(\)/.test(op.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '')));
+  ok('[14] the day a reseller is shown is the viewer’s own', /function localDay\(value, offsetMinutes\)/.test(op) && /localDay\(r\.placed_at\)/.test(op));
   ok('[14] every element the page looks up exists in the page', (() => {
     const ids = [...op.matchAll(/id\('([A-Za-z]+)'\)/g)].map(m => m[1]);
     const missing = [...new Set(ids)].filter(i => !new RegExp('id="' + i + '"').test(page));

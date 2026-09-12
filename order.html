@@ -18,7 +18,7 @@
      It holds no data of its own. Everything comes from three SECURITY DEFINER RPCs
      installed by supabase/reseller_orders.sql, which are also the only way in:
        ars_order_shop(text)      → whose link this is
-       ars_order_catalog(text)   → what is on offer, priced from your stock
+       ars_order_catalog(text)   → the farm's order menu (breeds + ₱/bottle)
        ars_place_order(...)      → the request (prices/quantities re-checked there)
        ars_order_status(text)    → this link's recent orders, for the status strip
      ───────────────────────────────────────────────────────────────────────── -->
@@ -26,7 +26,10 @@
 <style>
   *{box-sizing:border-box}
   html,body{margin:0;padding:0}
-  body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:linear-gradient(160deg,#0e2a2e,#071619 65%);color:#eafaf8;min-height:100vh;padding-bottom:104px}
+  /* --ars-bar-h is the fixed basket bar's measured height, written by order-page.js. The
+     default is generous on purpose: if the script never runs, the last row is still clear. */
+  html{scroll-padding-bottom:calc(var(--ars-bar-h,160px) + 20px)}
+  body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:linear-gradient(160deg,#0e2a2e,#071619 65%);color:#eafaf8;min-height:100vh;padding-bottom:calc(var(--ars-bar-h,160px) + env(safe-area-inset-bottom) + 22px)}
   .wrap{max-width:620px;margin:0 auto;padding:16px 14px 0}
   .brand{display:flex;align-items:center;gap:10px;padding:6px 0 2px}
   .brand .dot{width:34px;height:34px;border-radius:11px;background:#0f8b8d;display:grid;place-items:center;font-size:17px;flex:0 0 auto}
@@ -87,8 +90,9 @@
     <div id="list"><div class="sk"></div><div class="sk"></div><div class="sk"></div></div>
 
     <h2>When &amp; anything we should know</h2>
-    <label class="field">Pick-up date wanted
+    <label class="field">Pick-up date wanted (optional)
       <input type="date" id="needBy" min="">
+      <span style="display:block;font-size:10.5px;color:#9dc3bf;text-transform:none;letter-spacing:0;font-weight:500;margin-top:4px">Leave it empty if any day works — the farm will ask you either way.</span>
     </label>
     <label class="field">Note for the farm
       <textarea id="note" maxlength="240" placeholder="e.g. pick up by 8 AM, any boar is fine, bring the ice gel box"></textarea>

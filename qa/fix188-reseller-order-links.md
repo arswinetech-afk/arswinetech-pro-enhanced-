@@ -1,4 +1,4 @@
-# FIX 188 / FIX 189 — Reseller order links and the farm's order menu (v230 → v231 → v232)
+# FIX 188 / FIX 189 — Reseller order links and the farm's order menu (v230 → v233)
 
 > Your question: *"Is it possible to send a link where this link will have like an ordering
 > counter page, whereas the reseller can simply place their order and once they click
@@ -13,6 +13,36 @@
 > **v232** is that same build with a fixable install: pasting the SQL onto a farm that already
 > had v230 died with `42P13 cannot change return type of existing function`, because v231
 > changed what the catalogue function returns. Build `v232-reseller-sql-recreate-2026-09-12`.
+
+## v233 — the last row of the reseller's page was unreachable behind the basket bar
+
+Their screenshot was the page scrolled to its limit: **"My recent orders" showed one line of a
+row and nothing more** — the pick-up date, the farm's answer and the status chip were under the
+fixed bar, and the page would not scroll any further. The cause was a promise the CSS could not
+keep: `body{padding-bottom:104px}` next to a bar whose real height is 11px + the totals row +
+the button + a hint that wraps to two lines + `env(safe-area-inset-bottom)` ≈ 150-165px on a
+phone. Any hint longer than one line ate the padding, and the more useful the hint, the more
+content it buried.
+
+Guessing is not the fix — the page measures. `syncBarSpace()` reads the bar's own height and
+publishes it as `--ars-bar-h`; the CSS reserves `calc(var(--ars-bar-h,160px) + env(safe-area-inset-bottom) + 22px)`
+and sets `scroll-padding-bottom` so an anchor jump also lands clear. It runs after every paint
+(the hint changes height exactly when the basket changes), on `resize`/`orientationchange`, and
+through a `ResizeObserver` when the browser has one. The `160px` default is the point: with the
+script failing entirely, a reseller still reaches the bottom of their own history.
+
+Two honest numbers on the same screen were fixed while in there, both from that screenshot:
+
+- **`09/12/2026` in "Pick-up date wanted" at 00:01 on 09/13.** The page took "today" from
+  `new Date().toISOString().slice(0,10)` — a UTC string — so for eight hours of every Philippine
+  day the field defaulted to, and refused to accept, *yesterday*. A helper now formats the
+  viewer's own calendar day, the same way an order's date is printed under "My recent orders"
+  (a row placed at 00:30 in Dasmariñas no longer reads as the previous evening). The field is
+  also labelled *(optional)* and left blank instead of pre-filling a date they never chose —
+  "wants it tomorrow" and "any day" are different requests to the farm.
+- **`4 bottles · ₱0.00`** on an order placed before the menu was priced. On a money screen ₱0.00
+  reads as *free*, so the reseller's page now says what the app has said since v231: **price to
+  confirm**, in the same amber the farm's inbox uses.
 
 ## v232 — why the paste failed, and why dropping is the right answer
 
@@ -124,15 +154,15 @@ revocable** · **Phase 1 now**.
 
 | File | Change |
 |---|---|
-| `order.html` *(new, root)* | The reseller's ordering page. Own `<style>` on purpose: a future `app.css` change can never break a link you already handed out. v231: the heading asks *"Which breeds do you need?"*, the bottles-left pill is gone. |
-| `order-page.js` → `js/order-page.js` *(new)* | Token parsing, cart maths, the quantity-only `rpc` calls, their own status list. v231: the cart is capped at 999/line with a stated reason and a retired breed is dropped with one; no stock figure exists anywhere in the file. |
+| `order.html` *(new, root)* | The reseller's ordering page. Own `<style>` on purpose: a future `app.css` change can never break a link you already handed out. v231: the heading asks *"Which breeds do you need?"*, the bottles-left pill is gone. v233: the room for the fixed bar is a measured CSS variable with a 160px fallback, and the pick-up date is optional. |
+| `order-page.js` → `js/order-page.js` *(new)* | Token parsing, cart maths, the quantity-only `rpc` calls, their own status list. v231: the cart is capped at 999/line with a stated reason and a retired breed is dropped with one; no stock figure exists anywhere in the file. v233: `localDay()` for every date it shows or accepts, `syncBarSpace()` measuring the basket bar, and "price to confirm" instead of ₱0.00. |
 | `supabase/reseller_orders.sql` *(new)* | The install you paste once: 3 partial indexes + 4 `security definer` functions. No new table. v231: the catalogue reads the farm's menu, `ars_place_order` takes the menu price and touches no stock, and its loop variable is `jsonb` (the `record ->>` fix). |
 | `semen-sales.js` | Badge in the Registered Resellers KPI box · `🛒 Order link` per reseller · the order inbox · link create/pause/supersede + QR/copy/share · `acceptResellerOrder` → prefilled pick-up (one-shot `pendingPickupPrefill`) · decline with a reason · `👁 Seen`. **v231:** `🧬 Order menu` editor in the toolbar (+ `🛒 Orders (N)`), `ensureResellerOrderMenu` seeded once and never re-seeded behind an empty list, the `🛒 N order new` chip on each reseller's card, the pop-up + beep + vibration with `ars-order-notified:<farmId>`, breed-shaped prefill with the batch left blank, `ordered_rate` so a batch pick cannot re-price an accepted order, and the link sheet's menu warning. |
 | `client.js` | `entityMap` += `semenResellerOrders: 'semen_reseller_order'`, `semenResellerOrderLinks: 'semen_reseller_order_link'`, `semenOrderBreeds: 'semen_order_breed'` — so orders, links and the menu sync, back up and restore like every other record (the menu must sync: the public page reads it from the cloud). |
 | `app.js` | `sanitizeFarm` initialises the three buckets, as it does for all the others. |
 | `sw.js` | `/order.html` and `/js/order-page.js` bypass the app cache (a reseller must never get yesterday's page, and offline must not hand them your login screen). |
-| `_headers`, `config.js` | `order.html` served `no-cache` + `X-Robots-Tag: noindex`; version `v232-reseller-sql-recreate-2026-09-12`. |
-| `qa/build-deploy-layout.sh`, `qa/test-reseller-orders.mjs` | the page is copied into the deploy layout; 197 checks. |
+| `_headers`, `config.js` | `order.html` served `no-cache` + `X-Robots-Tag: noindex`; version `v233-reseller-page-scroll-2026-09-13`. |
+| `qa/build-deploy-layout.sh`, `qa/test-reseller-orders.mjs` | the page is copied into the deploy layout; 213 checks. |
 
 No `_worker.js` change is needed: it only special-cases `/ars-head` and otherwise falls
 through to `env.ASSETS.fetch(request)`, so `/order.html` is served as a static asset.
@@ -191,7 +221,7 @@ lists their own recent orders as `Waiting for the farm` / `Accepted — ready to
 
 ## Checks that ran
 
-`node qa/test-reseller-orders.mjs` → **197/197** (page arithmetic with no stock in it and the
+`node qa/test-reseller-orders.mjs` → **213/213** (page arithmetic with no stock in it and the
 999 cap; the payload that leaves the phone; the fake-browser end-to-end incl. an unpriced breed
 admitted as "Price confirmed by the farm"; link lifecycle incl. supersede and pause; the menu —
 seeded once, emptied stays emptied, duplicates refused, a draft line pruned on cancel, and a

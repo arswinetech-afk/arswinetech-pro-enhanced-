@@ -4,8 +4,8 @@
    Loaded only by order.html (a public page): no app code, no service worker, no
    login. It keeps no data — the cart lives in this tab's localStorage so a reload
    does not lose a reseller's picks, and every number that matters is recomputed
-   server-side by ars_place_order() from YOUR stock. The clamping here is only so
-   the reseller sees "you can take 4 of these" while typing; if this file were
+   server-side by ars_place_order() from the farm's ORDER MENU. Nothing here mentions
+   stock, because a reseller's request is not gated by the cooler; if this file were
    deleted, an order would still arrive correct.
 
    Pure parts (parseToken / clampCart / cartTotals / rpcBody / statusOf) are unit
@@ -27,6 +27,20 @@ window.ArsOrderPage = (function () {
   }
 
   const itemKey = it => String(it.item_key || it.key || it.breed_id || it.breed || it.boar || '');
+
+  /* A calendar day in the VIEWER's timezone, never UTC's. `toISOString().slice(0,10)`
+     looked right in the afternoon and was yesterday's date every evening between
+     midnight and 8 AM Philippine time — which is exactly when a reseller plans a pick-up
+     for tomorrow. offsetMinutes is Date#getTimezoneOffset()'s own convention (UTC+8 →
+     -480), and passing it in keeps this testable without rewriting the host's clock. */
+  function localDay(value, offsetMinutes) {
+    const d = new Date(value === undefined ? Date.now() : value);
+    if (isNaN(d.getTime())) return '';
+    const off = offsetMinutes === undefined ? d.getTimezoneOffset() : +offsetMinutes;
+    const shifted = new Date(d.getTime() - off * 60000);
+    const p = n => String(n).padStart(2, '0');
+    return `${shifted.getUTCFullYear()}-${p(shifted.getUTCMonth() + 1)}-${p(shifted.getUTCDate())}`;
+  }
 
   /* No stock maths here on purpose: a reseller orders a BREED and the farm decides
      which boar to collect, so the only limits are "is this still on the menu" and the
@@ -132,6 +146,34 @@ window.ArsOrderPage = (function () {
     }).join('');
   }
 
+  /* The basket bar is fixed, so the LAST thing on the page is always the thing under it.
+     A hardcoded body padding was the bug: two lines of hint text (or a notched phone, or
+     the Messenger webview's own chrome) pushed the bar taller than the padding and the
+     reseller's own order row sat unreachable behind it. So the bar is measured, not
+     guessed, and re-measured whenever its content changes. */
+  function syncBarSpace() {
+    try {
+      const bar = els && els.bar;
+      if (!bar || bar.hidden) return;
+      const h = bar.offsetHeight || (bar.getBoundingClientRect && bar.getBoundingClientRect().height) || 0;
+      if (!(h > 0)) return;
+      document.documentElement.style.setProperty('--ars-bar-h', Math.ceil(h) + 'px');
+    } catch (_) { /* the CSS fallback (a generous --ars-bar-h default) still applies */ }
+  }
+
+  function watchBarSize() {
+    syncBarSpace();
+    try {
+      if (typeof ResizeObserver !== 'undefined' && els && els.bar) new ResizeObserver(syncBarSpace).observe(els.bar);
+    } catch (_) {}
+    try {
+      if (window.addEventListener) {
+        window.addEventListener('resize', syncBarSpace);
+        window.addEventListener('orientationchange', syncBarSpace);
+      }
+    } catch (_) {}
+  }
+
   function paintBar(warn) {
     const t = cartTotals(cart, catalog);
     els.basket.textContent = t.bottles ? `${t.bottles} bottle${t.bottles > 1 ? 's' : ''} · ${t.lines.length} breed${t.lines.length > 1 ? 's' : ''}` : 'Nothing picked yet';
@@ -140,17 +182,28 @@ window.ArsOrderPage = (function () {
     els.hint.innerHTML = warn || (t.unpriced
       ? `${t.unpriced} line${t.unpriced > 1 ? 's have' : ' has'} no price on the menu yet — the farm will confirm the amount when they accept.`
       : 'The farm confirms every order and chooses which boar to collect — nothing is charged yet.');
+    syncBarSpace();          /* the hint line above can wrap to two lines — re-measure it */
     return t;
   }
 
   function paintOrders(rows) {
     const list = Array.isArray(rows) ? rows : (rows && rows.rows) || [];
-    if (!list.length) { els.mine.innerHTML = `<li><span>No orders from this link yet.</span></li>`; return; }
+    if (!list.length) { els.mine.innerHTML = `<li><span>No orders from this link yet.</span></li>`; syncBarSpace(); return; }
     els.mine.innerHTML = list.map(r => {
-      const st = statusOf(r.status);
-      const when = String(r.placed_at || '').slice(0, 10);
-      return `<li><span><b>${r.bottles || 0} bottle${(+r.bottles || 0) === 1 ? '' : 's'}</b> · ${money(r.total)}${when ? ` · <span style="color:#9dc3bf">${esc(when)}</span>` : ''}${r.note ? `<br><span style="color:#9dc3bf">“${esc(r.note)}”</span>` : ''}${r.decision_note ? `<br><span style="color:#f0b64b">Farm: ${esc(r.decision_note)}</span>` : ''}</span><span class="chip ${st.key}">${st.label}</span></li>`;
+      return orderRowHTML(r);
     }).join('');
+    syncBarSpace();
+  }
+
+  function orderRowHTML(r) {
+    const st = statusOf(r.status);
+    const when = r.placed_at ? localDay(r.placed_at) : '';
+    const bottles = +r.bottles || 0;
+    /* ₱0.00 with bottles in it does not mean free — it means the farm had not priced
+       that breed on its menu yet. Say that, on both sides of the transaction. */
+    const amount = !(+r.total > 0) && bottles > 0
+      ? '<span style="color:#f0b64b">price to confirm</span>' : money(r.total);
+    return `<li><span><b>${bottles} bottle${bottles === 1 ? '' : 's'}</b> · ${amount}${when ? ` · <span style="color:#9dc3bf">${esc(when)}</span>` : ''}${r.note ? `<br><span style="color:#9dc3bf">“${esc(r.note)}”</span>` : ''}${r.decision_note ? `<br><span style="color:#f0b64b">Farm: ${esc(r.decision_note)}</span>` : ''}</span><span class="chip ${st.key}">${st.label}</span></li>`;
   }
 
   function refreshOrders() {
@@ -194,6 +247,7 @@ window.ArsOrderPage = (function () {
         <br><span style="color:#9dc3bf">Keep this link open — its status updates right here.</span>`;
       els.main.hidden = false;
       window.scrollTo({ top: 0, behavior: 'smooth' });
+      syncBarSpace();
     } catch (e) {
       say(esc(e && e.message ? e.message : 'Could not reach the farm. Check your connection and try again.'));
     } finally {
@@ -210,8 +264,8 @@ window.ArsOrderPage = (function () {
       if (els && els.farmName) els.farmName.textContent = 'Ordering link';
       return;
     }
-    const today = new Date().toISOString().slice(0, 10);
-    els.needBy.min = today; els.needBy.value = today;
+    const today = localDay();          /* their today, not the server's */
+    els.needBy.min = today; els.needBy.value = '';
     try {
       const [shop, cat] = await Promise.all([
         rpc('ars_order_shop', { p_token: token }).catch(() => null),
@@ -227,6 +281,7 @@ window.ArsOrderPage = (function () {
       cart = clampCart(loadDraft(), catalog).cart;   /* a draft saved yesterday drops breeds the farm retired */
       els.main.hidden = false; els.bar.hidden = false;
       paintList(); paintBar(); refreshOrders();
+      watchBarSize();
     } catch (e) {
       say(esc(e && e.message ? e.message : 'Could not reach the farm.'));
     }
@@ -249,6 +304,7 @@ window.ArsOrderPage = (function () {
     init, step, set, submit,
     /* pure, unit-tested */
     parseToken, clampCart, cartTotals, rpcBody, statusOf, money, itemKey,
+    localDay, orderRowHTML,
     __state: () => ({ token, catalog, cart })
   };
 })();
