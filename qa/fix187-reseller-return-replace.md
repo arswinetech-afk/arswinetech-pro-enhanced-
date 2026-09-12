@@ -1,8 +1,9 @@
 # FIX 187 — reseller Return & Replace: many replacement batches, and no lost pesos
 
-Build: `v227-reseller-return-2026-09-12`, hotfixed by `v228-return-modal-shell-2026-09-12` ·
+Build: `v227-reseller-return-2026-09-12`, hotfixed by `v228-return-modal-shell-2026-09-12`,
+then `v229-undo-returned-qty-2026-09-12` (undo for a mis-keyed return) ·
 files touched: `semen-sales.js` (reseller section), `sw.js`, `config.js`
-Verification: `node qa/test-reseller-return.mjs` → 126/126 (includes the v228 markup guard below)
+Verification: `node qa/test-reseller-return.mjs` → 167/167 (v228 markup guard + the v229 undo cases)
 
 ## What was reported
 
@@ -103,7 +104,7 @@ re-derived automatically. Two supported paths (use one, not both):
 `arsResellerReturnMath.derive(tx)` in the browser console reports
 `{ derived, stored, drift, balance, manual }` for any pickup without changing it.
 
-## Test coverage (`qa/test-reseller-return.mjs`, 126 checks)
+## Test coverage (`qa/test-reseller-return.mjs`, 167 checks)
 
 Boots the real `semen-sales.js` in a VM and drives the actual `window.rr*` /
 `saveResellerReturnReplace` / `saveEditResellerTx` handlers: multi-batch replacement,
@@ -171,3 +172,71 @@ is present, the panel is `due-modal reseller-hub-wrap`, the header/footer use `m
 either sheet exists in `app.css` (a fixed allow-list covers the unstyled JS hooks
 `.rr-*`/`.modal-bd`). **Rule for this file: never invent a class name for an overlay; copy one
 of the hub's existing sheets.**
+
+---
+
+# v229 — ↩ Undo the returned quantity
+
+**Requested from the phone (screenshot, red arrow at `returned 10 → 10`).** Once a return is
+saved the number is spent: the line reads `0 still returnable` and there is no way back short
+of cancelling a replacement row. Humans mis-key this, so the form now has an explicit undo on
+every line that has a recorded return.
+
+## What appears
+
+Under the line header, on any line with recorded returns:
+
+```
+↩︎ Undo the returned qty
+Recorded as returned: 10. Returned the wrong number? Put some or all of them back.
+                                     How many [ 10 ]   [ ↩︎ Undo all 10 | ✕ Keep the return ]
+```
+
+* **`↩︎ Undo all N`** — one tap arms the whole recorded return; the button then reads
+  **`✕ Keep the return`**, so a mis-tap is disarmed before anything can happen.
+* **`How many`** — type a smaller number to undo only part of it (10 recorded but only 2 were
+  truly returned → undo 8; or undo all 10 and re-enter 2 — both land in the same place).
+* The preview under the card follows immediately — `returned 10 → 2`, `line: ₱1500.00 →
+  ₱2000.00`, invoice and balance included — and `still returnable` widens, which is what makes
+  “undo, then type the right number” one save instead of two.
+* Nothing is written until **Save**, and Save still applies the whole form or refuses it.
+
+A wrong quantity that was **typed but never saved** gets a lighter control on the same row —
+`✕ Clear this entry` — because reversing stock for an unsaved draft would be wrong.
+
+## What a save reverses
+
+| the recorded return had been | the undo does |
+|---|---|
+| `Discard — not restocked` | removes the credit (the line re-derives to `(qty − returned) × rate + replacements`) and **leaves batch stock alone** — those bottles never went back |
+| `Restock — add back into <batch>` | removes the credit **and** takes those bottles back out of that batch |
+
+The stock side is exact per bottle rather than per last-picked-action: each line now carries
+`returned_restocked` (how many of its recorded returns physically went back into stock), so a
+line restocked once and discarded once gives back only what is really in the batch. Legacy
+records without the field fall back to their stored `return_action`, which is what the old
+build's behaviour implies.
+
+Two refusals, in the same “nothing half-applied” style as the rest of FIX 187:
+
+* asking to undo more than is recorded → clamped by the box, refused if it reaches the save;
+* an undo whose batch cannot give the bottles back (they were sold on since) →
+  `B1 Large White would end up 3 bottle(s) below zero — the undo takes back more than its 1 on
+  hand. Undo fewer bottles, or correct that batch in Semen Inventory first.` and nothing is saved.
+
+Written on save: `return_audit[].undone` per event plus `returned_before` / `returned` /
+`undone` per line; `returned_count` re-derived on the header, so the receipt and the Bluetooth
+slip stop printing the reversed bottles; a sentence in `replacement_notes` /
+`adjustment_notes` naming the count and the pesos; `sync_status → 'pending'`; and a toast that
+ends `· 3 returned bottle(s) undone`. Arming costs nothing to undo — it lives only in the form
+draft, so closing the sheet without saving changes the record not at all.
+
+## Coverage
+
+`qa/test-reseller-return.mjs` section **[14]**, 24 new checks (167 total, all passing): a full
+undo restores line, invoice and balance while keeping replacement money that was genuinely
+handed over; a partial undo of 8 of 10; a discard-undo leaving the batch alone versus a
+restock-undo pulling 4 bottles back out; the below-zero refusal writing nothing and firing no
+`save()`; the clamp; undo-then-retype ending at 1 returned; `✕ Clear this entry` on an unsaved
+draft saving nothing; and re-opening after an undo cannot push `returned_qty` negative or write
+a second time.

@@ -141,6 +141,7 @@ function seed() {
   };
 }
 const lotOf = (db, id) => db.semen.find(s => s.id === id);
+const lotOnHandOf = s => Math.max(0, +((s && (s.available_bottles !== undefined ? s.available_bottles : s.bottles)) || 0));
 const editForm = (ctx, { total, paid = '0', reason = '', rebuild = false, notes = '' }) => {
   ctx.__setValue('etx_timestamp', '');
   ctx.__setValue('etx_total', String(total));
@@ -548,6 +549,149 @@ console.log('\n[FIX 187] reseller return & replace\n');
     fs.writeFileSync('/tmp/ret-sheet.html', ret ? ret.html : '');
     fs.writeFileSync('/tmp/edt-sheet.html', edt ? edt.html : '');
   }
+}
+
+
+/* ── [14] undoing a mis-keyed return (v229) ──────────────────────────────────────
+   The dead end that prompted this: a line showed "returned 10 → 10 · 0 still
+   returnable", so the person who returned the wrong number had no way back — the
+   quantity was already spent. Undo has to move the money AND the bottles, refuse when
+   the batch cannot give them back, and stay reversible before Save. */
+const openUndo = (ctx, lIdx, n) => {
+  ctx.openResellerReturnReplaceModal('RTX-1');
+  if (n === 'all') ctx.rrUndoReturn(lIdx); else ctx.rrUndoQty(lIdx, String(n));
+};
+
+{ /* 14a — full undo after a saved return: the pesos come back, the batch does not move */
+  const db = seed();
+  const ctx = boot(db);
+  const tx = db.semenResellerTx[0], lw = lotOf(db, 'SEM-LW');
+  ctx.openResellerReturnReplaceModal('RTX-1');
+  ctx.rrRetQty(0, 3);
+  ctx.rrAddRow(0); ctx.rrPick(0, 0, 'SEM-LW'); ctx.rrQty(0, 0, 2);
+  ctx.saveResellerReturnReplace({ preventDefault() {} }, 'RTX-1');
+  eq('[14a] setup: 3 returned, line billed for the 2 replacement bottles only', tx.lines[0].amount, 800);
+  eq('[14a] setup: invoice', tx.total_amount, 2250);
+  eq('[14a] setup: 2 bottles deducted from the batch', lw.available_bottles, 8);
+
+  openUndo(ctx, 0, 'all');
+  ctx.saveResellerReturnReplace({ preventDefault() {} }, 'RTX-1');
+  eq('[14a] the recorded return is gone', tx.lines[0].returned_qty, 0);
+  eq('[14a] the line is billed for everything it dispatched again', tx.lines[0].amount, 2000);
+  eq('[14a] invoice follows the line', tx.total_amount, 3450);
+  eq('[14a] balance follows the invoice', tx.balance, 3450);
+  eq('[14a] the replacement the reseller really took is still billed', tx.lines[0].replaced_qty, 2);
+  eq('[14a] a discarded return being undone touches no batch', lw.available_bottles, 8);
+  eq('[14a] the pickup header stops claiming a return', tx.returned_count, 0);
+  const aud = (tx.return_audit || []).slice(-1)[0];
+  eq('[14a] the audit trail says 3 were undone', aud.undone, 3);
+  ok('[14a] and names the before/after for the line', aud.lines[0].returned_before === 3 && aud.lines[0].returned === 0, JSON.stringify(aud.lines[0]));
+  ok('[14a] the row is marked for the cloud sync again', tx.sync_status === 'pending', tx.sync_status);
+  ok('[14a] the toast admits what it did', /undone/.test(ctx.lastToast()), ctx.lastToast());
+}
+
+{ /* 14b — partial undo: 10 recorded, 2 was the truth (the screenshot's case) */
+  const db = seed();
+  db.semenResellerTx[0].lines = [{ semen_id: 'SEM-LW', boar: 'B1 Large White', breed: 'LY', semen_batch_no: 'B1LW',
+    qty: 10, rate: 250, amount: 0, returned_qty: 10, return_reason: 'Unused / Unsold', replaced_qty: 0, is_returned_replaced: true }];
+  db.semenResellerTx[0].total_amount = 0; db.semenResellerTx[0].balance = 0;
+  const ctx = boot(db), tx = db.semenResellerTx[0];
+  openUndo(ctx, 0, 8);                        // undo 8 of the 10 → 2 stay returned
+  ctx.saveResellerReturnReplace({ preventDefault() {} }, 'RTX-1');
+  eq('[14b] only what was really returned stays recorded', tx.lines[0].returned_qty, 2);
+  eq('[14b] 8 bottles back on the invoice at ₱250', tx.lines[0].amount, 2000);
+  eq('[14b] invoice', tx.total_amount, 2000);
+  eq('[14b] the return flag survives while anything is still returned', tx.lines[0].is_returned_replaced ? 1 : 0, 1);
+}
+
+{ /* 14c — undo of a RESTOCKED return takes the bottles back out of the batch */
+  const db = seed();
+  db.semenResellerTx[0].lines = [{ semen_id: 'SEM-LW', boar: 'B1 Large White', breed: 'LY', semen_batch_no: 'B1LW',
+    qty: 4, rate: 400, amount: 0, returned_qty: 4, return_action: 'restock', returned_restocked: 4, replaced_qty: 0 }];
+  db.semenResellerTx[0].total_amount = 0; db.semenResellerTx[0].balance = 0;
+  const ctx = boot(db), tx = db.semenResellerTx[0], lw = lotOf(db, 'SEM-LW');
+  lw.available_bottles = lw.bottles = 6;       // 4 of them only exist because of that restock
+  openUndo(ctx, 0, 'all');
+  ctx.saveResellerReturnReplace({ preventDefault() {} }, 'RTX-1');
+  eq('[14c] return removed from the line', tx.lines[0].returned_qty, 0);
+  eq('[14c] invoice restored', tx.total_amount, 1600);
+  eq('[14c] the 4 restocked bottles left the batch again', lotOnHandOf(lw), 2);
+  ok('[14c] reason cleared once nothing is returned', !tx.lines[0].return_reason && !tx.lines[0].return_action, JSON.stringify([tx.lines[0].return_reason, tx.lines[0].return_action]));
+}
+
+{ /* 14d — the batch cannot give them back: refuse the whole save, change nothing */
+  const db = seed();
+  db.semenResellerTx[0].lines = [{ semen_id: 'SEM-LW', boar: 'B1 Large White', breed: 'LY', semen_batch_no: 'B1LW',
+    qty: 4, rate: 400, amount: 0, returned_qty: 4, return_action: 'restock', returned_restocked: 4, replaced_qty: 0 }];
+  db.semenResellerTx[0].total_amount = 0; db.semenResellerTx[0].balance = 0;
+  const ctx = boot(db), tx = db.semenResellerTx[0], lw = lotOf(db, 'SEM-LW');
+  lw.available_bottles = lw.bottles = 1;       // those bottles were already sold on to someone else
+  openUndo(ctx, 0, 'all');
+  const savesBefore = ctx.__saves;
+  ctx.saveResellerReturnReplace({ preventDefault() {} }, 'RTX-1');
+  eq('[14d] nothing was written — return still recorded', tx.lines[0].returned_qty, 4);
+  eq('[14d] invoice untouched', tx.total_amount, 0);
+  eq('[14d] batch untouched', lotOnHandOf(lw), 1);
+  eq('[14d] no save() fired', ctx.__saves - savesBefore, 0);
+  ok('[14d] the refusal explains the batch, not just "invalid"', /below zero/.test(ctx.lastToast()) && /more than its 1 on hand/.test(ctx.lastToast()) && /Undo fewer/.test(ctx.lastToast()), ctx.lastToast());
+}
+
+{ /* 14e — the box cannot ask for more than was recorded, even typed that way */
+  const db = seed();
+  db.semenResellerTx[0].lines[0].returned_qty = 3;
+  db.semenResellerTx[0].lines[0].amount = 0;
+  db.semenResellerTx[0].total_amount = 0; db.semenResellerTx[0].balance = 0;
+  const ctx = boot(db), tx = db.semenResellerTx[0];
+  openUndo(ctx, 0, 99);
+  ctx.saveResellerReturnReplace({ preventDefault() {} }, 'RTX-1');
+  eq('[14e] undo clamps to the 3 recorded returns', tx.lines[0].returned_qty, 0);
+  eq('[14e] and never negatives the line', tx.lines[0].amount, 1200);
+}
+
+{ /* 14f — the actual correction in one save: undo the 10, enter the 2 */
+  const db = seed();
+  const ctx = boot(db), tx = db.semenResellerTx[0];
+  ctx.openResellerReturnReplaceModal('RTX-1');
+  ctx.rrRetQty(0, 3);
+  ctx.saveResellerReturnReplace({ preventDefault() {} }, 'RTX-1');
+  eq('[14f] setup: 3 returned, nothing replaced', tx.lines[0].amount, 0);
+  openUndo(ctx, 0, 3);                          // take the whole mistake back…
+  ctx.rrRetQty(0, 1);                           // …and record what actually happened
+  ctx.saveResellerReturnReplace({ preventDefault() {} }, 'RTX-1');
+  eq('[14f] ends at the one bottle that was truly returned', tx.lines[0].returned_qty, 1);
+  eq('[14f] line bills the 2 kept bottles', tx.lines[0].amount, 800);
+  eq('[14f] invoice = 800 + the untouched second line', tx.total_amount, 2250);
+}
+
+{ /* 14g — a wrong number that was never saved needs no reversal, only a clear */
+  const db = seed();
+  const ctx = boot(db), tx = db.semenResellerTx[0];
+  ctx.openResellerReturnReplaceModal('RTX-1');
+  ctx.rrRetQty(0, 9);                           // more than the line has: would be refused
+  ctx.rrClearReturn(0);
+  const savesBefore = ctx.__saves;
+  ctx.saveResellerReturnReplace({ preventDefault() {} }, 'RTX-1');
+  ok('[14g] cleared draft saves nothing', /Nothing to save/.test(ctx.lastToast()), ctx.lastToast());
+  eq('[14g] no write', ctx.__saves - savesBefore, 0);
+  eq('[14g] record untouched', tx.lines[0].returned_qty, 0);
+  eq('[14g] invoice untouched', tx.total_amount, 2650);
+}
+
+{ /* 14h — re-opening after the undo must not offer a second undo of the same bottles */
+  const db = seed();
+  const ctx = boot(db), tx = db.semenResellerTx[0];
+  ctx.openResellerReturnReplaceModal('RTX-1');
+  ctx.rrRetQty(0, 2);
+  ctx.saveResellerReturnReplace({ preventDefault() {} }, 'RTX-1');
+  openUndo(ctx, 0, 'all');
+  ctx.saveResellerReturnReplace({ preventDefault() {} }, 'RTX-1');
+  eq('[14h] undone once', tx.lines[0].returned_qty, 0);
+  openUndo(ctx, 0, 'all');                      // nothing recorded now → nothing to arm
+  const savesBefore = ctx.__saves;
+  ctx.saveResellerReturnReplace({ preventDefault() {} }, 'RTX-1');
+  eq('[14h] a second undo cannot push the count negative', tx.lines[0].returned_qty, 0);
+  eq('[14h] invoice unchanged', tx.total_amount, 2650);
+  eq('[14h] nothing written', ctx.__saves - savesBefore, 0);
 }
 
 console.log(`\n${failures ? 'FAILED' : 'OK'} — ${checks - failures}/${checks} checks passed\n`);

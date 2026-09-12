@@ -3358,10 +3358,10 @@
 
   /* Line total as it would read if the open form were saved right now — the preview and
      the save share these primitives so the number shown is the number written. */
-  function projectedResellerLineAmount(l, extraReturned, keptReps, addedReps) {
+  function projectedResellerLineAmount(l, extraReturned, keptReps, addedReps, undoneReturned) {
     const c = {
       qty: +l.qty || 0, rate: +l.rate || 0, amount: +l.amount || 0,
-      returned_qty: Math.max(0, +l.returned_qty || 0) + Math.max(0, +extraReturned || 0),
+      returned_qty: Math.max(0, Math.max(0, +l.returned_qty || 0) - Math.max(0, +undoneReturned || 0)) + Math.max(0, +extraReturned || 0),
       replacements: keptReps.concat(addedReps)
     };
     return resellerLineAmount(c);
@@ -3375,11 +3375,18 @@
 
   /* ── the modal ── */
   let activeReturnTxId = null;
-  let returnDraft = null;   /* { txId, ret:{lIdx:{qty,reason,action}}, adds:{lIdx:[row]}, removes:{'lIdx:i':true} } */
+  /* Draft of what the open form intends to do — nothing here touches the ledger until
+     Save validates the whole thing at once.
+     { txId, ret:{lIdx:{qty,reason,action}}, adds:{lIdx:[row]}, removes:{'lIdx:i':true},
+       undoes:{lIdx:n} }
+     `undoes[lIdx]` = how many of the ALREADY RECORDED returns on that line are being put
+     back on the invoice, because a mis-keyed return quantity is the most common mistake of
+     all on this screen (there is no way to un-ring one without it). */
+  let returnDraft = null;
 
   function ensureReturnDraft(txId) {
     if (!returnDraft || returnDraft.txId !== txId) {
-      returnDraft = { txId, ret: {}, adds: {}, removes: {} };
+      returnDraft = { txId, ret: {}, adds: {}, removes: {}, undoes: {} };
       activeReturnTxId = txId;
     }
     return returnDraft;
@@ -3403,7 +3410,17 @@
        batch, quantity and price, because the batch price is the price indicator. */
     function renderLineBlock(l, lIdx) {
       const storedReps = lineReplacements(l);
-      const returnable = Math.max(0, (+l.qty || 0) - Math.max(0, +l.returned_qty || 0));
+      const storedReturned = Math.max(0, +l.returned_qty || 0);
+      /* An armed undo is staged in the draft like a cancelled replacement row: it changes
+         nothing until Save, and the "still returnable" figure follows it, so the operator
+         can undo 10 and re-enter the 2 they actually meant. */
+      const undoN = Math.min(storedReturned, Math.max(0, parseInt((d.undoes || {})[lIdx], 10) || 0));
+      /* only the bottles that were actually restocked can be taken back out; the rest were
+         discarded, so undoing those moves money and stock count but no batch change. */
+      const restockedRec = l.returned_restocked !== undefined ? Math.max(0, +l.returned_restocked || 0)
+        : (l.return_action === 'restock' ? storedReturned : 0);
+      const backOut = Math.min(undoN, restockedRec);
+      const returnable = Math.max(0, (+l.qty || 0) - (storedReturned - undoN));
       const retDraft = d.ret[lIdx] || {};
       const retQty = retDraft.qty !== undefined ? retDraft.qty : 0;
       const adds = d.adds[lIdx] || [];
@@ -3443,10 +3460,20 @@
             <small class="muted">${escH(l.semen_batch_no || '')} — ${+l.qty || 0} × ₱${+l.rate || 0} = ₱${(+l.qty || 0) * (+l.rate || 0)}</small></div>
           <div class="rr-state" style="font-size:11px;text-align:right"></div>
         </div>
+        ${storedReturned > 0 ? `<div class="adj-qty-row" data-rr-undo-row="${lIdx}" style="margin-top:8px;padding:7px 9px;border-radius:9px;border:1px solid ${undoN ? 'rgba(240,182,75,.5)' : 'rgba(110,200,255,.22)'};background:${undoN ? 'rgba(240,182,75,.13)' : 'rgba(15,62,63,.5)'}">
+          <span style="flex:1 1 132px;min-width:0;font-size:11.5px"><b>↩︎ Undo the returned qty</b>
+            <small class="muted" style="display:block">Recorded as returned: <b>${storedReturned}</b>. ${undoN ? `Undoing <b>${undoN}</b>: back on the invoice${backOut > 0 ? ` and ${backOut} out of ${escH(l.semen_batch_no || 'that batch')} again` : ''}${undoN > backOut ? ` · ${undoN - backOut} ${undoN - backOut === 1 ? 'was' : 'were'} discarded, so batch stock unchanged` : ''}.` : 'Returned the wrong number? Put some or all of them back.'}</small></span>
+          <label class="field" style="font-size:10.5px;color:var(--muted);display:flex;align-items:center;gap:4px">How many
+            <input class="suggest-input" type="number" min="1" max="${storedReturned}" step="1" inputmode="numeric" value="${undoN || ''}" placeholder="${storedReturned}" style="width:62px;text-align:center;font-weight:800" oninput="window.rrUndoQty(${lIdx},this.value)" ${isVoided ? 'readonly' : ''} title="How many of the ${storedReturned} recorded returns to cancel — blank means all of them" /></label>
+          <button type="button" class="btn ghost small" data-rr-undo-toggle="${lIdx}" style="color:${undoN ? 'var(--danger)' : '#b7e9c7'}" onclick="window.rrUndoReturn(${lIdx})" ${isVoided ? 'disabled' : ''}>${undoN ? '✕ Keep the return' : `↩︎ Undo all ${storedReturned}`}</button>
+        </div>` : (+((d.ret[lIdx] || {}).qty) || 0) > 0 ? `<div class="adj-qty-row" style="margin-top:8px">
+          <span class="muted" style="flex:1 1 auto;font-size:11px">Not saved yet — nothing has changed on the record.</span>
+          <button type="button" class="btn ghost small" style="color:var(--danger)" onclick="window.rrClearReturn(${lIdx})" ${isVoided ? 'disabled' : ''}>✕ Clear this entry</button>
+        </div>` : ''}
         <div class="rr-grid reminder-fields" style="gap:8px;margin-top:10px">
           <label class="field" style="font-size:11px;font-weight:bold">Return qty
             <input class="input rr-retqty" type="number" min="0" max="${returnable}" step="1" value="${retQty}" style="padding:6px 8px;font-size:13px" oninput="window.rrRetQty(${lIdx},this.value)" ${isVoided ? 'readonly' : ''} />
-            <small class="muted" style="font-weight:normal"> of ${+l.qty || 0} · ${returnable} still returnable</small></label>
+            <small class="muted" style="font-weight:normal"> of ${+l.qty || 0} · ${returnable} still returnable${undoN ? ` <b style="color:#f0b64b">(${undoN} freed by the undo)</b>` : ''}</small></label>
           <label class="field" style="font-size:11px;font-weight:bold">Reason
             <select class="input" style="font-size:12px" onchange="window.rrReason(${lIdx},this.value)">
               <option value="">— select reason —</option>
@@ -3536,7 +3563,7 @@
     const tx = (f.semenResellerTx || []).find(x => x.id === activeReturnTxId);
     const modal = document.getElementById('resellerReturnModal');
     if (!tx || !modal) return;
-    const d = returnDraft && returnDraft.txId === activeReturnTxId ? returnDraft : { ret: {}, adds: {}, removes: {} };
+    const d = returnDraft && returnDraft.txId === activeReturnTxId ? returnDraft : { ret: {}, adds: {}, removes: {}, undoes: {} };
     let derivedNow = +(tx.lines || []).reduce((a, l) => a + (+l.amount || 0), 0).toFixed(2);
     let derivedNew = 0;
     let stockWarn = 0;
@@ -3546,13 +3573,15 @@
       const adds = (d.adds[lIdx] || []).map(row => ({ ...row, qty: Math.max(0, +row.qty || 0), rate: Math.max(0, +row.rate || 0) }))
         .filter(row => row.qty > 0);
       const retNow = Math.max(0, +l.returned_qty || 0);
+      const undoN = Math.min(retNow, Math.max(0, parseInt((d.undoes || {})[lIdx], 10) || 0));
+      const retBase = retNow - undoN;              /* what the line counts as returned if this save lands */
       const retWant = Math.max(0, parseInt((d.ret[lIdx] || {}).qty, 10) || 0);
-      const retNew = retNow + Math.min(Math.max(0, (+l.qty || 0) - retNow), retWant);
-      const amount = projectedResellerLineAmount(l, Math.min(Math.max(0, (+l.qty || 0) - retNow), retWant), keptReps, adds);
+      const maxRet = Math.max(0, (+l.qty || 0) - retBase);
+      const retNew = retBase + Math.min(maxRet, retWant);
+      const amount = projectedResellerLineAmount(l, Math.min(maxRet, retWant), keptReps, adds, undoN);
       const before = +l.amount || 0;
       derivedNew += amount;
       const replMoney = adds.reduce((a, r) => a + r.qty * r.rate, 0);
-      const maxRet = Math.max(0, (+l.qty || 0) - retNow);
       const over = retWant > maxRet;
       const card = modal.querySelector(`.rr-card[data-line="${lIdx}"]`);
       if (card) {
@@ -3562,8 +3591,17 @@
           <div>line: ₱${before.toFixed(2)} → <b>₱${amount.toFixed(2)}</b></div>`;
         const inp = card.querySelector('.rr-retqty');
         if (inp && String(inp.max) !== String(maxRet)) inp.max = String(maxRet);
+        const tog = card.querySelector('[data-rr-undo-toggle]');
+        if (tog) tog.textContent = undoN ? '✕ Keep the return' : `↩︎ Undo all ${retNow}`;
+        const howMany = card.querySelector('[data-rr-undo-row] input');
+        if (howMany && String(howMany.max) !== String(retNow)) howMany.max = String(retNow);
       }
       if (over) stockWarn++;   /* same reason the save would refuse — surfaced before saving */
+      if (undoN && l.return_action === 'restock') {
+        /* undoing a restocked return takes the bottles back out of the batch they went into */
+        const rlot = findSemenLot({ semen_id: l.semen_id, batch_no: l.semen_batch_no });
+        if (!rlot || lotOnHand(rlot) < undoN) stockWarn++;
+      }
       adds.forEach(row => {
         const lot = findSemenLot(row);
         if (!lot || lotOnHand(lot) < row.qty) stockWarn++;
@@ -3581,7 +3619,7 @@
         <div class="muted">Invoice if saved</div><b>₱${wasTotal.toFixed(2)} → ₱${willTotal.toFixed(2)}</b>
         <div class="muted">Balance after this adjustment</div><b style="color:${balNew > balNow ? '#f0b64b' : '#b7e9c7'}">₱${balNow.toFixed(2)} → ₱${balNew.toFixed(2)}</b>
         ${tx.total_manual ? '<div class="muted">Manual correction on this record</div><b>kept, moved by the line change</b>' : ''}
-        ${stockWarn ? `<div style="grid-column:1/-1;font-size:11px;color:#f0b64b">⚠ ${stockWarn} ${stockWarn === 1 ? 'entry needs' : 'entries need'} fixing (quantity beyond what is returnable, or beyond the batch on hand) — save will be refused until ${stockWarn === 1 ? 'it is' : 'they are'} corrected.</div>` : ''}
+        ${stockWarn ? `<div style="grid-column:1/-1;font-size:11px;color:#f0b64b">⚠ ${stockWarn} ${stockWarn === 1 ? 'entry needs' : 'entries need'} fixing (a return beyond what is returnable, a replacement beyond the batch on hand, or an undo the batch cannot give back) — save will be refused until ${stockWarn === 1 ? 'it is' : 'they are'} corrected.</div>` : ''}
       </div>`;
     }
   }
@@ -3624,6 +3662,38 @@
     (d.ret[lIdx] = d.ret[lIdx] || {}).qty = Math.max(0, parseInt(v, 10) || 0);
     rrRefreshPreview();
   };
+  /* Arm / disarm the undo of an already-saved return on this line. Blank in the box means
+     "all of them", which is the case that matters most (a whole line typed in by mistake). */
+  window.rrUndoReturn = function (lIdx) {
+    if (!activeReturnTxId) return;
+    const d = ensureReturnDraft(activeReturnTxId);
+    const tx = (F().semenResellerTx || []).find(x => x.id === activeReturnTxId);
+    const l = tx && (tx.lines || [])[lIdx];
+    if (!l) return;
+    const stored = Math.max(0, +l.returned_qty || 0);
+    if (+d.undoes[lIdx] || 0) delete d.undoes[lIdx];
+    else d.undoes[lIdx] = stored;
+    openResellerReturnReplaceModalRerender();
+  };
+  /* Typing must not re-render (the caret would jump), so this only stages the number and
+     lets rrRefreshPreview() move the money — including the button's own label. */
+  window.rrUndoQty = function (lIdx, v) {
+    if (!activeReturnTxId) return;
+    const d = ensureReturnDraft(activeReturnTxId);
+    const tx = (F().semenResellerTx || []).find(x => x.id === activeReturnTxId);
+    const l = tx && (tx.lines || [])[lIdx];
+    const stored = l ? Math.max(0, +l.returned_qty || 0) : 0;
+    const n = Math.min(stored, Math.max(0, parseInt(v, 10) || 0));
+    if (n > 0) d.undoes[lIdx] = n; else delete d.undoes[lIdx];
+    rrRefreshPreview();
+  };
+  /* A wrong number in a NOT-YET-SAVED row needs no reversal at all — just drop the draft. */
+  window.rrClearReturn = function (lIdx) {
+    if (!activeReturnTxId) return;
+    const d = ensureReturnDraft(activeReturnTxId);
+    if (d.ret[lIdx]) { d.ret[lIdx].qty = 0; d.ret[lIdx].reason = ''; }
+    openResellerReturnReplaceModalRerender();
+  };
   window.rrReason = function (lIdx, v) {
     const d = ensureReturnDraft(activeReturnTxId);
     (d.ret[lIdx] = d.ret[lIdx] || {}).reason = v || '';
@@ -3658,11 +3728,11 @@
     const tx = (f.semenResellerTx || []).find(x => x.id === txId);
     if (!tx) { toast('Transaction not found.'); return; }
     if (tx.voided === true) { toast('Voided transactions cannot be adjusted.'); return; }
-    const d = (returnDraft && returnDraft.txId === txId) ? returnDraft : { ret: {}, adds: {}, removes: {} };
+    const d = (returnDraft && returnDraft.txId === txId) ? returnDraft : { ret: {}, adds: {}, removes: {}, undoes: {} };
     const totalBefore = +tx.total_amount || 0;
     const linesBefore = (tx.lines || []).map(l => +l.amount || 0);   /* snapshot for the audit trail */
     const notes = [];
-    const audit = { at: new Date().toISOString(), returns: 0, replacements: 0, cancelled: 0, lines: [] };
+    const audit = { at: new Date().toISOString(), returns: 0, replacements: 0, cancelled: 0, undone: 0, lines: [] };
 
     /* ── pass 1: validate the whole form before a single peso or bottle moves ──
        A half-applied adjustment is worse than a refused one: the invoice and the batch
@@ -3671,12 +3741,19 @@
        trimmed to fit [FIX M8]; an out-of-stock replacement was skipped) — both are now
        hard errors that keep the form open so the number can be corrected.            */
     const blocked = [];
-    const freed = {}, claimed = {};
+    const freed = {}, claimed = {}, lotDelta = {};
     const lotKey = x => String((x && (x.id || x.semen_batch_no)) || '');
+    const restockedOn = l => (l.returned_restocked !== undefined ? Math.max(0, +l.returned_restocked || 0)
+      : (l.return_action === 'restock' ? Math.max(0, +l.returned_qty || 0) : 0));
     (tx.lines || []).forEach((l, lIdx) => {
       const lineDraft = d.ret[lIdx] || {};
       const returnedNow = Math.max(0, +l.returned_qty || 0);
-      const returnable = Math.max(0, (+l.qty || 0) - returnedNow);
+      /* an armed undo widens what may still be returned on this line — undo 10, re-enter 2,
+         and the line ends up recorded as 2 returned, not 12 */
+      const undoWant = Math.max(0, parseInt((d.undoes || {})[lIdx], 10) || 0);
+      const undoOk = Math.min(returnedNow, undoWant);
+      if (undoWant > undoOk) blocked.push(`Line ${lIdx + 1}: you asked to undo ${undoWant} returned bottle(s), but only ${returnedNow} ${returnedNow === 1 ? 'is' : 'are'} recorded as returned on this line.`);
+      const returnable = Math.max(0, (+l.qty || 0) - (returnedNow - undoOk));
       const wantReturn = Math.max(0, parseInt(lineDraft.qty, 10) || 0);
       if (wantReturn > returnable) {
         blocked.push(`Line ${lIdx + 1}: you asked to return ${wantReturn} bottle(s), but ${returnable === 0 ? `all ${+l.qty || 0} on this line are already returned` : `only ${returnable} of the ${+l.qty || 0} dispatched is still unreturned`}.`);
@@ -3697,6 +3774,25 @@
         if (qty > avail) blocked.push(`Line ${lIdx + 1}: ${lot.boar_name || lot.boar || 'that batch'} has only ${Math.max(0, avail)} bottle(s) available for this save, ${qty} asked for.`);
         claimed[k] = (claimed[k] || 0) + qty;
       });
+      /* restock side of this line: the undone bottles leave the batch again, the newly
+         restocked ones enter it — summed per batch, then checked once below so two lines
+         sharing a batch cannot each be "fine" and together go negative. */
+      if (undoOk > 0 || wantReturn > 0) {
+        const lLot = findSemenLot({ semen_id: l.semen_id, batch_no: l.semen_batch_no });
+        const lk = lotKey(lLot);
+        if (lLot) {
+          if (undoOk > 0) lotDelta[lk] = (lotDelta[lk] || 0) - Math.min(undoOk, restockedOn(l));
+          if (wantReturn > 0 && (lineDraft.action || 'discard') === 'restock') lotDelta[lk] = (lotDelta[lk] || 0) + Math.min(returnable, wantReturn);
+        } else if (undoOk > 0 && restockedOn(l) > 0) {
+          blocked.push(`Line ${lIdx + 1}: undoing ${undoOk} returned bottle(s) needs ${l.semen_batch_no || 'the batch'} back in semen inventory to take them out again — restore that batch or leave the return as it is.`);
+        }
+      }
+    });
+    Object.keys(lotDelta).forEach(k => {
+      const lot = (F().semen || []).find(s => lotKey(s) === k);
+      if (!lot) return;
+      const finalOnHand = lotOnHand(lot) + (freed[k] || 0) + lotDelta[k] - (claimed[k] || 0);
+      if (finalOnHand < 0) blocked.push(`${lot.boar_name || lot.boar || lot.semen_batch_no || 'That batch'} would end up ${-finalOnHand} bottle(s) below zero — the undo takes back more than its ${lotOnHand(lot)} on hand. Undo fewer bottles, or correct that batch in Semen Inventory first.`);
     });
     if (blocked.length) {
       const all = blocked.slice(0, 2).join(' · ') + (blocked.length > 2 ? ` · +${blocked.length - 2} more` : '');
@@ -3709,7 +3805,25 @@
       const lineDraft = d.ret[lIdx] || {};
       const stored = lineReplacements(l);
       const returnedNow = Math.max(0, +l.returned_qty || 0);
-      const returnable = Math.max(0, (+l.qty || 0) - returnedNow);
+      const undo = Math.min(returnedNow, Math.max(0, parseInt((d.undoes || {})[lIdx], 10) || 0));
+      let restocked = restockedOn(l);
+      if (undo > 0) {
+        /* 1b) undo a mis-keyed return: the credit comes off (the line maths re-derives the
+           money), and only the bottles that were actually restocked leave the batch again. */
+        l.returned_qty = returnedNow - undo;
+        const back = Math.min(undo, restocked);
+        restocked -= back;
+        l.returned_restocked = restocked;
+        if (back > 0) {
+          const lLot = findSemenLot({ semen_id: l.semen_id, batch_no: l.semen_batch_no });
+          if (lLot) { lotSetOnHand(lLot, Math.max(0, lotOnHand(lLot) - back)); notes.push(`Line ${lIdx + 1}: ${back} bottle(s) taken back out of ${lLot.semen_batch_no || lLot.id} — that many of the undone returns had been restocked.`); }
+          else notes.push(`Line ${lIdx + 1}: undoing the return means ${back} bottle(s) leave ${l.semen_batch_no || 'that batch'} again — it is no longer in semen inventory, so check its count by hand.`);
+        }
+        audit.undone += undo;
+        notes.push(`Line ${lIdx + 1}: undid ${undo} of the ${returnedNow} recorded returned bottle(s) — ${l.boar || 'that line'} back on the invoice at ₱${(undo * (+l.rate || 0)).toFixed(2)}.`);
+        if (+l.returned_qty <= 0 && !stored.length) { l.return_reason = ''; l.return_action = ''; }
+      }
+      const returnable = Math.max(0, (+l.qty || 0) - (+l.returned_qty || 0));
       const retQty = Math.min(returnable, Math.max(0, parseInt(lineDraft.qty, 10) || 0));
 
       /* 1) cancelled replacement rows first: the bottles go back to the batch they came
@@ -3730,10 +3844,11 @@
 
       /* 2) the return itself: credit only, unless the bottles are restocked. */
       if (retQty > 0) {
-        l.returned_qty = returnedNow + retQty;
+        l.returned_qty = Math.max(0, +l.returned_qty || 0) + retQty;
         l.return_reason = (lineDraft.reason || l.return_reason || 'Unused / Unsold');
         l.return_action = lineDraft.action || 'discard';
         if (l.return_action === 'restock') {
+          restocked += retQty;
           const lot = findSemenLot({ semen_id: l.semen_id, batch_no: l.semen_batch_no });
           if (lot) { lotSetOnHand(lot, lotOnHand(lot) + retQty); notes.push(`Line ${lIdx + 1}: ${retQty} returned bottle(s) restocked into ${lot.semen_batch_no || lot.id}.`); }
           else notes.push(`Line ${lIdx + 1}: ${retQty} bottle(s) marked restocked, but that batch is no longer in semen inventory — add it there if the stock is real.`);
@@ -3742,6 +3857,9 @@
         }
         audit.returns += retQty;
       }
+      /* how much of the recorded return physically went back into stock — the undo below
+         needs this number instead of guessing from the last reason/action picked. */
+      l.returned_restocked = restocked;
 
       /* 3) new replacement rows: validated against on-hand stock, then deducted. */
       const added = [];
@@ -3768,17 +3886,17 @@
       syncResellerLineMirrors(l);
       audit.lines.push({
         line: lIdx + 1, dispatch: `${l.boar || l.semen_batch_no || ''} × ${+l.qty || 0}`,
-        returned: +l.returned_qty || 0,
+        returned_before: returnedNow, returned: +l.returned_qty || 0, undone: undo,
         replacements: l.replacements.map(r => `${r.boar} × ${r.qty} @ ₱${r.rate}`),
         amount_before: +(linesBefore[lIdx] || 0).toFixed(2), amount_after: +(+l.amount || 0).toFixed(2)
       });
     });
 
-    if (!audit.returns && !audit.replacements && !audit.cancelled) {
+    if (!audit.returns && !audit.replacements && !audit.cancelled && !audit.undone) {
       closeResellerModal('resellerReturnModal');
       /* The form may hold only rejected input (an over-sized return): say why nothing
          was written instead of pretending the operator typed nothing. */
-      toast(notes.length ? `⚠ Nothing saved — ${notes[0]}` : 'Nothing to save — no bottles were returned, replaced or cancelled.');
+      toast(notes.length ? `⚠ Nothing saved — ${notes[0]}` : 'Nothing to save — no bottles were returned, replaced, cancelled or undone.');
       openSemenResellerHub();
       return;
     }
@@ -3804,7 +3922,8 @@
     if (window.refreshOpenDrilldown) window.refreshOpenDrilldown();
     closeResellerModal('resellerReturnModal');
     const drift = `Invoice ₱${totalBefore.toFixed(2)} → ₱${tx.total_amount.toFixed(2)}`;
-    toast(`✓ Return & Replacement saved for #${tx.id}. ${drift}${recalc.manualKept ? ` · hand correction kept (${tx.total_amount >= recalc.derived ? '+' : '−'}₱${Math.abs(tx.total_amount - recalc.derived).toFixed(2)} over the lines)` : ''}`);
+    const undoneMsg = audit.undone ? ` · ${audit.undone} returned bottle(s) undone` : '';
+    toast(`✓ Return & Replacement saved for #${tx.id}. ${drift}${undoneMsg}${recalc.manualKept ? ` · hand correction kept (${tx.total_amount >= recalc.derived ? '+' : '−'}₱${Math.abs(tx.total_amount - recalc.derived).toFixed(2)} over the lines)` : ''}`);
     activeReturnTxId = null;
     returnDraft = null;
     openSemenResellerHub();
