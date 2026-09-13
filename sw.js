@@ -5,12 +5,13 @@
 //     script could run against a brand-new index.html (old JS + new DOM = boot crashes).
 //   • Icons / images / fonts      → cache-first (content rarely changes).
 //   • Bump CACHE_NAME on every release; activate() purges older caches.
-const CACHE_NAME = 'arswinetech-pro-v238-collection-board-2026-09-13';
+const CACHE_NAME = 'arswinetech-pro-v239-neumorphic-affordance-2026-09-13';
 const APP_SHELL = [
   './',
   './index.html',
   './manifest.webmanifest',
   './css/app.css',
+  './css/neumorphic.css',
   './assets/pig-shadow.jpg',
   './assets/ic-sow.jpg',
   './assets/ic-preg.jpg',
@@ -77,7 +78,11 @@ const CODE = /\.(html|js|css|webmanifest|json)$|\/$/;
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME)
-      .then((cache) => cache.addAll(APP_SHELL))
+      /* [FIX 190] this used to be cache.addAll(APP_SHELL), which rejects as a whole if ONE
+         entry 404s: a half-uploaded folder then silently kept the PREVIOUS worker (and its
+         stale shell) alive, which looks exactly like "the update did nothing". Per-item and
+         settled, so a missing extra is a missing extra and not a failed release. */
+      .then((cache) => Promise.allSettled(APP_SHELL.map((url) => cache.add(url))))
       .then(() => self.skipWaiting())
   );
 });

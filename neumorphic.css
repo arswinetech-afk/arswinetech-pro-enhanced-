@@ -1,0 +1,156 @@
+/* ══════════════════════════════════════════════════════════════════════════════════════════
+   [FIX 190] NEUMORPHIC AFFORDANCE LAYER — one file, no behaviour, nothing removed
+
+   The complaint it answers: "there are a lot of clickable buttons and some are not clickable…
+   redesign those clickable buttons into neumorphic UI so it will not be confusing, specially on
+   mobile." On a phone there is no mouse pointer, so the one signal desktop gives for free
+   ("cursor becomes a hand") does not exist here. In app.css that costs double: `.btn.ghost` —
+   the most common button in the app — is a flat dark chip with `box-shadow:none`, which is
+   exactly how `.tag`, `.status-pill` and `.count-pill` look, and there is not one `:active` rule
+ in its `.btn`, and the seven `:active` rules the stylesheet does have are all on LIST ROWS
+   (.drill-row-link, .care-batch-row, .health-chip, .boar-drill-row …) — the exact inversion of what
+   a farm needs: the labels appear to press and the keys do not. A tap today gives no feedback on
+   the buttons, so a chip and a control feel identical.
+
+   The rule this layer follows, and the reason it can be shipped as design-only:
+
+     ▸ what the ELEMENT is decides whether it lifts — `button`, `.btn`, `[role=button]` and
+       anything carrying an `onclick` get the raised surface, the press and the focus ring;
+     ▸ what the ELEMENT is not decides whether it sinks — chips, tags and read-only rows get a
+       recessed hairline, so "inset" reads as "not a key" and "raised" as "press me";
+     ▸ no colour, font or spacing of an existing control is changed. There is not one `background:`
+       or `color:` declaration in this file: the app paints buttons inline from the JS templates
+       (`style="background:var(--ok);color:#fff"`), and a layer that fought that would be a
+       redesign, not an affordance fix. Elevation, edge, press, focus, touch targets only — so no
+       rule here can mislabel a record, move a peso figure or re-flow a total.
+
+   Fences, all deliberate:
+     ▸ the whole layer sits in `@media screen`, so the thermal receipts, the printable
+       certificate and every `@media print` rule keep their own paper look;
+     ▸ the typeahead dropdown rows, the sidebar and the modal × are reset at the bottom (lifting
+       eleven suggestion rows would look like eleven keys, which is the opposite of the point);
+     ▸ `data-neo="flat"` opts any element out of the lift and `data-neo="lift"` is where a future
+       screen forces it in — no need to touch this file for a one-off;
+     ▸ `prefers-reduced-motion` drops the transform (a press you can still read in the shadow) and
+       `prefers-contrast: more` thickens the edge, because neumorphism's known weakness is a soft
+       edge on a soft background, and this app is read in daylight, in a barn, on a phone.
+   ══════════════════════════════════════════════════════════════════════════════════════════ */
+
+@media screen {
+
+  :root {
+    /* soft UI on a dark surface: the drop is blacker than --bg (#071114) and the highlight is the
+       app's own teal-white, never pure white, or every key turns into a white card */
+    --neo-lift: 6px 7px 16px rgba(0, 0, 0, .5), -4px -4px 12px rgba(140, 232, 222, .05);
+    --neo-lift-sm: 3px 4px 10px rgba(0, 0, 0, .42), -2px -2px 6px rgba(140, 232, 222, .045);
+    --neo-edge: inset 0 1px 0 rgba(160, 240, 230, .1), inset 0 0 0 1px rgba(145, 207, 202, .16);
+    --neo-press: inset 3px 4px 9px rgba(0, 0, 0, .55), inset -2px -2px 6px rgba(150, 235, 225, .05);
+    --neo-inset: inset 0 0 0 1px rgba(0, 0, 0, .26), inset 0 1px 3px rgba(0, 0, 0, .26);
+    --neo-focus: 0 0 0 2px rgba(19, 185, 173, .85), 0 0 0 6px rgba(19, 185, 173, .22);
+    --neo-time: 110ms;
+  }
+
+  /* ── 1. the raised key ───────────────────────────────────────────────────────────────────
+     `.btn.ghost` is written out because app.css gives it `box-shadow:none` at the same
+     specificity — this file loads after it, so the later rule wins. That single line is the
+     biggest source of "is this a button?" in the whole interface. */
+  button:not([data-neo="flat"]):not(.neo-flat):not(.close-reminder),
+  .btn:not([data-neo="flat"]):not(.neo-flat),
+  .btn.ghost:not([data-neo="flat"]):not(.neo-flat),
+  [role="button"]:not([data-neo="flat"]):not(.neo-flat),
+  [onclick]:not(button):not(a):not(td):not(th):not(tr):not(li):not([data-neo="flat"]):not(.neo-flat) {
+    box-shadow: var(--neo-lift-sm), var(--neo-edge);
+    transition: box-shadow var(--neo-time) ease, transform var(--neo-time) ease, filter var(--neo-time) ease;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+
+  /* a clickable thing that is not a button — the dashboard's health-check rows, the semen
+     tiles, a drilldown card — is a key too: it gets the deeper lift and the pointer a phone
+     cannot show. The `<td onclick>` rows are left flat on purpose: raising a table cell makes
+     the grid look like it is peeling off the page. */
+  [onclick]:not(button):not(a):not(td):not(th):not(tr):not(li) { cursor: pointer; }
+  [onclick]:not(button):not(a):not(td):not(th):not(tr):not(li):not(.btn):not([data-neo="flat"]):not(.neo-flat) {
+    box-shadow: var(--neo-lift), var(--neo-edge);
+  }
+
+  /* the press a farm can feel: the key goes into the panel and stays there while the finger is
+     down — on Android this is the only "did I land on it" feedback there is */
+  button:not(:disabled):not([disabled]):active,
+  .btn:not(:disabled):not([disabled]):active,
+  [role="button"]:not([aria-disabled="true"]):active { box-shadow: var(--neo-press); transform: translateY(1px) scale(.994); }
+  /* a clickable CARD presses on its shadow alone: a transform on a container creates a containing
+     block, which would jump any sticky or absolutely-positioned child inside it (the drilldown
+     cards hold photo badges and corner chevrons) — the press is still unmistakable */
+  [onclick]:not(button):not(.btn):not([role="button"]):active { box-shadow: var(--neo-press); }
+
+  /* hover is a desktop bonus: a phone fires :hover on tap and leaves it stuck on */
+  @media (hover:hover) and (pointer:fine) {
+    button:not(:disabled):not([disabled]):not(.neo-flat):not([data-neo="flat"]):hover,
+    .btn:not(:disabled):not([disabled]):not(.neo-flat):not([data-neo="flat"]):hover {
+      box-shadow: var(--neo-lift), var(--neo-edge);
+      filter: brightness(1.06);
+    }
+    [onclick]:not(td):not(th):not(tr):not(li):not(.neo-flat):hover { box-shadow: var(--neo-lift), var(--neo-edge); }
+  }
+
+  /* app.css has no :focus-visible rule at all, so a keyboard, a barcode gun tabbing through a
+     form, or any switch device currently lands nowhere visible */
+  button:focus-visible, .btn:focus-visible, [onclick]:focus-visible, [role="button"]:focus-visible,
+  input:focus-visible, select:focus-visible, textarea:focus-visible {
+    outline: none;
+    box-shadow: var(--neo-focus);
+  }
+
+  /* ── 2. what is not a key stops looking like one ───────────────────────────────────────
+     recessed, not repainted: their colours carry meaning (amber gestating, red overdue), so the
+     inset hairline only says "this is stamped into the panel" */
+  .tag:not(button):not([onclick]),
+  .status-pill:not(button):not([onclick]),
+  .parity-pill:not(button):not([onclick]),
+  .count-pill:not(button):not([onclick]),
+  .due-time:not([onclick]),
+  .field-hint:not([onclick]),
+  .checklist .check-item:not([onclick]),
+  [data-neo="flat"] { box-shadow: var(--neo-inset); cursor: default; }
+  .checklist .check-item:not([onclick]) .check-ico { box-shadow: none; }
+
+  /* a disabled control must look out of reach, or the farm taps it and blames the app */
+  button:disabled, .btn:disabled, [disabled], [aria-disabled="true"] {
+    box-shadow: var(--neo-inset);
+    opacity: .58;
+    transform: none;
+  }
+
+  /* ── 3. mobile: the target, not the paint ─────────────────────────────────────────────
+     40px is the practical floor for a one-handed thumb in a barn; the tight two-column grids
+     (a pick-up line's Qty/Price row) keep their own sizes, because a min-height in there would
+     re-flow a form that was already laid out for the phone once. */
+  @media (max-width: 760px) {
+    .btn,
+    .due-actions button, .drill-actions button, .wo-actions button, .med-actions button,
+    .vax-actions button, .treat-row-actions button, .toolbar button, .adj-card button { min-height: 40px; }
+    /* the × in a modal corner is 30px tall in app.css — the hardest thing on the screen to hit,
+       and the one button you must not miss when a sheet is over your work */
+    .close-reminder { min-width: 44px; min-height: 44px; }
+    button, .btn { -webkit-user-select: none; user-select: none; }
+  }
+
+  /* ── 4. the two accessibility hedges (later in the file, so no !important is needed) ──── */
+  @media (prefers-reduced-motion: reduce) {
+    button, .btn, [onclick], [role="button"] { transition: none; }
+    button:active, .btn:active, [onclick]:active, [role="button"]:active { transform: none; }
+  }
+  @media (prefers-contrast: more) {
+    :root { --neo-edge: inset 0 0 0 1px rgba(190, 245, 240, .6); --neo-inset: inset 0 0 0 1px rgba(0, 0, 0, .75); }
+    button, .btn, [onclick] { box-shadow: var(--neo-lift-sm), var(--neo-edge); }
+  }
+
+  /* ── 5. what must stay untouched ──────────────────────────────────────────────────────
+     a suggestion list is a list; eleven soft keys inside one popover is the confusion this file
+     exists to remove. Same for the sidebar, and for the × that is already a hit-area, not a key. */
+  .semen-suggestions button, .tt-row button, .suggestion-empty,
+  .nav button, .nav [onclick], .close-reminder { box-shadow: none; transform: none; transition: none; }
+  /* paper is paper: the printable certificate and the feed report have their own rules */
+  .certificate button, .certificate [onclick], #feedReport button, #feedReport [onclick] { box-shadow: none; transform: none; }
+}

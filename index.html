@@ -12,6 +12,10 @@
 <link rel="icon" type="image/png" href="icons/icon-192.png">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
 <link rel="stylesheet" href="css/app.css?v=104-semen-save-verification">
+<!-- [FIX 190] the neumorphic affordance layer: deliberately LAST, and additive only — every
+     rule is a shadow, an edge, a press, a focus ring or a touch target. Remove this one line
+     and the app is exactly the interface it was the day before. -->
+<link rel="stylesheet" href="css/neumorphic.css?v=190-neumorphic-affordance">
 <!-- Live Supabase Client -->
 <script src="supabase/config.js" onerror="window.__arsCloudLoadError='Could not load secure app configuration.'"></script>
 <script src="supabase/client.js" onerror="window.__arsCloudLoadError='Could not load the secure sign-in service.'"></script>

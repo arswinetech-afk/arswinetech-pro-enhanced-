@@ -18,6 +18,10 @@ done
 
 # css
 cp "$REPO/app.css" "$OUT/css/app.css"
+# [FIX 190] the affordance layer ships beside app.css and must never be missed: an
+# unlinked stylesheet fails silently, so it is copied by name, not by wildcard
+test -f "$REPO/neumorphic.css" || { echo "FATAL: neumorphic.css is missing from the repo" >&2; exit 1; }
+cp "$REPO/neumorphic.css" "$OUT/css/neumorphic.css"
 
 # js = every root module except infra files that live at root / in supabase/
 for j in "$REPO"/*.js; do
