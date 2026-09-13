@@ -746,7 +746,7 @@ async function bootOrderPage({ search, calls = [], barHeight, ...resp }) {
   ok('[14] and the offline fallback cannot hand a reseller the login screen', /js\/order-page\.js'\)\s*return;/.test(sw));
   ok('[14] order.html is in the deploy layout', /order\.html/.test(build));
   ok('[14] the page is served no-cache and kept out of search engines', /\/order\.html\n  Cache-Control: no-cache/.test(read('_headers')) && /noindex/.test(read('_headers')));
-  ok('[14] the build is bumped so phones drop the old shell', /arswinetech-pro-v236-pickup-breed-label/.test(sw) && /v236-pickup-breed-label/.test(cfg), sw.split('\n')[7] + ' | ' + cfg.split('\n')[2]);
+  ok('[14] the build is bumped so phones drop the old shell', /arswinetech-pro-v237-inbox-search/.test(sw) && /v237-inbox-search/.test(cfg), sw.split('\n')[7] + ' | ' + cfg.split('\n')[2]);
   ok('[14] the page asks for breeds, not bottles', /Which breeds do you need\?/.test(page) && !/Choose your bottles/.test(page));
 
   /* the fixed basket bar used to steal the last row: a hardcoded 104px of body padding lost
@@ -874,6 +874,149 @@ async function bootOrderPage({ search, calls = [], barHeight, ...resp }) {
   const filtered = ctx.sheet('resellerOrderInbox').html;
   ok('[15] expanding keeps the reseller they came in on', /Jo Dacara — |Jo Dacara/.test(filtered) && /Greg Biron/.test(filtered) === false, (filtered.match(/<h2>[^<]{0,60}/) || [''])[0]);
   ok('[15] the inbox no longer promises today’s batch price', !/re-read from today's batch price/.test(filtered) && /₱\/bottle that was on your 🧬 order menu/.test(filtered), (filtered.match(/Each line carries[^<]{0,140}/) || [''])[0]);
+}
+
+/* ══ [16] the inbox search box: one reseller's order, found without scrolling the years ══════ */
+{
+  const db = seed();
+  const ctx = bootApp(db);
+  const now = Date.now();
+  const ago = m => new Date(now - m * 60000).toISOString();
+  const mk = (id, rid, name, over = {}) => order({
+    id, reseller_id: rid, reseller_name: name, placed_at: ago(6),
+    lines: [{ breed: 'Largewhite', boar: 'Largewhite', qty: 2, rate: 400 }],
+    bottles: 2, total: 800, ...over
+  });
+  db.semenResellerOrders.push(
+    mk('o_jo_1', 'R-JO', 'Jo Dacara', { note: 'Meet up Bicol Pet @4pm' }),
+    mk('o_greg_1', 'R-AN', 'Greg Biron', { placed_at: ago(30), note: '', lines: [{ breed: 'Hamruc Pietrain', boar: 'Hamruc Pietrain', qty: 3, rate: 300 }], bottles: 3, total: 900 }),
+    mk('o_jo_2', 'R-JO', 'Jo Dacara', { status: 'accepted', placed_at: '2026-09-10T00:00:00.000Z', decided_at: '2026-09-10T09:00:00.000Z', lines: [{ breed: 'Duroc', boar: 'Duroc (BD)', qty: 4, rate: 450 }], bottles: 4, total: 1800 }),
+    mk('o_greg_2', 'R-AN', 'Greg Biron', { status: 'declined', need_by: '2026-09-12', placed_at: '2026-09-09T00:00:00.000Z', decided_at: '2026-09-09T12:00:00.000Z', decision_note: 'sold out that week', lines: [{ breed: 'Duroc Pietrain', boar: 'Duroc Pietrain', qty: 2, rate: 250 }], bottles: 2, total: 500 })
+  );
+  const body = () => String(ctx.__el('orderInboxBody').innerHTML || '');
+  const sug = () => String(ctx.__el('orderInboxSug').innerHTML || '');
+  const ids = h => (h.match(/data-order="(o_[a-z]+_[0-9]+)"/g) || []).map(x => x.slice(12, -1));
+  const cards = h => ids(h).length;
+  const txt = h => h.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  const before = JSON.stringify(db.semenResellerOrders);
+  const savesBefore = ctx.__saves;
+
+  ctx.openResellerOrderInbox();
+  const sheet = ctx.sheet('resellerOrderInbox').html;
+  ok('[16] the inbox grew a search row, made of the app’s own typeahead parts', /class="treat-typeahead"/.test(sheet) && /id="orderInboxSearch" class="search"/.test(sheet) && /id="orderInboxSug" class="semen-suggestions treat-sug"/.test(sheet), (sheet.match(/<input[^>]*orderInboxSearch[\s\S]{0,140}/) || ['NO INPUT'])[0].replace(/\s+/g, ' '));
+  ok('[16] it says a breed, a note or a date works too — a name is not required', /Search a reseller — or a breed, a note, a date/.test(sheet));
+  ok('[16] the phone is asked for a search key, not a newline', /enterkeyhint="search"/.test(sheet) && !/results="0"/.test(sheet));
+  ctx.arsOrderInboxSearch('');
+  eq('[16] an empty box is the whole inbox', cards(body()), 4);
+
+  const nSheets = ctx.sheets.length;
+  ctx.arsOrderInboxSearch('greg');
+  ok('[16] a name narrows it to that reseller’s orders', ids(body()).sort().join(',') === 'o_greg_1,o_greg_2', ids(body()).sort().join(','));
+  ok('[16] and nobody else is left in the list', !/Jo Dacara/.test(body()));
+  eq('[16] typing redraws the list only — the sheet is never rebuilt, so the caret stays put', ctx.sheets.length, nSheets);
+  ok('[16] it counts what it hid instead of pretending the list is short', /2 of 4 orders for “greg” · 2 hidden/.test(txt(body())), txt(body()).slice(0, 110));
+  ok('[16] Clear sits on that count, one thumb away', /✕ Clear/.test(body()));
+  ok('[16] while a search is running nothing is folded behind a button', !/Show \d+ older/.test(body()));
+
+  ok('[16] the box suggests names with the counts that make years of history usable', /Greg Biron/.test(sug()) && /2 orders/.test(sug()) && /5 bottles/.test(sug()) && /₱1,400/.test(sug()), txt(sug()).slice(0, 150));
+  ok('[16] and each row says whether they are waiting on a decision', /🛒 1 waiting/.test(txt(sug())), txt(sug()).slice(0, 150));
+  ok('[16] the last order they sent is on the row too', /last \S+/.test(txt(sug())), txt(sug()).slice(0, 150));
+  ctx.arsOrderInboxSearch('');
+  ok('[16] an empty box lists everyone who ever ordered, busiest first', /Everyone who has ordered here, busiest first — 4 orders in the inbox/.test(txt(sug())), txt(sug()).slice(0, 110));
+  ok('[16] a tie is broken by the name, not by insertion order', sug().indexOf('Greg Biron') < sug().indexOf('Jo Dacara'), txt(sug()).slice(0, 120));
+  ctx.arsOrderInboxSearch('zz');
+  ok('[16] a name nobody has says so, and reminds you a name is not required', /No reseller in this inbox answers to “zz”/.test(txt(sug())) && /breeds, notes and dates/.test(txt(sug())), txt(sug()).slice(0, 130));
+  ok('[16] the list says what the term hid rather than “nothing here”', /Nothing waiting for a decision matches “zz” — 4 orders in this inbox are hidden by it/.test(txt(body())), txt(body()).slice(0, 130));
+
+  ctx.arsOrderInboxSearch('hamruc');
+  ok('[16] a breed finds the order even when you have forgotten whose it was', ids(body()).join(',') === 'o_greg_1', ids(body()).join(','));
+  ctx.arsOrderInboxSearch('bicol');
+  ok('[16] so does a phrase from the note they left', ids(body()).join(',') === 'o_jo_1', ids(body()).join(','));
+  ctx.arsOrderInboxSearch('sold out');
+  ok('[16] and the farm’s own decline note stays findable', ids(body()).join(',') === 'o_greg_2', ids(body()).join(','));
+  ctx.arsOrderInboxSearch('2026-09-12');
+  ok('[16] a date finds the order that wanted it', ids(body()).join(',') === 'o_greg_2', ids(body()).join(','));
+  ctx.arsOrderInboxSearch('greg pietrain');
+  ok('[16] both of Greg’s orders mention a Pietrain, so both stay', ids(body()).sort().join(',') === 'o_greg_1,o_greg_2', ids(body()).join(','));
+  ctx.arsOrderInboxSearch('greg hamruc');
+  ok('[16] a second word narrows further — tokens AND, they never widen the net', ids(body()).join(',') === 'o_greg_1', ids(body()).join(','));
+
+  ctx.arsOrderInboxSearch('jo');
+  ctx.arsOrderInboxPickSuggest(0);
+  ok('[16] tapping a suggestion filters to that one reseller', ids(body()).sort().join(',') === 'o_jo_1,o_jo_2', ids(body()).sort().join(','));
+  ok('[16] and writes the name in the box, so it is obvious why the list shrank', String(ctx.__el('orderInboxSearch').value) === 'Jo Dacara', String(ctx.__el('orderInboxSearch').value));
+  ctx.arsOrderInboxSearch('a"b');
+  ctx.openResellerOrderInbox(undefined, true);
+  ok('[16] a quote typed into the box cannot break out of the attribute on a redraw', /value="a&quot;b"/.test(ctx.sheet('resellerOrderInbox').html) && !/value="a"b"/.test(ctx.sheet('resellerOrderInbox').html), (ctx.sheet('resellerOrderInbox').html.match(/value="[^"\n]{0,24}"/g) || []).join(' ; '));
+  ok('[16] the same redraw keeps the list filtered, not silently reset', /Nothing waiting for a decision matches “a"b” — 4 orders in this inbox are hidden by it/.test(txt(ctx.sheet('resellerOrderInbox').html)) && /Nothing waiting matches “a"b”/.test(txt(ctx.sheet('resellerOrderInbox').html)), txt(ctx.sheet('resellerOrderInbox').html).slice(0, 120));
+
+  ok('[16] searching, suggesting and clearing never touched an order', JSON.stringify(db.semenResellerOrders) === before, `saves ${savesBefore} → ${ctx.__saves}`);
+  eq('[16] and never wrote to the farm record', ctx.__saves, savesBefore);
+
+  /* a filter has to survive the decision it was made for */
+  ctx.arsOrderInboxClearSearch();
+  eq('[16] Clear brings every order back and empties the box', cards(body()), 4);
+  eq('[16] including the text in the box', String(ctx.__el('orderInboxSearch').value), '');
+  ctx.arsOrderInboxSearch('Jo Dacara');
+  ctx.markResellerOrderSeen('o_jo_1');
+  const after = ctx.sheet('resellerOrderInbox').html;
+  ok('[16] marking seen keeps the filter, the count and the typing', /value="Jo Dacara"/.test(after) && /for “Jo Dacara”/.test(txt(after)), txt(after).slice(0, 80));
+  ok('[16] a fresh open starts clean, as it should', (ctx.openResellerOrderInbox(), !/for “Jo Dacara”/.test(ctx.sheet('resellerOrderInbox').html)));
+  ctx.acceptResellerOrder('o_jo_1');
+  ctx.openResellerOrderInbox();
+  ok('[16] the order you accepted is answered in Handled, not lost', /✓ accepted/.test(txt(body())) || /✓ accepted/.test(ctx.sheet('resellerOrderInbox').html), txt(ctx.sheet('resellerOrderInbox').html).slice(0, 90));
+  ctx.arsOrderInboxSearch('Jo Dacara');
+  ok('[16] once nothing of theirs is waiting, the row says that instead', /2 orders · nothing waiting/.test(txt(sug())), txt(sug()).slice(0, 140));
+  ok('[16] an empty queue points at Handled instead of saying “nothing matches”', /Nothing waiting for a decision matches “Jo Dacara” — 2 matches are in Handled below/.test(txt(body())), txt(body()).slice(0, 150));
+  ctx.arsOrderInboxSearch('greg');
+  ctx.arsOrderInboxKey({ key: 'Escape' }, ctx.__el('orderInboxSearch'));
+  ok('[16] Escape is the same clear', /Greg Biron/.test(body()) && cards(body()) === 4, ids(body()).join(','));
+  ctx.arsOrderInboxSearch('jo');
+  ctx.arsOrderInboxKey({ key: 'Enter', preventDefault() {} }, ctx.__el('orderInboxSearch'));
+  ok('[16] Enter takes the top suggestion a thumb would have tapped', /Jo Dacara/.test(body()) && !/Greg Biron/.test(body()), ids(body()).join(','));
+}
+
+/* the ceiling, because this is exactly the list that grows for years */
+{
+  const db = seed();
+  const ctx = bootApp(db);
+  const mk = (id, over = {}) => order({
+    id, reseller_id: 'R-JO', reseller_name: 'Jo Dacara', placed_at: `2026-06-0${(parseInt(id.slice(-2), 10) || 1) % 9}T00:00:00.000Z`,
+    status: 'accepted', decided_at: '2026-06-05T09:00:00.000Z',
+    lines: [{ breed: 'Largewhite', boar: 'Largewhite', qty: 2, rate: 400 }], bottles: 2, total: 800, ...over
+  });
+  db.semenResellerOrders.push(order({ id: 'o_greg_1', reseller_id: 'R-AN', reseller_name: 'Greg Biron', placed_at: new Date().toISOString(), lines: [{ breed: 'Hamruc Pietrain', boar: 'Hamruc Pietrain', qty: 3, rate: 300 }], bottles: 3, total: 900 }));
+  for (let i = 0; i < 48; i++) db.semenResellerOrders.push(mk(`o_jo_${i + 10}`));
+  const body = () => String(ctx.__el('orderInboxBody').innerHTML || '');
+  const txt = h => h.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  const cards = h => (h.match(/data-order="o_/g) || []).length;
+
+  ctx.openResellerOrderInbox();
+  ctx.arsOrderInboxSearch('');
+  ok('[16] a 48-order history is folded, with the real number on the button', /Show 34 older ↓/.test(txt(body())), (txt(body()).match(/Show \d+ older[^·]{0,10}/) || ['none'])[0]);
+  ctx.arsToggleHandledOrders();
+  ctx.arsOrderInboxSearch('');
+  ok('[16] opening to the ceiling admits it stopped', /Showing the 40 newest of 48 — type a name or a date above to reach the rest/.test(txt(body())), txt(body()).slice(0, 120));
+  ok('[16] and no longer offers a “show more” button that shows nothing', !/Show \d+ older/.test(body()), (txt(body()).match(/Show \d+ older[^<]{0,20}/) || ['gone'])[0]);
+  ctx.arsOrderInboxSearch('jo dacara');
+  ok('[16] searching counts the matches, not the page', /48 of 49 orders for “jo dacara” · 1 hidden/.test(txt(body())), txt(body()).slice(0, 120));
+  ok('[16] and says the ceiling is on the matches too', /Showing the 40 newest of 48 matches — add a word/.test(txt(body())), txt(body()).slice(0, 130));
+  ctx.arsOrderInboxClearSearch();
+  ctx.openResellerOrderInbox('R-AN');
+  ctx.arsOrderInboxSearch('');
+  ok('[16] opened on one reseller, the box still offers a way back to everyone', /Filtered to Greg Biron — 1 order of 49 in this inbox/.test(txt(body())) && /✕ Show everyone/.test(body()), txt(body()).slice(0, 130));
+}
+
+/* a farm on day one gets the same box, because that is the year they are preparing for */
+{
+  const dbE = seed();
+  const ctxE = bootApp(dbE);
+  ctxE.openResellerOrderInbox();
+  const sh = ctxE.sheet('resellerOrderInbox').html;
+  ok('[16] the search box is there before there is anything to search', /id="orderInboxSearch"/.test(sh) && /No pending orders right now/.test(sh));
+  ctxE.arsOrderInboxSearch('any');
+  ok('[16] with nothing in the inbox the suggestion box says that, not “no reseller matches”', /Nothing has been ordered through a link yet/.test(String(ctxE.__el('orderInboxSug').innerHTML).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ')), String(ctxE.__el('orderInboxSug').innerHTML).slice(0, 120));
+  ok('[16] and the list admits it is empty without blaming the search', /Nothing waiting for a decision matches “any”, and nothing is waiting right now/.test(String(ctxE.__el('orderInboxBody').innerHTML).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ')), String(ctxE.__el('orderInboxBody').innerHTML).replace(/<[^>]+>/g, ' ').slice(0, 120));
 }
 
 console.log(`\n${failures ? 'FAILED' : 'OK'} — ${checks - failures}/${checks} checks passed\n`);

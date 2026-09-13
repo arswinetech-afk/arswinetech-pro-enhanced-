@@ -1,4 +1,4 @@
-# FIX 188 / FIX 189 — Reseller order links and the farm's order menu (v230 → v236)
+# FIX 188 / FIX 189 — Reseller order links and the farm's order menu (v230 → v237)
 
 > Your question: *"Is it possible to send a link where this link will have like an ordering
 > counter page, whereas the reseller can simply place their order and once they click
@@ -13,6 +13,48 @@
 > **v232** is that same build with a fixable install: pasting the SQL onto a farm that already
 > had v230 died with `42P13 cannot change return type of existing function`, because v231
 > changed what the catalogue function returns. Build `v232-reseller-sql-recreate-2026-09-12`.
+
+## v237 — a search box, because this inbox is the one list that never stops growing
+
+Their screenshot this time was the inbox itself, working correctly (v236 live, the breed × count
+on every label, `2 min ago` on one line, the two hints stacked) with one request attached: *add a
+search bar — name of reseller, auto-suggest while typing — to prepare for months, years, at least
+there is an option to filter the resellers specific order placed for any reference required.* That
+is the right instinct: the pending queue stays small, the **Handled** list is the thing that becomes
+500 cards, and a farm that has to scroll to find a reference stops using the app for references.
+
+- **one box, four things to search**: the reseller's name (both the name frozen on the order and
+  their name today, so a rename never loses their history), their contact number, any word from
+  their note or your decline/accept note, any breed or boar or batch number on it, and either date
+  — `2026-09-12` finds the order that wanted it. Words are AND-ed, so `myrna no boar` narrows to
+  one order instead of widening into every order containing any of those words.
+- **auto-suggest, with the number that makes years usable**: focus lists everyone who has ever
+  ordered, busiest first, each row saying `Andy Dev Test · 1 order · 🛒 1 waiting · last 2 min ago`
+  and on the right `2 bottles · ₱800`. Typing narrows that list; a tie is broken by the name, never
+  by insertion order. Tapping a row puts their name in the box — it is a *filter*, nothing more, and
+  no order is touched (a test compares the whole `semenResellerOrders` array byte-for-byte before
+  and after the search).
+- **typing never rebuilds the modal**: the search row, the heading and the footer are written once
+  per open; the list under them (`#orderInboxBody`) is what redraws. An input that is re-rendered on
+  every keystroke loses the caret, and on Android that means the keyboard closes after one letter —
+  the reason the old directory search worked and this one had to be built fresh.
+- **a filter says what it hid**: `🔎 1 of 3 orders for “myrna no boar” · 2 hidden` with `✕ Clear`
+  on the same row, and when nothing pending matches but something decided does, the list says *that*
+  (`Nothing waiting for a decision matches “greg” — 2 matches are in Handled below`) instead of the
+  misleading `nothing here`. Escape or ✕ clears; Enter takes the top suggestion.
+- **a filter survives the decision it was made for**: accepting, declining or marking seen re-renders
+  the inbox with `keepState`, so your typing and your expanded history are still there when the
+  pick-up sheet closes. A *fresh* open from the badge is what resets everything — including the
+  one-reseller filter, which used to leak into the next opening.
+- **the ceiling, and the lie that went with it**: expansion has always stopped at 40 cards. Now it
+  says `Showing the 40 newest of 48 — type a name or a date above to reach the rest`, and while a
+  search is running the same ceiling is stated on the matches. The old code kept offering
+  `Show 6 older ↓` at the ceiling, and pressing it re-rendered the same 40 cards (or collapsed them
+  while labelled "show more") — unreachable until a farm had ~46 handled orders, which is precisely
+  the future this request is about.
+- Keyboard asks for the search key (`enterkeyhint="search"`) so the phone renders 🔍 instead of
+  return, and the query is re-printed into the input with `"` neutralised, because a redraw has to
+  restore what you typed and `escH` does not cover quotes.
 
 ## v236 — the clue belongs on the label, not beside it
 
@@ -276,8 +318,8 @@ revocable** · **Phase 1 now**.
 | `client.js` | `entityMap` += `semenResellerOrders: 'semen_reseller_order'`, `semenResellerOrderLinks: 'semen_reseller_order_link'`, `semenOrderBreeds: 'semen_order_breed'` — so orders, links and the menu sync, back up and restore like every other record (the menu must sync: the public page reads it from the cloud). |
 | `app.js` | `sanitizeFarm` initialises the three buckets, as it does for all the others. |
 | `sw.js` | `/order.html` and `/js/order-page.js` bypass the app cache (a reseller must never get yesterday's page, and offline must not hand them your login screen). |
-| `_headers`, `config.js` | `order.html` served `no-cache` + `X-Robots-Tag: noindex`; version `v236-pickup-breed-label-2026-09-13`. |
-| `qa/build-deploy-layout.sh`, `qa/test-reseller-orders.mjs` | the page is copied into the deploy layout; 261 checks. |
+| `_headers`, `config.js` | `order.html` served `no-cache` + `X-Robots-Tag: noindex`; version `v237-inbox-search-2026-09-13`. |
+| `qa/build-deploy-layout.sh`, `qa/test-reseller-orders.mjs` | the page is copied into the deploy layout; 308 checks. |
 
 No `_worker.js` change is needed: it only special-cases `/ars-head` and otherwise falls
 through to `env.ASSETS.fetch(request)`, so `/order.html` is served as a static asset.
@@ -336,7 +378,7 @@ lists their own recent orders as `Waiting for the farm` / `Accepted — ready to
 
 ## Checks that ran
 
-`node qa/test-reseller-orders.mjs` → **261/261** (page arithmetic with no stock in it and the
+`node qa/test-reseller-orders.mjs` → **308/308** (page arithmetic with no stock in it and the
 999 cap; the payload that leaves the phone; the fake-browser end-to-end incl. an unpriced breed
 admitted as "Price confirmed by the farm"; link lifecycle incl. supersede and pause; the menu —
 seeded once, emptied stays emptied, duplicates refused, a draft line pruned on cancel, and a

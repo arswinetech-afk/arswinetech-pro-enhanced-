@@ -5197,25 +5197,175 @@
 
   /* ── the inbox sheet (what the badge opens) ───────────────────────────────── */
   const HANDLED_SHOWN = 6;
-  let inboxShowAllHandled = false, inboxFilterId = '';
-  function openResellerOrderInbox(onlyResellerId, keepState) {
-    ensureResellerData();
-    /* a fresh open forgets the expansion; the Show-older toggle re-enters with keepState so
-       it does not un-expand itself on the way back in */
-    if (onlyResellerId !== undefined && !keepState) inboxShowAllHandled = false;
-    if (onlyResellerId !== undefined) inboxFilterId = onlyResellerId || '';
+  const HANDLED_EXPANDED = 40;   /* a phone can carry only so many cards at once */
+  let inboxShowAllHandled = false, inboxFilterId = '', inboxQuery = '', inboxSug = [];
+
+  /* the query is typed by a person and re-printed into an attribute. escH covers < > &; a bare
+     quote would close value= early, so it is neutralised here too. */
+  const orderInboxEcho = v => escH(v).replace(/"/g, '&quot;');
+  /* Search has to read what the farm would actually remember typing, so the haystack is the
+     reseller's name on the order AND on their profile (a rename never rewrites history, and a
+     search that only knows the new name loses every old order), their contact, the note they
+     left, the farm's own decision or decline note, every breed / boar / batch number on the
+     order, both dates and the status. Tokens are AND-ed: "andy bicol" narrows, it does not
+     widen into every order that mentions either word. */
+  function orderInboxHay(o) {
     const f = F();
-    const who = onlyResellerId ? (f.semenResellers || []).find(r => String(r.id) === String(onlyResellerId)) : null;
-    const keep = o => !onlyResellerId || String(o.reseller_id) === String(onlyResellerId);
-    const all = resellerOrderBucket().filter(keep);
-    const pending = pendingResellerOrders().filter(keep);
+    const r = (f.semenResellers || []).find(x => String(x.id) === String(o.reseller_id));
+    return [
+      o.reseller_name, r && r.name, r && r.contact, r && r.address,
+      o.note, o.decision_note, o.reason, o.status, o.need_by,
+      String(o.placed_at || '').slice(0, 10), String(o.decided_at || '').slice(0, 10),
+      ...(o.lines || []).map(l => `${l.breed || ''} ${l.boar || ''} ${l.semen_batch_no || ''}`),
+      ...(Array.isArray(o.removed) ? o.removed.map(x => `${x.breed || x.boar || ''} removed`) : [])
+    ].filter(Boolean).join(' ').toLowerCase();
+  }
+  function orderInboxTerm(q) {
+    return String(q === undefined ? inboxQuery : q).trim().toLowerCase().split(/\s+/).filter(Boolean);
+  }
+  function orderInboxApply(list) {
+    const want = orderInboxTerm();
+    if (!want.length) return list;
+    return list.filter(o => { const h = orderInboxHay(o); return want.every(w => h.includes(w)); });
+  }
+
+  /* The auto-suggest is built from the orders themselves, not from the reseller directory: a
+     name in this inbox is a name that can be filtered on, and a registered reseller who has
+     never ordered cannot. Counts come out of the same pass, which is what makes the box useful
+     as a reference once there are years of orders — it says how many orders a reseller has
+     before you tap. */
+  function orderInboxSuggest(term) {
+    const f = F();
+    const groups = new Map();
+    resellerOrderBucket().forEach(o => {
+      if (inboxFilterId && String(o.reseller_id) !== String(inboxFilterId)) return;
+      const key = String(o.reseller_id || o.reseller_name || '?');
+      const g = groups.get(key) || { id: key, name: o.reseller_name || 'Reseller', orders: 0, waiting: 0, bottles: 0, total: 0, last: '' };
+      g.orders++;
+      if (orderStatusOf(o) === ORDER_PENDING) g.waiting++;
+      g.bottles += +(o.bottles || (o.lines || []).reduce((a, l) => a + (+l.qty || 0), 0)) || 0;
+      g.total += o.total !== undefined ? +o.total : +((o.lines || []).reduce((a, l) => a + (+l.qty || 0) * (+l.rate || 0), 0)).toFixed(2);
+      if (String(o.placed_at || '') > g.last) g.last = String(o.placed_at || '');
+      groups.set(key, g);
+    });
+    const t = String(term || '').trim().toLowerCase();
+    let rows = [...groups.values()];
+    if (t) rows = rows.filter(g => {
+      const name = String(g.name || '').toLowerCase();
+      const r = (f.semenResellers || []).find(x => String(x.id) === String(g.id));
+      return name.includes(t) || String(r && r.contact || '').includes(t) || name.split(/\s+/).some(w => w.startsWith(t));
+    });
+    rows.sort((a, b) => (t
+      ? (String(b.name || '').toLowerCase().startsWith(t) ? 1 : 0) - (String(a.name || '').toLowerCase().startsWith(t) ? 1 : 0)
+      : 0) || b.orders - a.orders || String(a.name).localeCompare(String(b.name)));
+    inboxSug = rows.slice(0, 8);
+    return { rows: inboxSug, total: resellerOrderBucket().filter(o => !inboxFilterId || String(o.reseller_id) === String(inboxFilterId)).length };
+  }
+
+  function orderInboxSugBox(term) {
+    const box = document.getElementById('orderInboxSug');
+    if (!box) return;
+    const s = orderInboxSuggest(term);
+    if (!s.rows.length) {
+      /* an empty inbox is not "nobody answers to that" — say which of the two it is, because a
+         farm on day one reading "no reseller matches" would go looking for the missing reseller */
+      box.innerHTML = s.total
+        ? `<div class="suggestion-empty">No reseller in this inbox answers to “${escH(String(term || '').trim())}”. It also reads breeds, notes and dates — and a name is only a filter, so ✕ Clear shows everything again.</div>`
+        : '<div class="suggestion-empty">Nothing has been ordered through a link yet, so there is nothing to search here — every reseller’s link is ready whenever they are.</div>';
+    } else {
+      box.innerHTML = `${String(term || '').trim() ? '' : `<div class="suggestion-empty" style="padding:8px 12px;color:#8fb3b0">Everyone who has ordered here, busiest first — ${s.total} order${s.total === 1 ? '' : 's'} in the inbox. Type to narrow.</div>`}${s.rows.map((g, i) => `<button type="button" onmousedown="window.arsOrderInboxPickSuggest(${i})"><span><b style="font-size:13.5px;text-transform:none;letter-spacing:0">${escH(g.name)}</b><br><small>${g.orders} order${g.orders === 1 ? '' : 's'}${g.waiting ? ` · 🛒 ${g.waiting} waiting` : ' · nothing waiting'} · last ${escH(orderAgo(g.last) || '—')}</small></span><span class="treat-sug-heads">${g.bottles} bottle${g.bottles === 1 ? '' : 's'} · <b>${orderMoney(g.total)}</b></span></button>`).join('')}`;
+    }
+    box.classList.add('open');
+    box.style.display = 'block';
+  }
+  function orderInboxSugClose() {
+    const box = document.getElementById('orderInboxSug');
+    if (box) { box.classList.remove('open'); box.style.display = 'none'; }
+  }
+
+  /* Everything under the search box is one container, so typing rewrites the list and never the
+     input: an input that is re-rendered on every keystroke loses the caret, and on a phone it
+     drops the keyboard. The shell (title, search row, footer) is written once per open. */
+  function orderInboxBodyHTML() {
+    const f = F();
+    const who = inboxFilterId ? (f.semenResellers || []).find(r => String(r.id) === String(inboxFilterId)) : null;
+    const keep = o => !inboxFilterId || String(o.reseller_id) === String(inboxFilterId);
+    const term = inboxQuery.trim();
+    const inScope = resellerOrderBucket().filter(keep);
+    const all = orderInboxApply(inScope);
+    const pending = orderInboxApply(pendingResellerOrders().filter(keep));
     const handledAll = all.filter(o => orderStatusOf(o) !== ORDER_PENDING)
       .sort((a, b) => String(b.decided_at || b.placed_at || '').localeCompare(String(a.decided_at || a.placed_at || '')));
-    /* Five years of accepted and declined requests is a long, long card. The queue a farm acts
-       on is always the pending one, so handled history is a list you open on purpose — and it
-       says how much is behind it instead of quietly cutting. */
-    const handled = inboxShowAllHandled ? handledAll.slice(0, 40) : handledAll.slice(0, HANDLED_SHOWN);
-    const handledMore = Math.max(0, handledAll.length - handled.length);
+    const hiddenByTerm = inScope.length - all.length;
+    /* A search is "find it", so while one is running the answered list is not folded behind a
+        button — it is capped at the same ceiling the expanded view uses, and says so rather than
+        quietly cutting. */
+    const cap = term ? HANDLED_EXPANDED : (inboxShowAllHandled ? HANDLED_EXPANDED : HANDLED_SHOWN);
+    const shown = handledAll.slice(0, cap);
+    const hiddenByCap = Math.max(0, handledAll.length - shown.length);
+    const fold = hiddenByCap
+      ? (term || inboxShowAllHandled
+        /* searching, or already expanded to the ceiling: the honest note, never a button that
+           re-renders the same 40 cards (or, worse, collapses them while saying "show more") */
+        ? `<small class="field-hint" style="display:block;margin-top:8px;color:#f0b64b">Showing the ${cap} newest of ${handledAll.length}${term ? ' matches' : ''} — ${term ? 'add a word (a breed, a date, a phrase from their note) to reach the rest.' : 'type a name or a date above to reach the rest.'}</small>`
+        : `<button type="button" class="btn ghost small" onclick="window.arsToggleHandledOrders()">Show ${Math.min(hiddenByCap, HANDLED_EXPANDED - HANDLED_SHOWN)} older ↓</button>`)
+      : '';
+    const collapse = inboxShowAllHandled && handledAll.length > HANDLED_SHOWN && !term
+      ? `<button type="button" class="btn ghost small" onclick="window.arsToggleHandledOrders()">Show fewer ↑</button>` : '';
+
+    const status = term
+      ? `<div class="adj-card" style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 12px">
+          <small class="field-hint" style="margin:0">🔎 <b style="text-transform:none;letter-spacing:0">${all.length}</b> of ${inScope.length} order${inScope.length === 1 ? '' : 's'} for “${escH(term)}”${who ? ` · inside ${escH(who.name || 'one reseller')} only` : ''}${hiddenByTerm ? ` · ${hiddenByTerm} hidden` : ''}</small>
+          <button type="button" class="btn ghost small" onclick="window.arsOrderInboxClearSearch()">✕ Clear</button>
+        </div>`
+      : (who ? `<div class="adj-card" style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 12px">
+          <small class="field-hint" style="margin:0">👤 Filtered to <b style="text-transform:none;letter-spacing:0">${escH(who.name || 'this reseller')}</b> — ${inScope.length} order${inScope.length === 1 ? '' : 's'} of ${resellerOrderBucket().length} in this inbox.</small>
+          <button type="button" class="btn ghost small" onclick="window.arsOrderInboxClearSearch()">✕ Show everyone</button>
+        </div>` : '');
+
+    const pendingBlock = pending.length
+      ? pending.map(o => orderCardHTML(o, true)).join('')
+      : `<div class="adj-card">${term
+          ? `Nothing waiting for a decision matches “${escH(term)}”${all.length  ? ` — ${all.length} ${all.length === 1 ? 'match is' : 'matches are'} in Handled below`  : hiddenByTerm ? ` — ${hiddenByTerm} order${hiddenByTerm === 1 ? '' : 's'} in this inbox ${hiddenByTerm === 1 ? 'is' : 'are'} hidden by it`  : ', and nothing is waiting right now'}. ✕ Clear shows everything again.`
+          : `No pending orders ${who ? 'from ' + escH(who.name || 'this reseller') : 'right now'}. When a reseller sends one from their link it lands here, the badge on “Registered Resellers” lights up, and a pop-up interrupts whatever screen you are on.`}</div>`;
+
+    const handledBlock = shown.length ? `<div class="adj-card">
+            <div class="adj-card-title"><span>Handled${inboxShowAllHandled || term ? '' : ' recently'}</span><span>${term ? `${handledAll.length} matching` : `${handledAll.length} total`}</span></div>
+            ${shown.map(o => orderCardHTML(o, false)).join('')}
+            ${fold || collapse ? `<div class="due-actions" style="justify-content:center;margin-top:8px;flex-wrap:wrap;gap:8px">${fold}${collapse}</div>` : ''}
+          </div>` : (term ? '' : '');
+
+    return {
+      body: `${status}${pendingBlock}${handledBlock}`,
+      title: who ? `${escH(who.name || 'This reseller')}${pending.length ? ` — ${pending.length} order${pending.length > 1 ? 's' : ''} waiting` : term ? ' — nothing of theirs matches that' : ' — nothing waiting'}`
+        : (pending.length
+          ? `${pending.length} order${pending.length > 1 ? 's' : ''} waiting${term ? ` that match “${escH(term)}”` : ''}`
+          : (term ? `Nothing waiting matches “${escH(term)}”` : 'Nothing waiting'))
+    };
+  }
+  function renderOrderInboxBody() {
+    const box = document.getElementById('orderInboxBody');
+    if (!box) return;
+    const html = orderInboxBodyHTML();
+    box.innerHTML = html.body;
+    const h2 = document.getElementById('orderInboxTitle');
+    if (h2) h2.innerHTML = html.title;
+  }
+
+  function openResellerOrderInbox(onlyResellerId, keepState) {
+    ensureResellerData();
+    /* a fresh open forgets the expansion and the search; a re-render that is only redrawing the
+       same sheet (the Show-older toggle, a decision) keeps both — losing your filter because you
+       accepted something is how a queue gets abandoned halfway through */
+    if (!keepState) {
+      inboxShowAllHandled = false;
+      inboxQuery = '';
+      if (onlyResellerId === undefined) inboxFilterId = '';   /* tomorrow’s badge opens the whole queue */
+    }
+    if (onlyResellerId !== undefined) inboxFilterId = onlyResellerId || '';
+    const f = F();
+    const who = inboxFilterId ? (f.semenResellers || []).find(r => String(r.id) === String(inboxFilterId)) : null;
+    const head = orderInboxBodyHTML();
 
     document.getElementById('resellerOrderInbox')?.remove();
     document.body.insertAdjacentHTML('beforeend', `
@@ -5224,27 +5374,25 @@
           <div class="modal-top">
             <div>
               <div class="eyebrow" style="color:var(--teal2);font-weight:800">🛒 Order-link requests</div>
-              <h2>${who ? escH(who.name || 'This reseller') + (pending.length ? ` — ${pending.length} order${pending.length > 1 ? 's' : ''} waiting` : ' — nothing waiting') : (pending.length ? pending.length + ' order' + (pending.length > 1 ? 's' : '') + ' waiting' : 'Nothing waiting')}</h2>
+              <h2 id="orderInboxTitle">${head.title}</h2>
               <p class="muted">Requests only — no bottle and no balance moves until you save a pick-up. Each line carries the ₱/bottle that was on your 🧬 order menu when they sent it, so re-pricing the menu afterwards does not touch a request that already arrived.</p>
             </div>
             <button type="button" class="close-reminder" onclick="closeResellerModal('resellerOrderInbox')">×</button>
           </div>
 
-          ${pending.length ? pending.map(o => orderCardHTML(o, true)).join('')
-            : `<div class="adj-card">No pending orders ${who ? 'from ' + escH(who.name || 'this reseller') : 'right now'}. When a reseller sends one from their link it lands here, the badge on “Registered Resellers” lights up, and a pop-up interrupts whatever screen you are on.</div>`}
+          <div class="treat-typeahead" style="margin:2px 0 12px">
+            <input type="search" id="orderInboxSearch" class="search" autocomplete="off" enterkeyhint="search"
+              value="${orderInboxEcho(inboxQuery)}" style="width:100%;font-size:15px" placeholder="🔍 Search a reseller — or a breed, a note, a date…"
+              oninput="window.arsOrderInboxSearch(this.value)" onfocus="window.arsOrderInboxSearch(this.value)"
+              onblur="setTimeout(window.arsOrderInboxSugClose,180)" onkeydown="return window.arsOrderInboxKey(event,this)">
+            <div id="orderInboxSug" class="semen-suggestions treat-sug"></div>
+          </div>
 
-          ${handled.length ? `<div class="adj-card">
-            <div class="adj-card-title"><span>Handled${inboxShowAllHandled ? '' : ' recently'}</span><span>${handledAll.length} total</span></div>
-            ${handled.map(o => orderCardHTML(o, false)).join('')}
-            ${handledMore > 0 || inboxShowAllHandled ? `<div class="due-actions" style="justify-content:center;margin-top:8px">
-              ${handledMore > 0 ? `<button type="button" class="btn ghost small" onclick="window.arsToggleHandledOrders()">Show ${handledMore} older ↓</button>` : ''}
-              ${inboxShowAllHandled ? `<button type="button" class="btn ghost small" onclick="window.arsToggleHandledOrders()">Show fewer ↑</button>` : ''}
-            </div>` : ''}
-          </div>` : ''}
+          <div id="orderInboxBody">${head.body}</div>
 
           <div class="due-actions" style="margin-top:14px">
             <button type="button" class="btn ghost" onclick="closeResellerModal('resellerOrderInbox')">Close</button>
-            ${pending.some(o => !o.seen_at) ? `<button type="button" class="btn ghost" onclick="window.markAllResellerOrdersSeen()">👁 Mark all as seen</button>` : ''}
+            ${pendingResellerOrders().filter(o => !inboxFilterId || String(o.reseller_id) === String(inboxFilterId)).some(o => !o.seen_at) ? `<button type="button" class="btn ghost" onclick="window.markAllResellerOrdersSeen()">👁 Mark all as seen</button>` : ''}
             <button type="button" class="btn ghost" onclick="window.openResellerOrderLinkAdmin()">🔗 Links</button>
           </div>
         </div>
@@ -5260,6 +5408,51 @@
     inboxShowAllHandled = !inboxShowAllHandled;
     openResellerOrderInbox(inboxFilterId, true);
   };
+
+  function arsOrderInboxSearch(q) {
+    inboxQuery = String(q || '');
+    renderOrderInboxBody();
+    orderInboxSugBox(inboxQuery);
+  };
+  function arsOrderInboxClearSearch() {
+    inboxQuery = '';
+    inboxFilterId = '';
+    const i = document.getElementById('orderInboxSearch');
+    if (i) i.value = '';
+    orderInboxSugClose();
+    renderOrderInboxBody();
+  }
+  /* tapping a name is a filter, not a decision: nothing here writes to an order */
+  function arsOrderInboxPickSuggest(i) {
+    const g = inboxSug[i];
+    if (!g) return;
+    /* deliberately NOT a hidden id filter: the name in the box is then the whole explanation of
+       what you are looking at, and ✕ Clear is the only way out. The haystack already carries the
+       name frozen on the order and the name on their profile today, so a rename since then
+       does not lose their older orders. */
+    inboxQuery = String(g.name || '');
+    const inp = document.getElementById('orderInboxSearch');
+    if (inp) inp.value = inboxQuery;
+    orderInboxSugClose();
+    renderOrderInboxBody();
+  };
+  /* Enter takes the top suggestion (the same one a thumb would tap), Escape gets you out. */
+  function arsOrderInboxKey(ev, input) {
+    const k = String((ev && ev.key) || '');
+    if (k === 'Escape') { window.arsOrderInboxClearSearch(); if (input) input.blur && input.blur(); return false; }
+    if (k === 'Enter') {
+      if (ev && ev.preventDefault) ev.preventDefault();
+      if (inboxSug.length) window.arsOrderInboxPickSuggest(0);
+      else orderInboxSugClose();
+      return false;
+    }
+    return true;
+  }
+  window.arsOrderInboxSearch = arsOrderInboxSearch;
+  window.arsOrderInboxClearSearch = arsOrderInboxClearSearch;
+  window.arsOrderInboxPickSuggest = arsOrderInboxPickSuggest;
+  window.arsOrderInboxSugClose = orderInboxSugClose;
+  window.arsOrderInboxKey = arsOrderInboxKey;
 
   function patchOrder(orderId, changes, msg) {
     ensureResellerData();
@@ -5278,7 +5471,9 @@
      openSemenResellerHub() rebuilds the hub, then the inbox goes back on top of it. */
   function refreshOrderUI() {
     openSemenResellerHub();
-    openResellerOrderInbox();
+    /* keepState: accepting or declining one card while the list is filtered must not throw the
+       filter (or the expanded history) away — that is the moment the queue gets abandoned */
+    openResellerOrderInbox(inboxFilterId, true);
   }
 
   window.markResellerOrderSeen = function (orderId) {
