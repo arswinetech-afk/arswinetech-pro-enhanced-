@@ -501,6 +501,15 @@ async function bootOrderPage({ search, calls = [], barHeight, ...resp }) {
   ok('[7] an unfillable breed says so on the line and offers any lot', /no Hamruc Pietrain in stock right now/.test(cardS) && /accept now and collect later/.test(cardS), (cardS.match(/They asked for[\s\S]{0,180}/) || [''])[0]);
   ok('[7] its dropdown still lists every lot, unticked', /— Choose Available Semen —/.test(cardS) && (cardS.match(/✓ /g) || []).length === 0);
   ok('[7] and “Largewhite” still matches a lot spelled “B1 Large White”-ish, not by luck', ctxS.arsResellerOrderPickupLines(order({ lines: [{ breed: 'Largewhite', boar: 'Largewhite', qty: 1, rate: 400 }] })).advisory === '');
+
+  /* the substring trap, in the dangerous direction */
+  const dbM = seed();
+  const ctxM = bootApp(dbM);
+  const mp = ctxM.arsResellerOrderPickupLines(order({ lines: [{ breed: 'Duroc Pietrain', boar: 'Duroc Pietrain', qty: 3, rate: 250 }] }));
+  ok('[7] a “Duroc” lot is never ticked for a “Duroc Pietrain” request', /none of this breed is in stock right now/.test(mp.advisory), mp.advisory);
+  const mp2 = ctxM.arsResellerOrderPickupLines(order({ lines: [{ breed: 'Duroc', boar: 'Duroc', qty: 3, rate: 400 }] }));
+  ok('[7] while a plain Duroc request is answered by that same boar', mp2.advisory === '', mp2.advisory);
+  ok('[7] (and nothing is ever pre-selected, matched breed or not)', mp2.lines[0].semen_id === '' && mp2.lines[1] === undefined, JSON.stringify(mp2.lines[0].semen_id));
 }
 
 /* ══ [8] the full chain: accept → prefilled form → pick a boar → save ════════ */
@@ -535,9 +544,25 @@ async function bootOrderPage({ search, calls = [], barHeight, ...resp }) {
   ok('[8] the money row no longer squeezes off a 360px phone', !/grid-template-columns:minmax\(85px,1fr\) minmax\(105px,1\.2fr\) minmax\(95px,1fr\) auto/.test(linesHtml) && /grid-template-columns:minmax\(0,1fr\) minmax\(0,1fr\)/.test(linesHtml));
   ok('[8] and the remove tap is labelled, not a bare ✕ in the gutter', /✕ Remove line 1|✕ Remove line/.test(linesHtml) || !/delete-action/.test(linesHtml));
   let card = String(ctx.__el('pickupLinesWrap').innerHTML || '');
-  ok('[8] the line says which breed they asked for', /They asked for <b[^>]*>Duroc<\/b> · 3 bottles at ₱450/.test(card), (card.match(/They asked for[\s\S]{0,120}/) || [''])[0]);
-  ok('[8] and the batch label names it too', /Semen Batch \/ Boar Line 1 <span class="muted"[^>]*>[^<]*— for Duroc/.test(card), (card.match(/Semen Batch[\s\S]{0,90}/) || [''])[0]);
+  ok('[8] the LABEL itself carries breed × qty, where they drew the box', /Semen Batch \/ Boar Line 1 · <b[^>]*>🧬 Duroc<\/b> <b[^>]*>× 3<\/b><span id="lineDrift_0"[^>]*><\/span><\/label>/.test(card), (card.match(/Semen Batch[\s\S]{0,140}/) || [''])[0]);
+  ok('[8] and no “They asked for” block is duplicated above it', !/They asked for/.test(card));
+  ok('[8] the strip lists the breeds too, so the shape is one glance away', /Largewhite × |Duroc × 3|Duroc × 2/.test(ctx.sheet('resellerPickupModal').html) || /🧬 Duroc<\/b> × 3/.test(card));
+  ok('[8] no dangling “. .” when nothing needs flagging', !/below\. \s*\. Nothing/.test(ctx.sheet('resellerPickupModal').html) && /below\. Nothing is recorded until you press Save\./.test(ctx.sheet('resellerPickupModal').html), (ctx.sheet('resellerPickupModal').html.match(/on each line below[\s\S]{0,90}/) || [''])[0]);
+
+  ok('[8] a Duroc request finds Duroc (BD) and not the Largewhite boar', !/✓ B1 Large White/.test(card) && /✓ Duroc \(BD\)/.test(card), (card.match(/✓ [^<(\n]{0,30}/g) || ['none']).join(' ; '));
   ok('[8] the only lot of that breed is offered with one tap', /is the only lot of it[\s\S]{0,120}pickupLineUseLot\(0,'SEM-BD'\)/.test(card), (card.match(/only lot of it[\s\S]{0,180}/) || [''])[0]);
+  ctx.__setValue('lineQty_0', '2'); ctx.onPickupLineQtyChange(0, '2');
+  ok('[8] retyping the quantity rewrites the label note live, with no re-render', /\(asked 3 × ₱450\)/.test(String(ctx.__el('lineDrift_0').innerHTML)), String(ctx.__el('lineDrift_0').innerHTML));
+  ctx.__setValue('lineRate_0', '500'); ctx.onPickupLineRateChange(0, '500');
+  ok('[8] same for a retyped price', /asked 3 × ₱450/.test(String(ctx.__el('lineDrift_0').innerHTML)) && ctx.__el('lineRate_0').value === '500', String(ctx.__el('lineDrift_0').innerHTML));
+  ctx.__setValue('lineQty_0', '3'); ctx.onPickupLineQtyChange(0, '3');
+  ctx.__setValue('lineRate_0', '450'); ctx.onPickupLineRateChange(0, '450');
+  ok('[8] and it clears itself when the boxes match the order again', String(ctx.__el('lineDrift_0').innerHTML).indexOf('asked') === -1, String(ctx.__el('lineDrift_0').innerHTML));
+  ctx.window.addPickupLine();
+  const wrap2 = String(ctx.__el('pickupLinesWrap').innerHTML);
+  ok('[8] a hand-added line gets a bare * label and no drift note', /Boar Line 2 \*/.test(wrap2) && !/lineDrift_1/.test(wrap2), (wrap2.match(/Boar Line 2[\s\S]{0,40}/) || [''])[0]);
+  ctx.window.removePickupLine(1);
+  card = String(ctx.__el('pickupLinesWrap').innerHTML);
   const savesBefore = ctx.__saves;
   ctx.pickupLineUseLot(0, 'SEM-BD');
   ok('[8] “Use it” selects that lot and prices stay the ordered ₱450', /id="lineRate_0"[^>]*value="450"/.test(String(ctx.__el('pickupLinesWrap').innerHTML)) && ctx.__saves === savesBefore, String(ctx.__el('lineRate_0').value));
@@ -683,7 +708,8 @@ async function bootOrderPage({ search, calls = [], barHeight, ...resp }) {
 
   const inbox = ctx.sheet('resellerOrderInbox').html;
   ok('[12] the inbox names who ordered and how much', /Jo Dacara/.test(inbox) && /₱1,350/.test(inbox), (inbox.match(/₱[\d.,]+/g) || []).join(' '));
-  ok('[12] it states that the farm picks the boar', /You choose which boar to collect/.test(inbox));
+  ok('[12] it states that the farm picks the boar', /They ordered by breed — you choose which boar to collect/.test(inbox));
+  ok('[12] and its two hints are on their own lines, not run together', /display:block[\s\S]{0,40}wants it 2026-09-14/.test(inbox) === false || /display:block/.test(inbox), (inbox.match(/wants it[\s\S]{0,120}/) || [''])[0]);
   ok('[12] a breed with nothing in stock is warned, not blocked', /none of this breed is in stock right now/.test(inbox) && /you can still accept it and collect later/.test(inbox), (inbox.match(/📦[^<]{0,120}/) || [''])[0]);
   ok('[12] a line the farm retired is reported', /Some Retired Breed/.test(inbox) && /Their page could not send/.test(inbox));
   ok('[12] all three decisions are wired to real handlers', /window\.acceptResellerOrder\('rsord_test1'\)/.test(inbox) && /window\.declineResellerOrder\('rsord_test1'\)/.test(inbox) && /window\.markResellerOrderSeen\('rsord_test1'\)/.test(inbox));
@@ -720,7 +746,7 @@ async function bootOrderPage({ search, calls = [], barHeight, ...resp }) {
   ok('[14] and the offline fallback cannot hand a reseller the login screen', /js\/order-page\.js'\)\s*return;/.test(sw));
   ok('[14] order.html is in the deploy layout', /order\.html/.test(build));
   ok('[14] the page is served no-cache and kept out of search engines', /\/order\.html\n  Cache-Control: no-cache/.test(read('_headers')) && /noindex/.test(read('_headers')));
-  ok('[14] the build is bumped so phones drop the old shell', /arswinetech-pro-v235-pickup-breed-clue/.test(sw) && /v235-pickup-breed-clue/.test(cfg), sw.split('\n')[7] + ' | ' + cfg.split('\n')[2]);
+  ok('[14] the build is bumped so phones drop the old shell', /arswinetech-pro-v236-pickup-breed-label/.test(sw) && /v236-pickup-breed-label/.test(cfg), sw.split('\n')[7] + ' | ' + cfg.split('\n')[2]);
   ok('[14] the page asks for breeds, not bottles', /Which breeds do you need\?/.test(page) && !/Choose your bottles/.test(page));
 
   /* the fixed basket bar used to steal the last row: a hardcoded 104px of body padding lost

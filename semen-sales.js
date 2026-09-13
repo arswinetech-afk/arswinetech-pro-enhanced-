@@ -2920,6 +2920,25 @@
   }
   window.openResellerPickupModal = openResellerPickupModal;
 
+  /* The drift suffix is the point of the whole label: a quantity or price that was quietly
+     retyped is far easier to defend when the request it came from sits right next to it. It is
+     DERIVED from the live line on every totals recalculation (see refreshOrderLineDrift), so it
+     can never show a number the boxes no longer hold. */
+  function lineDriftHTML(line) {
+    if (!line || !line.from_order) return '';
+    const qtyNow = +line.qty || 0, askedQty = +line.ordered_qty || qtyNow;
+    const rateNow = +line.rate || 0, askedRate = +line.ordered_rate || 0;
+    if (qtyNow === askedQty && Math.abs(rateNow - askedRate) <= 0.004) return '';
+    return ` <span style="color:#f0b64b;font-weight:700">(asked ${askedQty}${askedRate > 0 ? ` × ${peso(askedRate)}` : ''})</span>`;
+  }
+  function refreshOrderLineDrift() {
+    for (let i = 0; i < activePickupLines.length; i++) {
+      const el = document.getElementById(`lineDrift_${i}`);
+      if (!el) continue;
+      el.innerHTML = lineDriftHTML(activePickupLines[i]);
+    }
+  }
+
   function renderPickupLines() {
     const wrap = document.getElementById('pickupLinesWrap');
     if (!wrap) return;
@@ -2936,26 +2955,31 @@
       const ordered = asked
         ? [...matches, ...available.filter(s => !matches.some(m => m.id === s.id))]
         : available;
+      const qtyNow = +line.qty || 0;
+      const labelTail = asked
+        ? `· <b style="color:var(--teal2);letter-spacing:-.2px;font-size:13.5px">🧬 ${escH(asked)}</b> <b style="font-size:13.5px">× ${qtyNow}</b><span id="lineDrift_${lIdx}" style="font-size:12px">${lineDriftHTML(line)}</span>`
+        : '*';
+      /* and only the actionable part underneath — the breed and the count are already in the
+         label above, a line that repeats itself is a line that gets skimmed */
       const clue = asked ? (() => {
         const chosen = line.semen_id ? (f.semen || []).find(x => x.id === line.semen_id) : null;
         const chosenMatches = chosen ? matches.some(m => m.id === chosen.id) : false;
-        const head = `<div style="font-size:11.5px;line-height:1.45;margin:2px 0 8px;padding:7px 9px;border-radius:9px;background:rgba(14,165,233,.10);border:1px solid rgba(110,200,255,.22)">🛒 They asked for <b style="font-size:13px">${escH(asked)}</b> · ${+line.qty || 0} bottle${(+line.qty || 0) === 1 ? '' : 's'} at ${peso(+line.ordered_rate || 0)}`;
-        if (chosen) return `${head}${chosenMatches
-          ? ` — <span style="color:var(--ok)">✓ ${escH(chosen.boar_name || chosen.boar)} is that breed</span></div>`
-          : ` — <span style="color:#f0b64b">⚠ you put ${escH(chosen.boar_name || chosen.boar)} on this line instead</span> <small class="muted">(fine if that was the swap you meant)</small></div>`}</div>`;
-        if (!matches.length) return `${head} — <span style="color:#f0b64b">no ${escH(asked)} in stock right now</span> <small class="muted">(put any lot here, or accept now and collect later)</small></div>`;
+        const box = inner => `<div style="font-size:11.5px;line-height:1.45;margin:0 0 8px;padding:6px 9px;border-radius:9px;background:rgba(14,165,233,.10);border:1px solid rgba(110,200,255,.22)">${inner}</div>`;
+        if (chosen) return box(chosenMatches
+          ? `<span style="color:var(--ok)">✓ ${escH(chosen.boar_name || chosen.boar)} is that breed</span>`
+          : `<span style="color:#f0b64b">⚠ you put ${escH(chosen.boar_name || chosen.boar)} on this line instead</span> <small class="muted">(fine if that was the swap you meant)</small>`);
+        if (!matches.length) return box(`<span style="color:#f0b64b">no ${escH(asked)} in stock right now</span> <small class="muted">— any lot here works, or accept now and collect later</small>`);
         if (matches.length === 1) {
           const m = matches[0];
-          return `${head} — <b>${escH(m.boar_name || m.boar)}</b> (${escH(m.semen_batch_no || 'Batch')}, ${lotOnHand(m)} left) is the only lot of it <button type="button" class="btn ghost small" onclick="window.pickupLineUseLot(${lIdx},'${escH(m.id)}')" style="padding:4px 9px;margin-left:4px">Use it</button></div>`;
+          return box(`<b>${escH(m.boar_name || m.boar)}</b> (${escH(m.semen_batch_no || 'Batch')}, ${lotOnHand(m)} left) is the only lot of it <button type="button" class="btn ghost small" onclick="window.pickupLineUseLot(${lIdx},'${escH(m.id)}')" style="padding:4px 9px;margin-left:4px">Use it</button>`);
         }
-        return `${head} — ${matches.length} lots of it in stock, ticked ✓ at the top of the list</div>`;
+        return box(`${matches.length} lots of it in stock, ticked ✓ at the top of the list`);
       })() : '';
       return `
       <div class="reseller-pickup-line-card" id="pickupLineCard_${lIdx}" style="background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:10px">
-        <!-- Row 1: what they asked for, then the batch picker -->
-        ${clue}
+        <!-- Row 1: the label carries breed × qty (their red box), the picker follows -->
         <div class="field" style="margin:0 0 10px 0">
-          <label style="font-size:11.5px;font-weight:750">Semen Batch / Boar Line ${lIdx + 1} ${asked ? `<span class="muted" style="font-weight:600">— for ${escH(asked)}</span>` : '*'}</label>
+          <label style="font-size:11.5px;font-weight:750">Semen Batch / Boar Line ${lIdx + 1} ${labelTail}</label>
           <select class="rfid-select" onchange="window.onPickupBatchSelect(${lIdx}, this.value)" style="width:100%">
             <option value="">— Choose Available Semen —</option>
             ${ordered.map(s => `
@@ -2964,6 +2988,7 @@
               </option>
             `).join('')}
           </select>
+          ${clue}
         </div>
 
         <!-- Row 2: Qty and Price side by side; Row 3: money and the remove tap. Four
@@ -3110,6 +3135,7 @@
     const balEl = document.getElementById('pickupBalance');
     if (totEl) totEl.textContent = peso(total);
     if (balEl) balEl.textContent = peso(bal);
+    refreshOrderLineDrift();
   }
   window.calcPickupTotals = calcPickupTotals;
 
@@ -5063,9 +5089,18 @@
     const pre = pendingPickupPrefill;
     if (!pre) return '';
     const asked = (pre.lines || []).length;
-    return `<div class="reseller-settlement-preview" style="margin:12px 0 0">🛒 From <b>${escH(pre.reseller_name || 'a reseller order')}</b>’s order link — ${asked} line${asked === 1 ? '' : 's'} at your menu price. <b>Choose which boar to collect</b> on each line below${pre.advisory ? ` · <b style="color:#f0b64b">${escH(pre.advisory)}.</b>` : ''}. ${pre.lines.some(l => !(+l.rate > 0) && (+l.qty || 0) > 0)
-        ? ` · <b style="color:#f0b64b">${pre.lines.filter(l => !(+l.rate > 0) && (+l.qty || 0) > 0).length} line${pre.lines.filter(l => !(+l.rate > 0) && (+l.qty || 0) > 0).length === 1 ? ' has' : ' have'} no menu price — they will bill ₱0 unless you type a ₱/bottle here.</b>`
-        : ''}. Nothing is recorded until you press Save.</div>`;
+    /* the breeds are repeated up here on purpose: each line's label is the working reference you
+       read while filling the form, the strip is the one glance that tells you the shape of the
+       order before your eye reaches the first dropdown.
+       Joining the pieces as a list also killed a stray ". ." that showed whenever both
+       conditions below were empty — two optional clauses each leaving their own period. */
+    const what = (pre.lines || []).map(l => `${escH(l.ordered_breed || l.breed || 'a breed')} × ${+l.qty || 0}`).join(' · ');
+    const parts = [];
+    if (pre.advisory) parts.push(`<b style="color:#f0b64b">${escH(pre.advisory)}</b>`);
+    const unpriced = (pre.lines || []).filter(l => !(+l.rate > 0) && (+l.qty || 0) > 0).length;
+    if (unpriced) parts.push(`<b style="color:#f0b64b">${unpriced} line${unpriced === 1 ? ' has' : ' have'} no menu price — they will bill ₱0 unless you type a ₱/bottle here.</b>`);
+    parts.push('Nothing is recorded until you press Save.');
+    return `<div class="reseller-settlement-preview" style="margin:12px 0 0">🛒 From <b>${escH(pre.reseller_name || 'a reseller order')}</b>’s order link — <b style="text-transform:none;letter-spacing:0">${what || `${asked} line${asked === 1 ? '' : 's'}`}</b> at your menu price. <b>Choose which boar to collect</b> on each line below. ${parts.join(' · ')}</div>`;
   }
 
   const ORDER_PENDING = 'pending';
@@ -5143,14 +5178,14 @@
       <div class="adj-card-title">
         <span><b style="font-size:13.5px;text-transform:none;letter-spacing:0">${escH(o.reseller_name || 'Reseller')}</b>
           · ${bottles} bottle${bottles === 1 ? '' : 's'} · ${orderMoneyLabel(o)}</span>
-        <span>${chip}${o.placed_at ? ` <small class="muted" style="margin-left:6px">${escH(orderAgo(o.placed_at))}</small>` : ''}</span>
+        <span>${chip}${o.placed_at ? ` <small class="muted" style="margin-left:6px;white-space:nowrap;text-transform:none;letter-spacing:0;display:inline-block">${escH(orderAgo(o.placed_at))}</small>` : ''}</span>
       </div>
       ${orderLineRowsHTML(o.lines)}
-      ${o.need_by ? `<small class="field-hint">🗓 wants it ${escH(o.need_by)}</small>` : ''}
+      ${o.need_by ? `<small class="field-hint" style="display:block">🗓 wants it ${escH(o.need_by)}</small>` : ''}
       ${o.note ? `<small class="field-hint">💬 “${escH(o.note)}”</small>` : ''}
       ${Array.isArray(o.removed) && o.removed.length ? `<small class="field-hint" style="color:#f0b64b">Their page could not send: ${o.removed.map(rr => `${+rr.requested || 0} × ${escH(rr.breed || rr.boar || '?')} (${escH(rr.why || 'not on the menu')})`).join('; ')}.</small>` : ''}
       ${(o.lines || []).some(l => orderBreedStockNote(l.breed || l.boar)) ? `<small class="field-hint" style="color:#f0b64b">📦 ${escH((o.lines || []).map(l => orderBreedStockNote(l.breed || l.boar)).filter(Boolean)[0])} — you can still accept it and collect later.</small>` : ''}
-      <small class="field-hint"> You choose which boar to collect; they ordered by breed.</small>
+      <small class="field-hint" style="display:block;margin-top:4px">🧬 They ordered by breed — you choose which boar to collect.</small>
       ${o.decision_note ? `<small class="field-hint">Farm note: ${escH(o.decision_note)}</small>` : ''}
       ${actionable ? `<div class="due-actions" style="justify-content:flex-start;margin-top:9px;flex-wrap:wrap">
         <button type="button" class="btn ghost small" style="background:var(--ok);color:#fff;border:0" onclick="window.acceptResellerOrder('${escH(o.id)}')">✓ Accept &amp; create pick-up</button>
@@ -5292,7 +5327,7 @@
       lines.push({
         boar: breed || 'Semen', breed: breed, semen_batch_no: '',
         qty, rate, amount: +(qty * rate).toFixed(2),
-        semen_id: '', ordered_rate: rate, ordered_breed: breed, from_order: true
+        semen_id: '', ordered_rate: rate, ordered_qty: qty, ordered_breed: breed, from_order: true
       });
     });
     return { lines, advisory: short.join(' · '), shortfall: short.join(' · ') };
@@ -5603,13 +5638,21 @@
      and a farm that writes "Large White" and "Largewhite" means the same pig. */
   function lotsForBreed(breed) {
     const f = F();
-    const want = String(breed || '').trim().toLowerCase();
-    if (!want) return [];
-    const norm = v => String(v || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-    const w = norm(want);
+    const squash = v => String(v || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const w = squash(breed);
+    if (!w) return [];
+    /* Deliberately ASYMMETRIC, because the two failure directions are not equal.
+       - breed-to-breed must be the same word (spaces and case aside): a farm that breeds
+         "Duroc" does not have "Duroc Pietrain", and ticking that lot would be a claim about a
+         crossbreed the boar record never made. "Duroc Pietrain".includes("Duroc") is exactly
+         the substring trap, so containment is never tried between breed fields.
+       - breed-to-BOAR-NAME may contain it, because that is how pens name pigs:
+         "B1 Large White" legitimately carries "Largewhite".
+       A missed match only costs you the ✓ tick; a wrong match hands the reseller a different
+       pig than the one they asked for. */
     return (f.semen || []).filter(s => {
-      const b = norm(s.breed), n = norm(s.boar_name || s.boar);
-      return b === w || n === w || (w && (b.includes(w) || w.includes(b) || n.includes(w) || w.includes(n)));
+      const b = squash(s.breed), n = squash(s.boar_name || s.boar);
+      return b === w || n === w || n.includes(w);
     });
   }
   function lotsWithStockForBreed(breed) { return lotsForBreed(breed).filter(s => lotOnHand(s) > 0); }
@@ -5802,7 +5845,7 @@
     return `<div class="adj-card">
       <div class="adj-card-title"><span><b style="text-transform:none;letter-spacing:0;font-size:14px">${escH(o.reseller_name || 'A reseller')}</b></span><span>${bottles} bottle${bottles === 1 ? '' : 's'} · ${orderMoneyLabel(o).replace(/<b[^>]*>|<\/b>/g, '')}</span></div>
       ${orderLineRowsHTML(o.lines)}
-      ${o.need_by ? `<small class="field-hint">🗓 wants it ${escH(o.need_by)}</small>` : ''}
+      ${o.need_by ? `<small class="field-hint" style="display:block">🗓 wants it ${escH(o.need_by)}</small>` : ''}
       ${o.note ? `<small class="field-hint">💬 “${escH(o.note)}”</small>` : ''}
     </div>`;
   }

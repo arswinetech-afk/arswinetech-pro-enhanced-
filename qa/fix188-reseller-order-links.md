@@ -1,4 +1,4 @@
-# FIX 188 / FIX 189 — Reseller order links and the farm's order menu (v230 → v235)
+# FIX 188 / FIX 189 — Reseller order links and the farm's order menu (v230 → v236)
 
 > Your question: *"Is it possible to send a link where this link will have like an ordering
 > counter page, whereas the reseller can simply place their order and once they click
@@ -13,6 +13,39 @@
 > **v232** is that same build with a fixable install: pasting the SQL onto a farm that already
 > had v230 died with `42P13 cannot change return type of existing function`, because v231
 > changed what the catalogue function returns. Build `v232-reseller-sql-recreate-2026-09-12`.
+
+## v236 — the clue belongs on the label, not beside it
+
+Their reply to v235 was a screenshot with red boxes drawn in the empty space *inside* the label
+row, and one sentence that settled the design: *"that is where you should place the clue if what
+specific breed the reseller had placed order along with its quantity … so the farm owner can save
+the time navigating to the list of orders."* Two things to notice: the position, and that breed
+alone is not enough — it has to be **breed × quantity** or you still walk to the inbox to count.
+
+v235 had put the breed in a block above the picker and left the label reading `*`; and their
+deployed build was still the one before *that* — the four-column row with the clipped `Subtotal`
+and the `✕` hanging in the gutter is v234's, which is why no clue appeared at all. Between the two
+requests the answer was the same: put `🧬 Duroc × 3` where the eye already is, on the label.
+
+- **the label is the clue** — `Semen Batch / Boar Line 1 · 🧬 Duroc × 3`, breed and count at
+  13.5px so they survive a glance, and `*` only on a hand-added line.
+- **`(asked 3 × ₱450)`** follows in amber the moment the qty or price box stops matching the
+  order, and removes itself when it matches again. It is derived from the live line on every
+  totals recalculation (`refreshOrderLineDrift` inside `calcPickupTotals`), so it cannot go
+  stale — which is the whole reason they were walking back to the inbox to double-check.
+- **the block under the picker now says only what is actionable** — `BDD (5 left) is the only lot
+  of it [Use it]`, `3 lots of it in stock, ticked ✓ at the top of the list`, `no Hamruc Pietrain
+  in stock right now — any lot here works, or accept now and collect later`, `✓ Duroc (BD) is
+  that breed`, `⚠ you put B1 Large White on this line instead`. A line that repeats its own breed
+  twice is a line that gets skimmed.
+- **the strip up top lists the order in one line** — `Largewhite × 2 · Duroc × 4 · Duroc
+  Pietrain × 3 · Hamruc Pietrain × 3` — the shape of the request before the first dropdown. Fixing
+  it also killed the stray `. .` their screenshot caught: two optional clauses each left their own
+  period behind when neither applied.
+- Their inbox card's `✓ ACCEPTED 7 / MIN AGO` was the same class of thing — relative time wrapped
+  because `.adj-card-title > span` uppercases and letter-spaces — so `7 min ago` is `nowrap`
+  normal-case now, and `wants it 2026-09-13` and `you choose which boar` sit on their own lines
+  instead of running into one sentence.
 
 ## v235 — the pick-up line now says which breed it is for
 
@@ -34,11 +67,17 @@ Each prefilled line now carries its own clue:
   pre-selected — that stays your decision, and a dropdown that already picked a boar is how a
   wrong lot quietly becomes an invoice.
 - **in the label**: `Semen Batch / Boar Line 3 — for Duroc Pietrain`, so the tab order itself
-  says what each row is for.
+  says what each row is for. (v236 moved the block from *above* the picker to *under* it and put
+  the breed **plus the ordered quantity** into the label proper — see above.)
 
-Breed matching lives in one helper (`lotsForBreed`), normalised for punctuation and case, so
-"Largewhite" finds a lot recorded as "B1 Large White"/"Large White" and the inbox warning, the
-clue and the tick marks can never disagree with each other. `ordered_breed` rides along on the
+Breed matching lives in one helper (`lotsForBreed`) and it is **asymmetric on purpose** (tightened
+in v236): requested breed vs a lot's **boar name** may contain it, because that is how pens name
+pigs — "B1 Large White" is Largewhite, and a farm that spells its menu `Largewhite` and its boars
+`Large White` still gets its ✓. Requested breed vs a lot's **breed field** must be the same word
+(case and punctuation aside), because a farm that breeds `Duroc` does not thereby have `Duroc
+Pietrain` and ticking that lot would be a claim no boar record made. The two mistakes are not
+equal: a missed match costs you a hint, a wrong match hands the reseller a different pig. The
+inbox warning, the clue and the tick marks all read from that one helper, so they cannot disagree. `ordered_breed` rides along on the
 line and into the saved ledger line, which means the reseller's own history shows
 `Batch: BDD · 2 bottle(s) × ₱250 · 🛒 asked Duroc Pietrain` **only when you gave a different
 breed than the one requested** — a deliberate swap stays auditable, a matching fill stays quiet.
@@ -237,8 +276,8 @@ revocable** · **Phase 1 now**.
 | `client.js` | `entityMap` += `semenResellerOrders: 'semen_reseller_order'`, `semenResellerOrderLinks: 'semen_reseller_order_link'`, `semenOrderBreeds: 'semen_order_breed'` — so orders, links and the menu sync, back up and restore like every other record (the menu must sync: the public page reads it from the cloud). |
 | `app.js` | `sanitizeFarm` initialises the three buckets, as it does for all the others. |
 | `sw.js` | `/order.html` and `/js/order-page.js` bypass the app cache (a reseller must never get yesterday's page, and offline must not hand them your login screen). |
-| `_headers`, `config.js` | `order.html` served `no-cache` + `X-Robots-Tag: noindex`; version `v235-pickup-breed-clue-2026-09-13`. |
-| `qa/build-deploy-layout.sh`, `qa/test-reseller-orders.mjs` | the page is copied into the deploy layout; 250 checks. |
+| `_headers`, `config.js` | `order.html` served `no-cache` + `X-Robots-Tag: noindex`; version `v236-pickup-breed-label-2026-09-13`. |
+| `qa/build-deploy-layout.sh`, `qa/test-reseller-orders.mjs` | the page is copied into the deploy layout; 261 checks. |
 
 No `_worker.js` change is needed: it only special-cases `/ars-head` and otherwise falls
 through to `env.ASSETS.fetch(request)`, so `/order.html` is served as a static asset.
@@ -297,7 +336,7 @@ lists their own recent orders as `Waiting for the farm` / `Accepted — ready to
 
 ## Checks that ran
 
-`node qa/test-reseller-orders.mjs` → **250/250** (page arithmetic with no stock in it and the
+`node qa/test-reseller-orders.mjs` → **261/261** (page arithmetic with no stock in it and the
 999 cap; the payload that leaves the phone; the fake-browser end-to-end incl. an unpriced breed
 admitted as "Price confirmed by the farm"; link lifecycle incl. supersede and pause; the menu —
 seeded once, emptied stays emptied, duplicates refused, a draft line pruned on cancel, and a
@@ -325,6 +364,12 @@ reservations while an order is pending. A named-boar *preference* also stays out
 by breed, the boar is yours, and turning it into structure would mean holding a bottle — that is
 a reservation feature, not a tweak to this one.
 Say which of those matters and it becomes the next fix.
+
+**Still on offer, not built:** `Use it` could also fill the caretaker note with
+`Return: 2B1LW 2BD 3CDP` — the shorthand they were already writing by hand to keep the lines
+straight. It stays out of this build because the note's format is theirs, not a field the app
+owns, and auto-writing into a free-text box people read as their own is a decision to make once,
+not a default. Say the word and it is one line.
 
 **Rollback:** delete the build (previous tag) and, if you want the entry points gone, run
 `drop function if exists public.ars_place_order(text, jsonb, text, text);` and the three
