@@ -746,7 +746,7 @@ async function bootOrderPage({ search, calls = [], barHeight, ...resp }) {
   ok('[14] and the offline fallback cannot hand a reseller the login screen', /js\/order-page\.js'\)\s*return;/.test(sw));
   ok('[14] order.html is in the deploy layout', /order\.html/.test(build));
   ok('[14] the page is served no-cache and kept out of search engines', /\/order\.html\n  Cache-Control: no-cache/.test(read('_headers')) && /noindex/.test(read('_headers')));
-  ok('[14] the build is bumped so phones drop the old shell', /arswinetech-pro-v237-inbox-search/.test(sw) && /v237-inbox-search/.test(cfg), sw.split('\n')[7] + ' | ' + cfg.split('\n')[2]);
+  ok('[14] the build is bumped so phones drop the old shell', /arswinetech-pro-v238-collection-board/.test(sw) && /v238-collection-board/.test(cfg), sw.split('\n')[7] + ' | ' + cfg.split('\n')[2]);
   ok('[14] the page asks for breeds, not bottles', /Which breeds do you need\?/.test(page) && !/Choose your bottles/.test(page));
 
   /* the fixed basket bar used to steal the last row: a hardcoded 104px of body padding lost
@@ -1017,6 +1017,137 @@ async function bootOrderPage({ search, calls = [], barHeight, ...resp }) {
   ctxE.arsOrderInboxSearch('any');
   ok('[16] with nothing in the inbox the suggestion box says that, not “no reseller matches”', /Nothing has been ordered through a link yet/.test(String(ctxE.__el('orderInboxSug').innerHTML).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ')), String(ctxE.__el('orderInboxSug').innerHTML).slice(0, 120));
   ok('[16] and the list admits it is empty without blaming the search', /Nothing waiting for a decision matches “any”, and nothing is waiting right now/.test(String(ctxE.__el('orderInboxBody').innerHTML).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ')), String(ctxE.__el('orderInboxBody').innerHTML).replace(/<[^>]+>/g, ' ').slice(0, 120));
+}
+
+
+/* ══ [17] the collection board: bottles per breed for the day, counted from the records ═════ */
+{
+  const db = seed();
+  const ctx = bootApp(db);
+  const dkey = (off = 0) => {
+    const d = new Date(Date.now() + off * 86400000);
+    const p = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  };
+  const on = (id, day, status, lines, over = {}) => ({
+    id, link_id: 'l1', reseller_id: 'R-JO', reseller_name: 'Jo Dacara', status,
+    placed_at: new Date(Date.now() - day * 86400000 + 3600000).toISOString(),
+    need_by: '', note: '', removed: [],
+    lines: lines.map(l => ({ breed: l[0], boar: l[0], qty: l[1], rate: 400 })),
+    bottles: lines.reduce((a, l) => a + l[1], 0), total: lines.reduce((a, l) => a + l[1] * 400, 0),
+    ...over
+  });
+  /* A: one order, two Largewhite lines — the bottles add up, the order counts once */
+  db.semenResellerOrders.push(
+    on('b_A', 0, 'accepted', [['Largewhite', 2], ['Largewhite', 3], ['Duroc', 4]], { need_by: dkey(0) }),
+    on('b_B', 0, 'pending', [['Duroc', 2]]),
+    on('b_C', 1, 'accepted', [['Hamruc Pietrain', 7]]),
+    on('b_D', 0, 'declined', [['Duroc', 9]]),
+    on('b_E', 8, 'accepted', [['Duroc', 20]]),
+    on('b_F', 0, 'accepted', [['Duroc', 1]], { placed_at: '' })
+  );
+  const body = () => String(ctx.__el('orderInboxBody').innerHTML || '');
+  const txt = h => String(h).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  const board = () => { const i = txt(body()).indexOf('Collection board'); return i < 0 ? '' : txt(body()).slice(i); };
+
+  ctx.openResellerOrderInbox();
+  ctx.arsOrderInboxSearch('');
+  ok('[17] the inbox now answers “how much of each breed” before the first card', /Collection board/.test(txt(body())), txt(body()).slice(0, 60));
+  ok('[17] on four honest scopes, with today active', /Yesterday \+ today/.test(body()) && /7 days/.test(body()) && /Everything/.test(body()) && /background:var\(--teal\);color:#fff;border:0"[^>]*>Today</.test(body()), (txt(body()).match(/Collection board[^|]{0,80}/) || [''])[0]);
+  ok('[17] today counts the 3 orders placed today, not the 6 in the bucket', /3 orders · 12 bottles/.test(board()), board().slice(0, 90));
+  ok('[17] and the board sums the breed across orders and lines', /Duroc .*7 bottles/.test(board()) && /Largewhite .*5 bottles/.test(board()), board().slice(0, 260));
+  ok('[17] one order with two Largewhite lines is still ONE order', /Largewhite 5 bottles 5 to collect · 1 order/.test(board()), (board().match(/Largewhite[^|]{0,120}/) || [''])[0]);
+  ok('[17] it splits what is yours to collect from what is still a yes away', /5 to collect · 2 waiting your yes/.test(board()), (board().match(/Duroc[^|]{0,130}/) || [''])[0]);
+  ok('[17] a declined order is named and excluded, never silently dropped', /1 declined order \(9 bottles\) not counted/.test(board()), (board().match(/[^|]*declined[^|]{0,60}/) || [''])[0]);
+  ok('[17] stock is on the row, because that is what “how many boars” really means', /only 5 in stock · short 2/.test(board()) && /10 in stock · 1 lot ✓/.test(board()), (board().match(/(Duroc|Largewhite)[^|]{0,130}/g) || []).join(' // ').slice(0, 300));
+  ctx.arsOrderBoardScope('2days');
+  ok('[17] a breed the cooler has none of says so on the row', /Hamruc Pietrain 7 bottles 7 to collect · 1 order · nothing of it in stock/.test(board()), (board().match(/Hamruc[^|]{0,110}/) || [''])[0]);
+  ctx.arsOrderBoardScope('today');
+  ok('[17] the wanted date is carried along too', /🗓 9 wanted today/.test(board()), (board().match(/🗓[^|]{0,60}/) || [''])[0]);
+
+  ctx.arsOrderBoardScope('2days');
+  ok('[17] yesterday + today adds yesterday’s order', /4 orders · 19 bottles/.test(board()), board().slice(0, 90));
+  ctx.arsOrderBoardScope('7days');
+  ok('[17] seven days is still seven days, not “everything so far”', /4 orders · 19 bottles/.test(board()), board().slice(0, 90));
+  ctx.arsOrderBoardScope('all');
+  ok('[17] everything picks up the order from 8 days ago', /5 orders · 39 bottles/.test(board()) && /Duroc 27 bottles/.test(board()), board().slice(0, 200));
+  ctx.arsOrderBoardScope('today');
+  ok('[17] and the scope is remembered on this device', String(ctx.__store.get('ars-order-board-scope:FARM-TEST')) === 'today', JSON.stringify([...ctx.__store]));
+  ctx.arsOrderBoardScope('7days');
+  ctx.arsToggleHandledOrders();
+  ok('[17] a re-render keeps the scope you picked', /background:var\(--teal\)[^>]*>7 days</.test(body()), (txt(body()).match(/Collection board[^|]{0,80}/) || [''])[0]);
+  ctx.arsOrderBoardScope('today');
+
+  /* the number that matters most: the folded half is still counted */
+  for (let i = 0; i < 8; i++) db.semenResellerOrders.push(on(`b_fold_${i}`, 0, 'accepted', [['Duroc', 1]]));
+  ctx.openResellerOrderInbox();
+  ctx.arsOrderInboxSearch('');
+  const folded = (body().match(/data-order="b_fold/g) || []).length;
+  ok('[17] the inbox still folds its history at six cards', folded > 0 && folded < 8, `${folded} of 9 rendered`);
+  ok('[17] while the board totals all of them, from the records', /11 orders · 20 bottles/.test(board()) && /Duroc 15 bottles/.test(board()), board().slice(0, 120));
+
+  /* a breed row is the search box pointed at that breed */
+  const before = JSON.stringify(db.semenResellerOrders);
+  const savesBefore = ctx.__saves;
+  ctx.arsOrderBoardBreed(0);
+  ok('[17] tapping a breed lists the orders behind the number', String(ctx.__el('orderInboxSearch').value) === 'Duroc' && /for “Duroc”/.test(txt(body())), String(ctx.__el('orderInboxSearch').value));
+  ok('[17] and the board says what it is counting then', /counting the search “Duroc”/.test(board()), (board().match(/counting[^·]{0,40}/) || [''])[0]);
+  ctx.arsOrderInboxClearSearch();
+  ctx.openResellerOrderInbox('R-JO');
+  ctx.arsOrderInboxSearch('');
+  ok('[17] opened on one reseller, the board is that reseller’s total', /counting only Jo Dacara/.test(board()), (board().match(/counting[^·]{0,40}/) || [''])[0]);
+  ctx.openResellerOrderInbox('R-AN');
+  ctx.arsOrderInboxSearch('');
+  ok('[17] and an empty one is honest about it', /nothing in this scope/.test(txt(body())), (txt(body()).match(/Collection board[^|]{0,80}/) || [''])[0]);
+
+  ok('[17] the board reads orders; it never writes one', JSON.stringify(db.semenResellerOrders) === before && ctx.__saves === savesBefore, `saves ${savesBefore} → ${ctx.__saves}`);
+}
+
+/* the edges that would otherwise be a wrong number rather than a missing one */
+{
+  const db = seed();
+  const ctx = bootApp(db);
+  const day0 = new Date().toISOString();
+  db.semenResellerOrders.push({
+    id: 'e_1', reseller_id: 'R-JO', reseller_name: 'Jo Dacara', status: 'accepted', placed_at: day0,
+    need_by: '', lines: [{ qty: 3, rate: 400 }, { breed: 'duroc', boar: 'X', qty: 2, rate: 400 }], bottles: 5, total: 2000, removed: []
+  });
+  ctx.openResellerOrderInbox();
+  ctx.arsOrderInboxSearch('');
+  const txt = h => String(h).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  const b = () => { const i = txt(body()).indexOf('Collection board'); return i < 0 ? '' : txt(body()).slice(i); };
+  function body() { return String(ctx.__el('orderInboxBody').innerHTML || ''); }
+  ok('[17] a line with no breed on it is counted, under its own label, never lost', /No breed named 3 bottles/.test(b()), b().slice(0, 200));
+  ok('[17] and a breed typed in lower case is matched to the cooler anyway', /duroc 2 bottles 2 to collect · 1 order · 5 in stock · 1 lot ✓/.test(b()), b().slice(0, 240));
+  ok('[17] the row totals always add up to the header total', /1 order · 5 bottles/.test(b()), b().slice(0, 120));
+
+  /* a farm that tracks its boar lines as separate breeds can outgrow the board */
+  for (let i = 0; i < 12; i++) {
+    db.semenResellerOrders.push({
+      id: `e_breed_${i}`, reseller_id: 'R-AN', reseller_name: 'Greg Biron', status: 'accepted',
+      placed_at: new Date().toISOString(), need_by: '', note: '', removed: [],
+      lines: [{ breed: `Breed ${i}`, boar: `Breed ${i}`, qty: 2, rate: 400 }], bottles: 2, total: 800
+    });
+  }
+  ctx.openResellerOrderInbox();
+  ctx.arsOrderInboxSearch('');
+  const bOnly = () => { const t = b(); const i = t.indexOf('Collection board'), j = t.indexOf('Bottles of each breed'); return j > i ? t.slice(i, j) : t; };
+  ok('[17] the board caps at ten breed rows and says how many are behind it', /\+4 more breeds in this scope \(8 bottles\)/.test(b()) && (bOnly().match(/to collect · 1 order/g) || []).length === 10, `${(bOnly().match(/to collect · 1 order/g) || []).length} rows | ` + (b().match(/\+\d+ more breeds[^.]{0,90}/) || [''])[0]);
+  ok('[17] and the hidden ones are still inside the header total', /13 orders · 29 bottles/.test(b()), b().slice(0, 90));
+}
+{
+  const db = seed();
+  const ctx = bootApp(db);
+  db.semenResellerOrders.push({
+    id: 'x_all_declined', reseller_id: 'R-JO', reseller_name: 'Jo Dacara', status: 'declined',
+    placed_at: new Date().toISOString(), need_by: '', note: '', removed: [],
+    lines: [{ breed: 'Duroc', boar: 'Duroc', qty: 4, rate: 400 }], bottles: 4, total: 1600
+  });
+  ctx.openResellerOrderInbox();
+  ctx.arsOrderInboxSearch('');
+  const t = String(ctx.__el('orderInboxBody').innerHTML).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+  ok('[17] a scope of only declined orders says that, instead of “0 bottles”', /Every order in this scope was declined — nothing to collect/.test(t), (t.match(/Collection board[^|]{0,120}/) || [''])[0]);
+  ok('[17] and the header shows the order it counted as zero, honestly', /0 orders · 0 bottle/.test(t) || /nothing in this scope/.test(t), (t.match(/Collection board[\s\S]{0,60}/) || [''])[0]);
 }
 
 console.log(`\n${failures ? 'FAILED' : 'OK'} — ${checks - failures}/${checks} checks passed\n`);

@@ -5200,6 +5200,132 @@
   const HANDLED_EXPANDED = 40;   /* a phone can carry only so many cards at once */
   let inboxShowAllHandled = false, inboxFilterId = '', inboxQuery = '', inboxSug = [];
 
+  /* ══ the collection board: bottles per breed for the day, totalled from the data ═════════
+     Their question: "what if the farm owner asks how many total of Largewhite or Duroc these
+     resellers had placed order — for the farm owner to calculate how many boars are needed for
+     collection, like a consolidated total order per breed placed for today, instead of manually
+     counting those total order made for today or yesterday + today."
+     Two things that makes necessary. The counting has to come from the RECORDS, because the
+     inbox folds handled history at six cards — adding up what is on screen would be a wrong
+     number, not an incomplete one. And the day has to be the farm's own calendar day: a pick-up
+     at 4pm in Manila is not "tomorrow" because a database clock says 8am. */
+  const ORDER_BOARD_SCOPES = [
+    { k: 'today', label: 'Today' },
+    { k: '2days', label: 'Yesterday + today' },
+    { k: '7days', label: '7 days' },
+    { k: 'all', label: 'Everything' }
+  ];
+  const ORDER_BOARD_KEY = 'ars-order-board-scope';
+  let orderBoardScope = '', orderBoardRows = [];
+
+  const orderBoardFarmKey = () => `${ORDER_BOARD_KEY}:${String((F() || {}).farm_id || (typeof farmId !== 'undefined' ? farmId : '') || 'farm')}`;
+  function orderBoardScopeGet() {
+    if (!orderBoardScope) {
+      orderBoardScope = 'today';
+      try {
+        const saved = localStorage.getItem(orderBoardFarmKey());
+        if (saved && ORDER_BOARD_SCOPES.some(x => x.k === saved)) orderBoardScope = saved;
+      } catch (_) {}
+    }
+    return orderBoardScope;
+  }
+
+  const orderDayKey = v => {
+    const d = new Date(v);
+    if (!isFinite(d.getTime())) return '';
+    const p = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  };
+  const orderDayOffset = n => orderDayKey(Date.now() + n * 86400000);
+  function orderInBoardScope(o) {
+    const k = orderBoardScopeGet();
+    if (k === 'all') return true;
+    const day = orderDayKey(o.placed_at);
+    if (!day) return true;                     /* an order that cannot be dated is never silently dropped */
+    if (k === 'today') return day === orderDayOffset(0);
+    if (k === '2days') return day === orderDayOffset(0) || day === orderDayOffset(-1);
+    return day >= orderDayOffset(-6);          /* 7 local days, inclusive */
+  }
+
+  function orderBoardData(list) {
+    const map = new Map();
+    const today = orderDayOffset(0);
+    const out = { rows: [], orders: 0, bottles: 0, declined: 0, decBottles: 0, wantedToday: 0, wantedLater: 0 };
+    list.forEach(o => {
+      const st = orderStatusOf(o);
+      const bottles = (o.lines || []).reduce((a, l) => a + (+l.qty || 0), 0);
+      if (st === 'declined') { out.declined++; out.decBottles += bottles; return; }
+      out.orders++;
+      out.bottles += bottles;
+      const need = String(o.need_by || '').slice(0, 10);
+      if (need === today) out.wantedToday += bottles;
+      else if (need && need > today) out.wantedLater += bottles;
+      /* one order can hold two lines of the same breed: count the bottles twice, the order once */
+      const seen = new Set();
+      (o.lines || []).forEach(l => {
+        const raw = String(l.breed || l.boar || '').trim() || 'No breed named';
+        const key = raw.toLowerCase().replace(/\s+/g, ' ');
+        const g = map.get(key) || { name: raw, bottles: 0, waiting: 0, collect: 0, other: 0, orders: 0, lots: 0 };
+        const q = +l.qty || 0;
+        g.bottles += q;
+        if (st === ORDER_PENDING) g.waiting += q;
+        else if (st === 'accepted') g.collect += q;
+        else g.other += q;
+        if (!seen.has(key)) { seen.add(key); g.orders++; }
+        map.set(key, g);
+      });
+    });
+    out.rows = [...map.values()].map(g => ({
+      ...g,
+      inStock: lotsWithStockForBreed(g.name).reduce((a, lot) => a + lotOnHand(lot), 0),
+      lots: lotsWithStockForBreed(g.name).length
+    })).sort((a, b) => b.bottles - a.bottles || a.name.localeCompare(b.name));
+    return out;
+  }
+
+  function orderBoardHTML(inView, counting) {
+    /* the scope applies HERE, to the board only: the list underneath still shows the whole
+       inbox, because “what do I have to collect today” and “what did people ask for” are two
+       different questions and the farm needs both on one screen. A board that quietly totalled
+       everything regardless of its own label would be worse than no board at all. */
+    const scoped = inView.filter(orderInBoardScope);
+    const d = orderBoardData(scoped);
+    orderBoardRows = d.rows.map(r => r.name);
+    const k = orderBoardScopeGet();
+    const label = (ORDER_BOARD_SCOPES.find(x => x.k === k) || ORDER_BOARD_SCOPES[0]).label;
+    const chips = ORDER_BOARD_SCOPES.map(x => `<button type="button" class="btn ghost small" style="${x.k === k ? 'background:var(--teal);color:#fff;border:0' : 'text-transform:none;letter-spacing:0'}" onclick="window.arsOrderBoardScope('${x.k}')">${x.label}</button>`).join('');
+    /* the menu is usually a handful of breeds, so this ceiling is rarely reached; when it is, the
+       rows behind it are named and their bottles are still in the header total */
+    const shown = d.rows.slice(0, 10);
+    const rows = shown.map((r, i) => {
+      const stock = r.inStock >= r.bottles
+        ? `${r.inStock} in stock${r.lots ? ` · ${r.lots} lot${r.lots === 1 ? '' : 's'}` : ''} ✓`
+        : (r.inStock > 0
+          ? `<b style="color:#f0b64b">only ${r.inStock} in stock · short ${r.bottles - r.inStock}</b>`
+          : `<b style="color:#f0b64b">nothing of it in stock</b>`);
+      return `<button type="button" onclick="window.arsOrderBoardBreed(${i})" style="width:100%;text-align:left;background:var(--bg);border:1px solid var(--line);border-radius:9px;padding:7px 10px;margin-top:6px;cursor:pointer">
+        <span style="display:flex;justify-content:space-between;align-items:baseline;gap:8px">
+          <b style="font-size:13.5px;color:var(--teal2);text-transform:none;letter-spacing:0">${escH(r.name)}</b>
+          <b style="font-size:15px;white-space:nowrap">${r.bottles} bottle${r.bottles === 1 ? '' : 's'}</b>
+        </span>
+        <small class="field-hint" style="display:block;margin-top:1px">${r.collect ? `${r.collect} to collect` : ''}${r.collect && r.waiting ? ' · ' : ''}${r.waiting ? `${r.waiting} waiting your yes` : ''}${r.other ? `${r.collect || r.waiting ? ' · ' : ''}${r.other} on another status` : ''} · ${r.orders} order${r.orders === 1 ? '' : 's'} · ${stock}</small>
+      </button>`;
+    }).join('');
+    const notes = counting ? [`counting ${counting}`] : [];
+    if (d.declined) notes.push(`${d.declined} declined order${d.declined === 1 ? '' : 's'} (${d.decBottles} bottle${d.decBottles === 1 ? '' : 's'}) not counted`);
+    if (d.wantedToday) notes.push(`🗓 ${d.wantedToday} wanted today`);
+    if (d.wantedLater) notes.push(`🗓 ${d.wantedLater} for later dates`);
+    if (d.bottles && !d.wantedToday && !d.wantedLater) notes.push('no order in this scope carries a wanted date');
+    return `<div class="adj-card" style="padding:10px 12px">
+      <div class="adj-card-title"><span>🧾 Collection board</span><span>${d.orders ? `${d.orders} order${d.orders === 1 ? '' : 's'} · ${d.bottles} bottle${d.bottles === 1 ? '' : 's'}` : 'nothing in this scope'}</span></div>
+      <div class="due-actions" style="justify-content:flex-start;gap:6px;flex-wrap:wrap;margin:4px 0 2px">${chips}</div>
+      ${shown.length ? rows : `<small class="field-hint" style="display:block;margin-top:4px">${d.declined ? 'Every order in this scope was declined — nothing to collect.' : 'Nothing ordered in this scope. Switch to Everything to see the rest.'}</small>`}
+      ${d.rows.length > shown.length ? `<small class="field-hint" style="display:block;margin-top:6px;color:#f0b64b">+${d.rows.length - shown.length} more breed${d.rows.length - shown.length === 1 ? '' : 's'} in this scope (${d.rows.slice(10).reduce((a, r) => a + r.bottles, 0)} bottle${d.rows.slice(10).length === 1 ? '' : 's'}) — their bottles are inside the total above; search for them to see the row.</small>` : ''}
+      ${notes.length ? `<small class="field-hint" style="display:block;margin-top:6px">${notes.join(' · ')}.</small>` : ''}
+      <small class="field-hint" style="display:block;margin-top:4px;color:var(--muted)">Bottles of each breed to collect${label === 'Today' ? ' today' : ` in “${label.toLowerCase()}”`}. ${inView.length ? 'Tap a breed to list the orders behind the number. ' : ''}Counts come from every order in scope — not only the cards shown, and every breed on those orders, so the totals add up even when the list is folded${d.declined ? ' (declined ones left out)' : ''}.</small>
+    </div>`;
+  }
+
   /* the query is typed by a person and re-printed into an attribute. escH covers < > &; a bare
      quote would close value= early, so it is neutralised here too. */
   const orderInboxEcho = v => escH(v).replace(/"/g, '&quot;');
@@ -5336,7 +5462,7 @@
           </div>` : (term ? '' : '');
 
     return {
-      body: `${status}${pendingBlock}${handledBlock}`,
+      body: `${status}${orderBoardHTML(all, [who ? `only ${escH(who.name || 'this reseller')}` : '', term ? `the search “${escH(term)}”` : ''].filter(Boolean).join(' + '))}${pendingBlock}${handledBlock}`,
       title: who ? `${escH(who.name || 'This reseller')}${pending.length ? ` — ${pending.length} order${pending.length > 1 ? 's' : ''} waiting` : term ? ' — nothing of theirs matches that' : ' — nothing waiting'}`
         : (pending.length
           ? `${pending.length} order${pending.length > 1 ? 's' : ''} waiting${term ? ` that match “${escH(term)}”` : ''}`
@@ -5437,6 +5563,21 @@
     renderOrderInboxBody();
   };
   /* Enter takes the top suggestion (the same one a thumb would tap), Escape gets you out. */
+  function arsOrderInboardScopeSet(k) {
+    orderBoardScope = ORDER_BOARD_SCOPES.some(x => x.k === k) ? k : 'today';
+    try { localStorage.setItem(orderBoardFarmKey(), orderBoardScope); } catch (_) {}
+    renderOrderInboxBody();
+  }
+  /* a breed row is the search box pointed at that breed: the board totals, the list explains */
+  function arsOrderInboardBreed(i) {
+    const name = orderBoardRows[i];
+    if (name === undefined) return;
+    inboxQuery = String(name);
+    const inp = document.getElementById('orderInboxSearch');
+    if (inp) inp.value = inboxQuery;
+    orderInboxSugClose();
+    renderOrderInboxBody();
+  }
   function arsOrderInboxKey(ev, input) {
     const k = String((ev && ev.key) || '');
     if (k === 'Escape') { window.arsOrderInboxClearSearch(); if (input) input.blur && input.blur(); return false; }
@@ -5453,6 +5594,8 @@
   window.arsOrderInboxPickSuggest = arsOrderInboxPickSuggest;
   window.arsOrderInboxSugClose = orderInboxSugClose;
   window.arsOrderInboxKey = arsOrderInboxKey;
+  window.arsOrderBoardScope = arsOrderInboardScopeSet;
+  window.arsOrderBoardBreed = arsOrderInboardBreed;
 
   function patchOrder(orderId, changes, msg) {
     ensureResellerData();

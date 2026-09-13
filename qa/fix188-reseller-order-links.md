@@ -1,4 +1,4 @@
-# FIX 188 / FIX 189 — Reseller order links and the farm's order menu (v230 → v237)
+# FIX 188 / FIX 189 — Reseller order links and the farm's order menu (v230 → v238)
 
 > Your question: *"Is it possible to send a link where this link will have like an ordering
 > counter page, whereas the reseller can simply place their order and once they click
@@ -13,6 +13,49 @@
 > **v232** is that same build with a fixable install: pasting the SQL onto a farm that already
 > had v230 died with `42P13 cannot change return type of existing function`, because v231
 > changed what the catalogue function returns. Build `v232-reseller-sql-recreate-2026-09-12`.
+
+## v238 — the collection board: bottles per breed, for the day
+
+Their question was not about the interface at all: *what if the farm owner is asked how many
+bottles of Largewhite or Duroc these resellers have ordered, so they can work out how many boars
+are needed for collection — a consolidated total per breed for today, or yesterday + today,
+instead of counting the orders by hand?* Counting by hand was worse than tedious: the inbox folds
+handled history at six cards, so adding up the numbers on the screen gave a **wrong** total, not
+an incomplete one.
+
+The board sits under the search box and above the queue, and it is computed from the records:
+
+- **four scopes, and they are real filters**: `Today`, `Yesterday + today`, `7 days`,
+  `Everything`, on the day the reseller **sent** it. The day is the farm's local calendar day
+  (`orderDayKey` on a `Date`, never `toISOString().slice(0,10)`), because a 4pm collection in
+  Manila must not land on the previous UTC day. The chosen scope is remembered per farm
+  (`localStorage["ars-order-board-scope:" + farm_id]`), so the office opens the inbox to the
+  question it actually asks every morning.
+- **one row per breed, as the breeds are spelled on the orders**, largest first, and a row splits
+  what is already agreed from what is still an answer away: `Duroc · 7 bottles — 5 to collect · 2
+  waiting your yes · 3 orders`. A pending order is demand the farm may have to fill, but it is not
+  yet a promise, so the two are never added into one number.
+- **the cooler is on the same row**, because “how many boars” is really “can I fill this”:
+  `10 in stock · 1 lot ✓`, or `only 5 in stock · short 2` in amber, or `nothing of it in stock`.
+  Stock is read live through the same `lotsWithStockForBreed` the pick-up lines use, so the board,
+  the card warning and the ✓ in the dropdown cannot disagree.
+- **declined orders are named, not hidden**: `1 declined order (9 bottles) not counted` — and the
+  `🗓 9 wanted today` line carries the *wanted* date, since an order sent today for Saturday is a
+  different plan from one wanted today.
+- **tapping a breed row is the search box pointed at that breed**, so the board answers
+  “how many” and the list under it answers “whose”. The board states what it is counting when a
+  filter or a search is in force (`counting only Jo Dacara`, `counting the search “Duroc”`).
+- **an order with no date is never dropped** from a dated scope, and a line with no breed is still
+  counted under `No breed named` — a total that quietly omits the odd row is a total people stop
+  trusting. Breed keys are matched case/spacing-insensitively, so `duroc` joins `Duroc`; `removed`
+  requests (what their link could not offer) are not on the order and are not counted.
+- **money and stock are untouched**: the board reads. Two tests assert the whole
+  `semenResellerOrders` array and the `save()` counter are unchanged after scope switches, breed
+  taps and a reseller-filtered open.
+
+The list underneath is deliberately *not* cut to today's scope — “what do I have to collect today”
+and “what has anyone asked for” are two questions, and folding the whole inbox to today would make
+the board look like it had thrown orders away.
 
 ## v237 — a search box, because this inbox is the one list that never stops growing
 
@@ -318,8 +361,8 @@ revocable** · **Phase 1 now**.
 | `client.js` | `entityMap` += `semenResellerOrders: 'semen_reseller_order'`, `semenResellerOrderLinks: 'semen_reseller_order_link'`, `semenOrderBreeds: 'semen_order_breed'` — so orders, links and the menu sync, back up and restore like every other record (the menu must sync: the public page reads it from the cloud). |
 | `app.js` | `sanitizeFarm` initialises the three buckets, as it does for all the others. |
 | `sw.js` | `/order.html` and `/js/order-page.js` bypass the app cache (a reseller must never get yesterday's page, and offline must not hand them your login screen). |
-| `_headers`, `config.js` | `order.html` served `no-cache` + `X-Robots-Tag: noindex`; version `v237-inbox-search-2026-09-13`. |
-| `qa/build-deploy-layout.sh`, `qa/test-reseller-orders.mjs` | the page is copied into the deploy layout; 308 checks. |
+| `_headers`, `config.js` | `order.html` served `no-cache` + `X-Robots-Tag: noindex`; version `v238-collection-board-2026-09-13`. |
+| `qa/build-deploy-layout.sh`, `qa/test-reseller-orders.mjs` | the page is copied into the deploy layout; 337 checks. |
 
 No `_worker.js` change is needed: it only special-cases `/ars-head` and otherwise falls
 through to `env.ASSETS.fetch(request)`, so `/order.html` is served as a static asset.
@@ -378,7 +421,7 @@ lists their own recent orders as `Waiting for the farm` / `Accepted — ready to
 
 ## Checks that ran
 
-`node qa/test-reseller-orders.mjs` → **308/308** (page arithmetic with no stock in it and the
+`node qa/test-reseller-orders.mjs` → **337/337** (page arithmetic with no stock in it and the
 999 cap; the payload that leaves the phone; the fake-browser end-to-end incl. an unpriced breed
 admitted as "Price confirmed by the farm"; link lifecycle incl. supersede and pause; the menu —
 seeded once, emptied stays emptied, duplicates refused, a draft line pruned on cancel, and a
