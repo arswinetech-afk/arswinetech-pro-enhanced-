@@ -98,14 +98,113 @@
 
   window.sowState = sowState; /* [REBUILD FIX 50] shared: dashboard monitoring card uses the same state rules */
 
-  function actionButtons(s, st, index) {
-    if (st.label === 'OPEN') return `<button onclick="openHeatRecord(${index})">🔥 HEAT</button><button onclick="openBreedSow(${index})">💉 BREED</button>`;
-    if (st.label === 'HEAT') return `<button onclick="openBreedSow(${index})">💉 BREED</button><button onclick="openHeatRecord(${index})">🔥 RECORD HEAT</button>`;
-    if (st.label === 'REHEAT') return `<button onclick="openBreedSow(${index})">💉 BREED</button><button onclick="openReheatRecord(${index})">🔥 RECORD REHEAT</button>`;
-    if (st.label === 'GESTATING') return `<button onclick="openSowProfile(${index})">VIEW GESTATION</button><button onclick="openReheatRecord(${index})">🔥 RECORD REHEAT</button>`;
-    if (st.label === 'PREGNANT') return `<button onclick="openSowProfile(${index})">PREGNANCY STATUS</button><button onclick="farrowSowFromCard(${index})">🐷 FARROW</button><button onclick="openReheatRecord(${index})">🔥 RECORD REHEAT</button>`; /* [REBUILD FIX 39] pregnant sows may farrow any day (often before the exact 114-day due date) — never gate the farrow action on being overdue · [REBUILD FIX 56] index-based handler: a sow id containing a quote can no longer break this button */
-    if (st.label === 'LACTATING') return `<button onclick="openWeanModal(${index})">WEAN</button><button onclick="openSowProfile(${index})">FARROWING RECORD</button>`;
-    return `<button onclick="openSowProfile(${index})">⚠ ALERT</button><button onclick="farrowSowFromCard(${index})">🐷 FARROWING RECORD</button>` /* [REBUILD FIX 39] preset the dam here too · [REBUILD FIX 56] index-based — id-safe */
+  /* ── [FIX 191] everything a sow card can do, described ONCE ──────────────────────────────
+     `actionButtons()` used to return a hard-coded string of `<button>`s, and the card then
+     stacked five more rows of them around it: CULL, 🗑 delete-record, 📷 photo, 🗑 remove-photo,
+     +Vaccine, +Treat, Move Stall, Pedigree, Profile, View Tree, + Add — 13 buttons to reach one
+     sow, of which two were duplicates of a button already on the card (Profile called the same
+     openSowProfile as VIEW GESTATION; Pedigree called the same openQuickPedigreeForSow as the
+     View Tree mini in the lineage box), and the two destructive ones sat shoulder-to-shoulder
+     with the daily ones on a 6-inch screen.
+     Now every action is one entry — { ico, card, label, note, run } — the card prints the first
+     SOW_CARD_PRIMARY_STATE_ACTIONS of the state actions plus the daily three, and everything else
+     folds into a ⋯ sheet built from the same array. That sharing is the whole safety argument: an
+     action cannot be hidden on the card and lost from the menu, because there is one list. `card`
+     keeps the exact label the old button showed, and `run` is the exact onclick body, so no
+     handler was rewritten here. Both functions take nothing but (s.photo, st.label, index), which
+     is what lets qa/test-sow-action-menu.mjs execute the split for all 7 states without booting
+     the app. */
+  const SOW_CARD_PRIMARY_STATE_ACTIONS = 2;
+
+  function sowStateActions(s, st, index) {
+    if (st.label === 'OPEN') return [
+      { ico: '🔥', card: '🔥 HEAT', label: 'Record heat', note: 'she was seen in heat today', run: `openHeatRecord(${index})` },
+      { ico: '💉', card: '💉 BREED', label: 'Breed this sow', note: 'service her against a boar', run: `openBreedSow(${index})` }];
+    if (st.label === 'HEAT') return [
+      { ico: '💉', card: '💉 BREED', label: 'Breed this sow', note: 'service her against a boar', run: `openBreedSow(${index})` },
+      { ico: '🔥', card: '🔥 RECORD HEAT', label: 'Record heat', note: 'log the heat you just saw', run: `openHeatRecord(${index})` }];
+    if (st.label === 'REHEAT') return [
+      { ico: '💉', card: '💉 BREED', label: 'Breed this sow', note: 'service her against a boar', run: `openBreedSow(${index})` },
+      { ico: '🔥', card: '🔥 RECORD REHEAT', label: 'Record reheat', note: 'log this reheat', run: `openReheatRecord(${index})` }];
+    if (st.label === 'GESTATING') return [
+      { ico: '🤰', card: 'VIEW GESTATION', label: 'View gestation', note: 'day of 114 and the farrowing date', run: `window.openSowProfile && window.openSowProfile(${index})` },
+      { ico: '🔥', card: '🔥 RECORD REHEAT', label: 'Record reheat', note: 'if she came back open', run: `openReheatRecord(${index})` }];
+    if (st.label === 'PREGNANT') return [
+      { ico: '🤰', card: 'PREGNANCY STATUS', label: 'Pregnancy status', note: 'scan date and day of 114', run: `window.openSowProfile && window.openSowProfile(${index})` },
+      { ico: '🐷', card: '🐷 FARROW', label: 'Mark as farrowing', note: 'she is farrowing now — open the litter', run: `farrowSowFromCard(${index})` },
+      { ico: '🔥', card: '🔥 RECORD REHEAT', label: 'Record reheat', note: 'if she returned to heat', run: `openReheatRecord(${index})` }];
+    if (st.label === 'LACTATING') return [
+      { ico: '🍼', card: 'WEAN', label: 'Wean the litter', note: 'moves the piglets out of her', run: `openWeanModal(${index})` },
+      { ico: '🐷', card: 'FARROWING RECORD', label: 'Farrowing record', note: 'this litter: born, born alive, weaned', run: `window.openSowProfile && window.openSowProfile(${index})` }];
+    return [
+      { ico: '⚠️', card: '⚠ ALERT', label: 'Open the alert', note: 'see what is overdue on her', run: `window.openSowProfile && window.openSowProfile(${index})` },
+      { ico: '🐷', card: '🐷 FARROWING RECORD', label: 'Farrowing record', note: 'open the litter record', run: `farrowSowFromCard(${index})` }];
+  }
+
+  function visibleSowStateActions(s, st, index) {
+    return sowStateActions(s, st, index).slice(0, SOW_CARD_PRIMARY_STATE_ACTIONS)
+  }
+
+  /* what the ⋯ sheet holds: the state actions the card did not print, plus everything that used
+     to live in the card body. Duplicates are dropped by comparing `run`, so a sow whose visible
+     VIEW GESTATION already opens the profile does not get a second row saying the same thing. */
+  function sowMoreActions(s, st, index) {
+    const onCard = new Set(visibleSowStateActions(s, st, index).map(a => a.run));
+    const rows = [
+      ...sowStateActions(s, st, index).slice(SOW_CARD_PRIMARY_STATE_ACTIONS),
+      { ico: '👁', label: 'Open full sow profile', note: 'every record kept on her', run: `window.openSowProfile && window.openSowProfile(${index})` },
+      { ico: '📷', label: s.photo ? 'Change her photo' : 'Add her photo', note: 'the photo prints on the pedigree report', run: `window.arsSowPhoto(${index})` },
+      ...(s.photo ? [{ ico: '🗑', label: 'Remove her photo', note: 'her record and history stay', run: `window.arsSowPhotoRemove(${index})`, danger: true }] : []),
+      { ico: '⚠️', label: 'Cull sow', note: 'she leaves the active list; every historical record is kept', run: `openCullModal(${index})`, danger: true },
+      { ico: '🗑', label: 'Delete sow record', note: 'permanently removes this row — no undo', run: `deleteRecord('sows',${index})`, danger: true }];
+    return rows.filter(a => !onCard.has(a.run))
+  }
+
+  /* the sheet itself: the app's own overlay convention, verbatim — .due-modal-bg > .due-modal,
+     removed by id before it is written, closed by tapping the backdrop or its ×. */
+  function sowMoreSheetHTML(index, s, acts) {
+    const name = esc(s.name || 'This sow');
+    return `<div class="due-modal-bg" id="sowMoreActions" onclick="if(event.target===this)closeSowMoreActions()">
+      <div class="due-modal sow-more-modal" role="dialog" aria-modal="true" aria-label="More actions for ${name}">
+        <div class="modal-top"><div style="text-align:left"><div class="eyebrow">SOW ACTIONS</div><h2>${name}</h2></div><button type="button" class="close-reminder" onclick="closeSowMoreActions()">×</button></div>
+        <div class="semen-stock-menu">${acts.map(a => `<button type="button" class="${a.danger ? 'danger-btn' : ''}" onclick="closeSowMoreActions(1);${a.run}"><span class="ss-icon">${a.ico}</span><span><b>${a.label}</b><small>${a.note}</small></span></button>`).join('')}</div>
+        <small class="muted" style="display:block;text-align:left;margin-top:11px;font-size:11px;line-height:1.5">Nothing was taken off this sow — these are the buttons the card used to carry, one tap deeper. Cull keeps her history; Delete removes the row for good.</small>
+      </div></div>`
+  }
+
+  function openSowMoreActions(index, opener) {
+    if (document.getElementById('sowMoreActions')) closeSowMoreActions();
+    const s = (F().sows || [])[index];
+    if (!s) return;
+    const acts = sowMoreActions(s, sowState(s), index);
+    if (!acts.length) return;
+    document.body.insertAdjacentHTML('beforeend', sowMoreSheetHTML(index, s, acts));
+    const box = document.getElementById('sowMoreActions');
+    box.__arsOpener = opener || null;
+    box.__arsEsc = (e) => {
+      /* if app.js’s page-change sweep removed .due-modal-bg while this was open, the node is gone
+         and nothing is left to close — drop the listener with it instead of leaking one per tap */
+      if (!document.getElementById('sowMoreActions')) { document.removeEventListener('keydown', box.__arsEsc); return; }
+      if (e.key === 'Escape' || e.key === 'Esc') closeSowMoreActions()
+    };
+    document.addEventListener('keydown', box.__arsEsc);
+    if (opener) opener.setAttribute('aria-expanded', 'true');
+    const first = box.querySelector('.semen-stock-menu button');
+    if (first) first.focus()
+  }
+
+  /* noFocus is passed by the rows themselves: the button they call next opens its own modal, and
+     dragging focus back to the ⋯ underneath it would leave a keyboard user behind the dialog. */
+  function closeSowMoreActions(noFocus) {
+    const box = document.getElementById('sowMoreActions');
+    if (!box) return;
+    if (box.__arsEsc) document.removeEventListener('keydown', box.__arsEsc);
+    const opener = box.__arsOpener;
+    box.remove();
+    if (opener) {
+      opener.setAttribute('aria-expanded', 'false');
+      if (!noFocus && document.body.contains(opener)) opener.focus()
+    }
   }
 
   function items(kind) {
@@ -448,6 +547,7 @@
 
     let semen = (st.label === 'LACTATING') ? activeLitter(s) : (st.label === 'OPEN') ? productionHistory(s) : (breed ? '<div class="semen-summary"><b>💉 Semen: ' + (breed.boar_name || breed.boar || s.lastSemenBoarName || '—') + '</b><span>Batch: ' + (breed.semen_batch_no || '—') + ' · ' + farrowingDue(s) + '</span></div>' : '');
 
+    const moreActs = sowMoreActions(s, st, index); /* counted once per card, and the sheet rebuilds it fresh on tap */
     return `
       <article data-sow-index="${index}" class="drill-sow ${st.cls}">
         <div class="drill-sow-top">
@@ -458,17 +558,15 @@
             <span class="tag" style="margin-left:4px;font-size:11px;background:rgba(255,255,255,0.05)">🏠 ${esc(sowHousing.barnName)} · ${esc(sowHousing.penName)}</span>
           </div>
           <div class="drill-actions">
-            ${actionButtons(s, st, index)}
-            <button class="danger-btn" onclick="openCullModal(${index})" title="Cull sow (preserve historical records)">CULL</button>
-            <button class="btn ghost delete-action" onclick="deleteRecord('sows',${index})" title="Permanently delete sow record" style="padding:6px 9px">🗑</button>
+            ${visibleSowStateActions(s, st, index).map(a => `<button onclick="${a.run}" title="${a.note}">${a.card}</button>`).join('')}
+            <button type="button" class="btn ghost sow-more-btn" aria-haspopup="dialog" aria-expanded="false" title="${moreActs.length} more actions on this sow" onclick="event.stopPropagation();openSowMoreActions(${index},this)">⋯ More<span class="sow-more-count">${moreActs.length}</span></button>
           </div>
         </div>
 
         <!-- [FIX 115] Registered sow photo (flows into the Pedigree Report) -->
         <div style="display:flex;align-items:center;gap:8px;margin-top:9px">
           ${s.photo ? `<img src="${s.photo}" alt="" style="width:46px;height:46px;border-radius:50%;object-fit:cover;border:2px solid var(--teal2)">` : `<span style="width:46px;height:46px;border-radius:50%;background:rgba(255,255,255,.07);display:inline-flex;align-items:center;justify-content:center;font-size:20px;filter:grayscale(1);opacity:.5">🐖</span>`}
-          <button type="button" class="btn ghost small" onclick="event.stopPropagation();window.arsSowPhoto(${index})">📷 ${s.photo ? 'Change photo' : 'Add photo'}</button>
-          ${s.photo ? `<button type="button" class="btn ghost small delete-action" onclick="event.stopPropagation();window.arsSowPhotoRemove(${index})" title="Remove photo" style="padding:6px 9px">🗑</button>` : ''}
+          <small class="muted sow-photo-hint">📷 ${s.photo ? 'Photo on file' : 'No photo yet'} · ⋯ More to change it</small>
         </div>
 
         <!-- Blinking 2nd Dose / Overdue Alert Banners -->
@@ -490,8 +588,6 @@
           <button type="button" class="btn sow-quick-btn vax" onclick="event.stopPropagation();window.openQuickVaxForSow(${index})">💉 + Vaccine</button>
           <button type="button" class="btn sow-quick-btn treat" onclick="event.stopPropagation();openSowTreatmentModal(${index})">💊 + Treat</button>
           <button type="button" class="btn sow-quick-btn move" onclick="event.stopPropagation();window.openQuickMoveForSow(${index})">🚚 Move Stall</button>
-          <button type="button" class="btn ghost small" onclick="event.stopPropagation();window.openQuickPedigreeForSow(${index})">🧬 Pedigree</button>
-          <button type="button" class="btn ghost small" onclick="event.stopPropagation();window.openSowProfile && window.openSowProfile(${index})">👁 Profile</button>
         </div>
 
         <!-- Sow Vitals Meta -->
@@ -1363,6 +1459,8 @@
   window.sortDrilldown = sortDrilldown;
   window.drillQuickAdd = drillQuickAdd;
   window.showAllTreatments = showAllTreatments;
+  window.openSowMoreActions = openSowMoreActions; /* [FIX 191] the sow card’s ⋯ sheet */
+  window.closeSowMoreActions = closeSowMoreActions;
   const old = window.renderAll;
   window.renderAll = function() {
     (typeof old === 'function' && old());

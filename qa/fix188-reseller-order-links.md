@@ -1,4 +1,4 @@
-# FIX 188 / FIX 189 — Reseller order links and the farm's order menu (v230 → v238)
+# FIX 188 / FIX 189 — Reseller order links and the farm's order menu (v230 → v240)
 
 > Your question: *"Is it possible to send a link where this link will have like an ordering
 > counter page, whereas the reseller can simply place their order and once they click
@@ -13,6 +13,21 @@
 > **v232** is that same build with a fixable install: pasting the SQL onto a farm that already
 > had v230 died with `42P13 cannot change return type of existing function`, because v231
 > changed what the catalogue function returns. Build `v232-reseller-sql-recreate-2026-09-12`.
+
+## v240 — the sow card's ⋯ (and v239, the affordance layer it sits on)
+
+Two design releases, no data change. **v239** (`qa/fix190-neumorphic-affordance.md`) added a single
+stylesheet that makes a key look like a key and a label look stamped: the app's `.btn.ghost` had
+`box-shadow:none`, identical to `.tag`/`.status-pill`, and there was no `.btn:active` rule in 6,085
+lines, so on a phone — where there is no cursor — nothing told a control from a caption.
+**v240** (`qa/fix191-sow-action-menu.md`) then cut the sow card from 12–13 buttons to 4–6 and put
+the rest in a `⋯ More` sheet: Cull and Delete off the card face, the duplicated Profile/Pedigree
+buttons gone, and the card and the menu generated from one action array, which is what `qa/
+test-sow-action-menu.mjs` (32 checks) executes per state to prove nothing was lost. Along the way
+the collection board's fixtures stopped depending on what time of day the suite runs (they were
+stamped `now + 1h`, so after 23:00 local 11 checks failed against a correct app), and `neumorphic.css`
+learned that a modal backdrop is an `[onclick]` element too — which had framed every open modal with
+a 1 px teal edge. Build `v240-sow-action-menu-2026-09-14`. Suites: 337 + 167 + 27 + 41 + 32 = **604**.
 
 ## v238 — the collection board: bottles per breed, for the day
 

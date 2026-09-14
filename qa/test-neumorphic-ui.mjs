@@ -118,10 +118,12 @@ ok('[neo] the app’s own buttons had no press at all (.btn/:active does not exi
   !/\.btn[^{,]*:active/.test(read('app.css')) && (read('app.css').match(/:active/g) || []).length === 7
   && /button:not\(:disabled\):not\(\[disabled\]\):active/.test(BODY),
   `${(read('app.css').match(/:active/g) || []).length} :active rules in app.css, none of them on .btn`);
-const cardPress = /\[onclick\]:not\(button\)[^{;]*:active\s*\{([^}]{0,140})\}/.exec(FLAT);
+const cardPress = /\[onclick\][^{}]*:active\s*\{([^}]{0,170})\}/.exec(FLAT);
 ok('[neo] a clickable CARD presses on its shadow only, never a transform (which would jump its absolutely-positioned children)',
   !!cardPress && !/transform/.test(cardPress[1]) && /box-shadow: var\(--neo-press\)/.test(cardPress[1]),
   cardPress ? cardPress[1].trim().slice(0, 90) : 'no [onclick]:active rule found');
+ok('[neo] an overlay backdrop is never treated as a key — it is the viewport, and a soft edge on it would frame the whole screen in teal ([FIX 191] found this from inside the drilldown)',
+  list(/\[class\*="modal-bg"\]/g) >= 4, `${list(/\[class\*="modal-bg"\]/g)} [onclick] rules exclude *modal-bg`);
 ok('[neo] table cells with an onclick stay flat — a lifting <td> looks like the grid is peeling off',
   list(/:not\(td\)/g) >= 3, `${list(/:not\(td\)/g)} td exclusions`);
 ok('[neo] a disabled control looks out of reach instead of inviting a tap',
@@ -164,8 +166,12 @@ ok('[neo] the service worker pre-warms it', /'\.\/css\/neumorphic\.css'/.test(sw
 ok('[neo] and install is per-entry now: one missing file can no longer keep the OLD worker alive',
   /Promise\.allSettled\(APP_SHELL\.map\(\(url\) => cache\.add\(url\)\)\)/.test(sw)
   && !/cache\.addAll\(/.test(swClean), (swClean.match(/cache\.addAll\([^)]*\)/) || ['no addAll left'])[0]);
-ok('[neo] CACHE_NAME and the About build string both moved, or phones keep last week’s shell',
-  /arswinetech-pro-v239-neumorphic-affordance/.test(sw) && /v239-neumorphic-affordance/.test(read('config.js')));
+/* the real invariant is that they never diverge: sw.js names the cache after config.js’s build
+   string, and a shell file added to one without the other is how a phone keeps an old CSS */
+const swV = (sw.match(/CACHE_NAME = 'arswinetech-pro-([^']+)'/) || [])[1] || '';
+const cfgV = (read('config.js').match(/ARS_APP_VERSION = '([^']+)'/) || [])[1] || '';
+ok('[neo] sw.js names the cache exactly after the About build string, and both moved off v239',
+  !!swV && swV === cfgV && !/^v239/.test(swV), `sw ${swV} · config ${cfgV}`);
 ok('[neo] _headers serves CSS as no-cache, so re-uploading this file is enough on its own',
   /\/\*\.css\n {2}Cache-Control: no-cache/.test(read('_headers')));
 const build = read('qa/build-deploy-layout.sh');

@@ -29,6 +29,9 @@
        certificate and every `@media print` rule keep their own paper look;
      ▸ the typeahead dropdown rows, the sidebar and the modal × are reset at the bottom (lifting
        eleven suggestion rows would look like eleven keys, which is the opposite of the point);
+     ▸ an overlay backdrop (`.due-modal-bg`, `.drill-bg`, the onboarding screens) never lifts: it
+       IS the viewport, so a soft edge on it draws a 1px teal frame around the whole screen and a
+       press flashes the page. [FIX 191] found this by opening a sheet from inside a drilldown;
      ▸ `data-neo="flat"` opts any element out of the lift and `data-neo="lift"` is where a future
        screen forces it in — no need to touch this file for a one-off;
      ▸ `prefers-reduced-motion` drops the transform (a press you can still read in the shadow) and
@@ -58,7 +61,7 @@
   .btn:not([data-neo="flat"]):not(.neo-flat),
   .btn.ghost:not([data-neo="flat"]):not(.neo-flat),
   [role="button"]:not([data-neo="flat"]):not(.neo-flat),
-  [onclick]:not(button):not(a):not(td):not(th):not(tr):not(li):not([data-neo="flat"]):not(.neo-flat) {
+  [onclick]:not([class*="modal-bg"]):not(.drill-bg):not(.onboard-screen):not(.reset-screen):not(button):not(a):not(td):not(th):not(tr):not(li):not([data-neo="flat"]):not(.neo-flat) {
     box-shadow: var(--neo-lift-sm), var(--neo-edge);
     transition: box-shadow var(--neo-time) ease, transform var(--neo-time) ease, filter var(--neo-time) ease;
     -webkit-tap-highlight-color: transparent;
@@ -70,7 +73,7 @@
      cannot show. The `<td onclick>` rows are left flat on purpose: raising a table cell makes
      the grid look like it is peeling off the page. */
   [onclick]:not(button):not(a):not(td):not(th):not(tr):not(li) { cursor: pointer; }
-  [onclick]:not(button):not(a):not(td):not(th):not(tr):not(li):not(.btn):not([data-neo="flat"]):not(.neo-flat) {
+  [onclick]:not([class*="modal-bg"]):not(.drill-bg):not(.onboard-screen):not(.reset-screen):not(button):not(a):not(td):not(th):not(tr):not(li):not(.btn):not([data-neo="flat"]):not(.neo-flat) {
     box-shadow: var(--neo-lift), var(--neo-edge);
   }
 
@@ -82,7 +85,7 @@
   /* a clickable CARD presses on its shadow alone: a transform on a container creates a containing
      block, which would jump any sticky or absolutely-positioned child inside it (the drilldown
      cards hold photo badges and corner chevrons) — the press is still unmistakable */
-  [onclick]:not(button):not(.btn):not([role="button"]):active { box-shadow: var(--neo-press); }
+  [onclick]:not([class*="modal-bg"]):not(.drill-bg):not(.onboard-screen):not(.reset-screen):not(button):not(.btn):not([role="button"]):active { box-shadow: var(--neo-press); }
 
   /* hover is a desktop bonus: a phone fires :hover on tap and leaves it stuck on */
   @media (hover:hover) and (pointer:fine) {
@@ -91,7 +94,7 @@
       box-shadow: var(--neo-lift), var(--neo-edge);
       filter: brightness(1.06);
     }
-    [onclick]:not(td):not(th):not(tr):not(li):not(.neo-flat):hover { box-shadow: var(--neo-lift), var(--neo-edge); }
+    [onclick]:not([class*="modal-bg"]):not(.drill-bg):not(.onboard-screen):not(.reset-screen):not(td):not(th):not(tr):not(li):not(.neo-flat):hover { box-shadow: var(--neo-lift), var(--neo-edge); }
   }
 
   /* app.css has no :focus-visible rule at all, so a keyboard, a barcode gun tabbing through a

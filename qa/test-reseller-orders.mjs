@@ -70,6 +70,14 @@ function fakeEl(tag = 'div') {
 
 /* app.js's own helper, copied verbatim: the pick-up form's datetime-local default is
    built with it, so a loosely stubbed harness could not catch a real mismatch. */
+/* [FIX 191 note] a fixture that means “today” used to be stamped `Date.now() + 1h`, which held
+   only until the suite was run in the last hour of a local day: at 23:36Z every “today” order
+   landed on the day AFTER the board’s orderDayOffset(0), and 11 checks failed against a correct
+   app. Local noon is the same local day in every browser timezone the farm can be in, so the
+   fixtures and the board agree whatever time this file is run. */
+const NOON = (() => { const d = new Date(); d.setHours(12, 0, 0, 0); return d; })();
+const stamp = (off = 0) => new Date(NOON.getTime() + off * 86400000);
+
 function appLocalDateTimeValue(value = new Date()) {
   const date = value instanceof Date ? new Date(value.getTime()) : new Date(value);
   if (Number.isNaN(date.getTime())) return '';
@@ -746,7 +754,7 @@ async function bootOrderPage({ search, calls = [], barHeight, ...resp }) {
   ok('[14] and the offline fallback cannot hand a reseller the login screen', /js\/order-page\.js'\)\s*return;/.test(sw));
   ok('[14] order.html is in the deploy layout', /order\.html/.test(build));
   ok('[14] the page is served no-cache and kept out of search engines', /\/order\.html\n  Cache-Control: no-cache/.test(read('_headers')) && /noindex/.test(read('_headers')));
-  ok('[14] the build is bumped so phones drop the old shell', /arswinetech-pro-v239-neumorphic-affordance/.test(sw) && /v239-neumorphic-affordance/.test(cfg), sw.split('\n')[7] + ' | ' + cfg.split('\n')[2]);
+  ok('[14] the build is bumped so phones drop the old shell', /arswinetech-pro-v240-sow-action-menu/.test(sw) && /v240-sow-action-menu/.test(cfg), sw.split('\n')[7] + ' | ' + cfg.split('\n')[2]);
   ok('[14] the page asks for breeds, not bottles', /Which breeds do you need\?/.test(page) && !/Choose your bottles/.test(page));
 
   /* the fixed basket bar used to steal the last row: a hardcoded 104px of body padding lost
@@ -1025,13 +1033,13 @@ async function bootOrderPage({ search, calls = [], barHeight, ...resp }) {
   const db = seed();
   const ctx = bootApp(db);
   const dkey = (off = 0) => {
-    const d = new Date(Date.now() + off * 86400000);
+    const d = stamp(off);
     const p = n => String(n).padStart(2, '0');
     return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
   };
   const on = (id, day, status, lines, over = {}) => ({
     id, link_id: 'l1', reseller_id: 'R-JO', reseller_name: 'Jo Dacara', status,
-    placed_at: new Date(Date.now() - day * 86400000 + 3600000).toISOString(),
+    placed_at: stamp(-day).toISOString(),
     need_by: '', note: '', removed: [],
     lines: lines.map(l => ({ breed: l[0], boar: l[0], qty: l[1], rate: 400 })),
     bottles: lines.reduce((a, l) => a + l[1], 0), total: lines.reduce((a, l) => a + l[1] * 400, 0),
@@ -1107,7 +1115,7 @@ async function bootOrderPage({ search, calls = [], barHeight, ...resp }) {
 {
   const db = seed();
   const ctx = bootApp(db);
-  const day0 = new Date().toISOString();
+  const day0 = stamp(0).toISOString();
   db.semenResellerOrders.push({
     id: 'e_1', reseller_id: 'R-JO', reseller_name: 'Jo Dacara', status: 'accepted', placed_at: day0,
     need_by: '', lines: [{ qty: 3, rate: 400 }, { breed: 'duroc', boar: 'X', qty: 2, rate: 400 }], bottles: 5, total: 2000, removed: []
@@ -1125,7 +1133,7 @@ async function bootOrderPage({ search, calls = [], barHeight, ...resp }) {
   for (let i = 0; i < 12; i++) {
     db.semenResellerOrders.push({
       id: `e_breed_${i}`, reseller_id: 'R-AN', reseller_name: 'Greg Biron', status: 'accepted',
-      placed_at: new Date().toISOString(), need_by: '', note: '', removed: [],
+      placed_at: stamp(0).toISOString(), need_by: '', note: '', removed: [],
       lines: [{ breed: `Breed ${i}`, boar: `Breed ${i}`, qty: 2, rate: 400 }], bottles: 2, total: 800
     });
   }
@@ -1140,7 +1148,7 @@ async function bootOrderPage({ search, calls = [], barHeight, ...resp }) {
   const ctx = bootApp(db);
   db.semenResellerOrders.push({
     id: 'x_all_declined', reseller_id: 'R-JO', reseller_name: 'Jo Dacara', status: 'declined',
-    placed_at: new Date().toISOString(), need_by: '', note: '', removed: [],
+    placed_at: stamp(0).toISOString(), need_by: '', note: '', removed: [],
     lines: [{ breed: 'Duroc', boar: 'Duroc', qty: 4, rate: 400 }], bottles: 4, total: 1600
   });
   ctx.openResellerOrderInbox();

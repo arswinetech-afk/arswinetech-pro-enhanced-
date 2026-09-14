@@ -6083,3 +6083,23 @@ html, body, .shell, .main {
 
 /* [FIX 170] toasts must appear above kiosk/roster modals */
 .toast{z-index:999999999!important}
+
+/* ═══════════════════════════════════════════════════════════════════════════════════════════
+   [FIX 191] THE SOW CARD'S ⋯ — the card used to print 13 buttons; it now prints at most 5 and
+   the rest open in the app's own overlay (.due-modal-bg > .due-modal), reusing the semen
+   stock-menu rows so nothing here invents a component. The z-index rule is not decoration:
+   .drill-bg > .drill-panel sits at 9999 and .due-modal-bg at 9998, so a sheet opened from the
+   drilldown would have been UNDER the very panel that opened it (the same trap #mortalityModal
+   and the reseller hub had to opt out of — a tap that "opens nothing" on a phone).
+   ═══════════════════════════════════════════════════════════════════════════════════════════ */
+.sow-more-btn{padding:6px 11px;display:inline-flex;align-items:center;gap:6px;font-size:12px;line-height:1.2}
+.sow-more-count{font-size:10.5px;font-weight:800;color:#8ce7df;background:rgba(19,185,173,.16);border-radius:999px;padding:1px 6px}
+.sow-photo-hint{font-size:11px;align-self:center}
+#sowMoreActions.due-modal-bg{z-index:999999!important}
+.sow-more-modal{width:min(430px,100%);text-align:left}
+.sow-more-modal .semen-stock-menu{margin-top:6px;gap:8px}
+.sow-more-modal .semen-stock-menu button{padding:12px 12px;border-radius:12px;gap:11px}
+.sow-more-modal .semen-stock-menu .ss-icon{font-size:22px}
+.sow-more-modal .semen-stock-menu b{font-size:13.5px}
+.sow-more-modal .semen-stock-menu small{font-size:11.5px;margin-top:2px}
+@media print{.sow-more-btn,.sow-photo-hint,#sowMoreActions{display:none!important}}
