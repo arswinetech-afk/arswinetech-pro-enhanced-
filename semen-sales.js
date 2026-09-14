@@ -5301,14 +5301,14 @@
       const stock = r.inStock >= r.bottles
         ? `${r.inStock} in stock${r.lots ? ` · ${r.lots} lot${r.lots === 1 ? '' : 's'}` : ''} ✓`
         : (r.inStock > 0
-          ? `<b style="color:#f0b64b">only ${r.inStock} in stock · short ${r.bottles - r.inStock}</b>`
-          : `<b style="color:#f0b64b">nothing of it in stock</b>`);
-      return `<button type="button" onclick="window.arsOrderBoardBreed(${i})" style="width:100%;text-align:left;background:var(--bg);border:1px solid var(--line);border-radius:9px;padding:7px 10px;margin-top:6px;cursor:pointer">
+          ? `<b style="color:var(--warn)">only ${r.inStock} in stock · short ${r.bottles - r.inStock}</b>`
+          : `<b style="color:var(--warn)">nothing of it in stock</b>`);
+      return `<button type="button" onclick="window.arsOrderBoardBreed(${i})" style="width:100%;text-align:left;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:9px;padding:7px 10px;margin-top:6px;cursor:pointer">
         <span style="display:flex;justify-content:space-between;align-items:baseline;gap:8px">
-          <b style="font-size:13.5px;color:var(--teal2);text-transform:none;letter-spacing:0">${escH(r.name)}</b>
+          <b style="font-size:13.5px;color:var(--teal);text-transform:none;letter-spacing:0">${escH(r.name)}</b>
           <b style="font-size:15px;white-space:nowrap">${r.bottles} bottle${r.bottles === 1 ? '' : 's'}</b>
         </span>
-        <small class="field-hint" style="display:block;margin-top:1px">${r.collect ? `${r.collect} to collect` : ''}${r.collect && r.waiting ? ' · ' : ''}${r.waiting ? `${r.waiting} waiting your yes` : ''}${r.other ? `${r.collect || r.waiting ? ' · ' : ''}${r.other} on another status` : ''} · ${r.orders} order${r.orders === 1 ? '' : 's'} · ${stock}</small>
+        <small class="field-hint" style="display:block;margin-top:1px;color:var(--muted)">${r.collect ? `${r.collect} to collect` : ''}${r.collect && r.waiting ? ' · ' : ''}${r.waiting ? `${r.waiting} waiting your yes` : ''}${r.other ? `${r.collect || r.waiting ? ' · ' : ''}${r.other} on another status` : ''} · ${r.orders} order${r.orders === 1 ? '' : 's'} · ${stock}</small>
       </button>`;
     }).join('');
     const notes = counting ? [`counting ${counting}`] : [];
@@ -5318,9 +5318,9 @@
     if (d.bottles && !d.wantedToday && !d.wantedLater) notes.push('no order in this scope carries a wanted date');
     return `<div class="adj-card" style="padding:10px 12px">
       <div class="adj-card-title"><span>🧾 Collection board</span><span>${d.orders ? `${d.orders} order${d.orders === 1 ? '' : 's'} · ${d.bottles} bottle${d.bottles === 1 ? '' : 's'}` : 'nothing in this scope'}</span></div>
-      <div class="due-actions" style="justify-content:flex-start;gap:6px;flex-wrap:wrap;margin:4px 0 2px">${chips}</div>
+      <div class="order-board-chips">${chips}</div>
       ${shown.length ? rows : `<small class="field-hint" style="display:block;margin-top:4px">${d.declined ? 'Every order in this scope was declined — nothing to collect.' : 'Nothing ordered in this scope. Switch to Everything to see the rest.'}</small>`}
-      ${d.rows.length > shown.length ? `<small class="field-hint" style="display:block;margin-top:6px;color:#f0b64b">+${d.rows.length - shown.length} more breed${d.rows.length - shown.length === 1 ? '' : 's'} in this scope (${d.rows.slice(10).reduce((a, r) => a + r.bottles, 0)} bottle${d.rows.slice(10).length === 1 ? '' : 's'}) — their bottles are inside the total above; search for them to see the row.</small>` : ''}
+      ${d.rows.length > shown.length ? `<small class="field-hint" style="display:block;margin-top:6px;color:var(--warn)">+${d.rows.length - shown.length} more breed${d.rows.length - shown.length === 1 ? '' : 's'} in this scope (${d.rows.slice(10).reduce((a, r) => a + r.bottles, 0)} bottle${d.rows.slice(10).length === 1 ? '' : 's'}) — their bottles are inside the total above; search for them to see the row.</small>` : ''}
       ${notes.length ? `<small class="field-hint" style="display:block;margin-top:6px">${notes.join(' · ')}.</small>` : ''}
       <small class="field-hint" style="display:block;margin-top:4px;color:var(--muted)">Bottles of each breed to collect${label === 'Today' ? ' today' : ` in “${label.toLowerCase()}”`}. ${inView.length ? 'Tap a breed to list the orders behind the number. ' : ''}Counts come from every order in scope — not only the cards shown, and every breed on those orders, so the totals add up even when the list is folded${d.declined ? ' (declined ones left out)' : ''}.</small>
     </div>`;

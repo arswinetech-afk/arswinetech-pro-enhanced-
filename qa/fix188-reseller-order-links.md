@@ -1,4 +1,4 @@
-# FIX 188 / FIX 189 — Reseller order links and the farm's order menu (v230 → v240)
+# FIX 188 / FIX 189 — Reseller order links and the farm's order menu (v230 → v241)
 
 > Your question: *"Is it possible to send a link where this link will have like an ordering
 > counter page, whereas the reseller can simply place their order and once they click
@@ -13,6 +13,22 @@
 > **v232** is that same build with a fixable install: pasting the SQL onto a farm that already
 > had v230 died with `42P13 cannot change return type of existing function`, because v231
 > changed what the catalogue function returns. Build `v232-reseller-sql-recreate-2026-09-12`.
+
+## v241 — the board on a phone: black text fixed, chips unstacked (`qa/fix192-board-contrast.md`)
+
+Their screenshot: the collection board's breed rows were unreadable. Not the palette — a fact about
+form controls: **a `<button>` does not inherit text colour**, the browser paints it black, and the row
+(v238) gave itself a dark surface inline (`background:var(--bg)`) with no class and no `color`, i.e.
+**1.1:1 contrast**. The amber inside the row survived because that span stated its own colour.
+Fixed by saying the colour (`--ink` 17.65:1, hint `--muted` 7.8:1, breed name `--teal` 7.8:1, the
+hardcoded `#f0b64b` → `var(--warn)`), by a `:not([class])`-scoped net in `app.css`, and by a new
+`qa/test-button-contrast.mjs` (26 checks) that measures both themes from `app.css` and audits all
+1,043 `<button>`/`<select>`/`<textarea>` templates in the shipped JS — zero offenders now. Also on that
+screen: the four scope chips had reused `.due-actions`, whose mobile rule is column + `width:100%`, so
+they stacked as four full-width bars and pushed the board below the fold — they are `.order-board-chips`
+now, a 2×2 grid on a phone with the 40px targets kept. Light-theme tokens remain thin for small text
+(`--muted` 4.08:1, `--warn` 2.58:1) — a palette question for its own release, stated not silently
+patched. Build `v241-board-contrast-2026-09-14`. Suites: 26 + 41 + 337 + 167 + 32 + 27 = **630**.
 
 ## v240 — the sow card's ⋯ (and v239, the affordance layer it sits on)
 

@@ -6103,3 +6103,30 @@ html, body, .shell, .main {
 .sow-more-modal .semen-stock-menu b{font-size:13.5px}
 .sow-more-modal .semen-stock-menu small{font-size:11.5px;margin-top:2px}
 @media print{.sow-more-btn,.sow-photo-hint,#sowMoreActions{display:none!important}}
+
+/* ═══════════════════════════════════════════════════════════════════════════════════════════
+   [FIX 192] THE COLLECTION BOARD ON A PHONE — two things the screenshot showed, one rule each.
+
+   1. A <button> does NOT inherit text colour the way a <div> does: the browser paints one with its
+      own `buttontext`, which is black, and app.css resets only `cursor`, `border` and `font` on
+      `button` — never `color`. The board rows paint their own surface inline
+      (style="…background:var(--bg)…") and carry no class, so their breed totals came out black on
+      #071114 — 1.1:1 — while the one span that states its own colour ("only 5 in stock · short 14")
+      stayed readable. The markup now says color:var(--ink), and the rule below is the net under it:
+      scoped to :not([class]) so it can never out-specify .btn and repaint a real button.
+      .field-hint has no global rule at all (only .perf-modal .field-hint styles it), which is why
+      the row's second line had nothing to inherit.
+
+   2. The four scope chips reused .due-actions, whose mobile rule is flex-direction:column plus
+      .due-actions .btn{width:100%} — right for a Save/Cancel pair, wrong for a four-way switch:
+      it stacked four full-width bars and pushed the board itself off the screen. They have their own
+      class now, a 2×2 grid on a phone, and the 40px touch target kept.
+   ═══════════════════════════════════════════════════════════════════════════════════════════ */
+.adj-card>button:not([class]){color:var(--ink)}
+.adj-card>button:not([class]) .field-hint{color:var(--muted)}
+.order-board-chips{display:flex;flex-wrap:wrap;gap:6px;margin:4px 0 2px}
+.order-board-chips .btn{flex:1 1 auto;min-width:104px;padding:7px 10px;font-size:11.5px;text-align:center}
+@media(max-width:700px){
+  .order-board-chips{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+  .order-board-chips .btn{min-width:0;width:auto;min-height:40px}
+}
