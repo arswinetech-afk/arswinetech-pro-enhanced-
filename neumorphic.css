@@ -153,7 +153,12 @@
      a suggestion list is a list; eleven soft keys inside one popover is the confusion this file
      exists to remove. Same for the sidebar, and for the × that is already a hit-area, not a key. */
   .semen-suggestions button, .tt-row button, .suggestion-empty,
-  .nav button, .nav [onclick], .close-reminder { box-shadow: none; transform: none; transition: none; }
+  .nav button, .nav [onclick], .close-reminder,
+  /* [FIX 193] the phone's bottom bar is a tab strip, not a key tray — the neo lift/edge
+     painted a visible square around every tab (▦ ♀ ● …). Tabs get their own active pill
+     from app.css; a press just dims them (rule below). */
+  .bottom-nav button { box-shadow: none; transform: none; transition: none; }
+  .bottom-nav button:active { box-shadow: none; transform: none; opacity: .75; }
   /* paper is paper: the printable certificate and the feed report have their own rules */
   .certificate button, .certificate [onclick], #feedReport button, #feedReport [onclick] { box-shadow: none; transform: none; }
 }
