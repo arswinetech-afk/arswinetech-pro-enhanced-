@@ -1935,7 +1935,10 @@
       if (r.status !== 'released' && b.release_date) return finMonthKey(b.release_date);
       if (b.birth) {
         const d = new Date(String(b.birth).slice(0, 10) + 'T00:00:00');
-        if (!isNaN(d)) { d.setDate(d.getDate() + 90); return d.toISOString().slice(0, 7); }
+        /* [FIX 197] local month parts — toISOString() is UTC and slips a
+           UTC+ midnight back into the previous month when the +90d date
+           lands on the 1st */
+        if (!isNaN(d)) { d.setDate(d.getDate() + 90); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; }
       }
     }
     return finMonthKey(r.date);

@@ -1673,6 +1673,12 @@ function production(periodOverride) {
     ...rawEvents.map(e => e.breed).filter(Boolean)
   ])).filter(Boolean);
 
+  /* [FIX 197] month keys from LOCAL date parts. toISOString() renders UTC, and
+     on a UTC+ phone (PH = UTC+8) a locally-built "1st of month, 00:00" is the
+     PREVIOUS month at 16:00Z — which is exactly why the "December 2026"
+     dropdown option carried the value 2026-11 and filtered November. */
+  const localYM = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+
   // Apply Filters
   const filteredEvents = rawEvents.filter(ev => {
     // 1. Timeframe Filter
@@ -1683,7 +1689,7 @@ function production(periodOverride) {
     } else if (st.timeframe === 'next_month') {
       const d = new Date(todayStr + 'T00:00:00');
       d.setMonth(d.getMonth() + 1);
-      const nextYM = d.toISOString().slice(0, 7);
+      const nextYM = localYM(d);
       if (!ev.date.startsWith(nextYM)) return false;
     } else if (st.timeframe.startsWith('month:')) {
       const selYM = st.timeframe.replace('month:', '');
@@ -1736,7 +1742,7 @@ function production(periodOverride) {
   const currD = new Date(todayStr + 'T00:00:00');
   for (let m = 0; m < 12; m++) {
     const dObj = new Date(currD.getFullYear(), currD.getMonth() + m, 1);
-    const val = dObj.toISOString().slice(0, 7);
+    const val = localYM(dObj);
     const label = dObj.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
     monthOptions.push(`<option value="${val}" ${st.monthPicker === val || st.timeframe === 'month:' + val ? 'selected' : ''}>📅 ${label}</option>`);
   }
