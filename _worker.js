@@ -93,6 +93,8 @@ export function extractOffer(r) {
   const dosage = (r.snippet.match(/swine[^.]{0,140}\.[^.]{0,60}(weight|day|days)?\.?/i) || [])[0] ||
     (r.snippet.match(/(\d+(?:\.\d+)?\s*ml\s+per\s[^.]{0,60})/i) || [])[0] || '';
   const withdrawal = (r.snippet.match(/withdrawal[^.]{0,80}\.?/i) || [])[0] || '';
+  /* per-class + frequency lines, mined the way the clean card presents them */
+  const clsLine = re => { const m = r.snippet.match(re); return m ? m[0].trim() : ''; };
   return {
     name: cleanTitle(r.title),
     pricePhp: price ? parseFloat(price.replace(/,/g, '')) : 0,
@@ -100,6 +102,10 @@ export function extractOffer(r) {
     pack: packQty ? `${packQty} ${packUnit === 'mg' ? 'mg' : packUnit}` : '',
     dosage: dosage ? dosage.trim() : '',
     withdrawal: withdrawal ? withdrawal.trim() : '',
+    piglet: clsLine(/piglets?[^.]{0,100}\./i),
+    sow: clsLine(/\bsows?[^.]{0,100}\./i),
+    boar: clsLine(/\bboars?[^.]{0,100}\./i),
+    frequency: clsLine(/(repeat[^.]{0,80}|every \d+[^.]{0,60}|single dose[^.]{0,60})\.?/i),
     store: storeOf(r.url),
     source: { title: cleanTitle(r.title), url: r.url }
   };
@@ -173,6 +179,7 @@ export function buildProducts(q, wiki, fda, rawOffers) {
     form: fda?.form || guessForm(`${q} ${o.name}`, o.packUnit),
     pack: o.pack, packQty: o.packQty, packUnit: o.packUnit,
     dosage: o.dosage || '',
+    piglet: o.piglet || '', sow: o.sow || '', boar: o.boar || '', frequency: o.frequency || '',
     pricePhp: o.pricePhp,
     priceNote: o.pricePhp ? `₱${o.pricePhp} per ${o.pack || 'pack'} — ${o.store}, live web price` : `Price not listed by ${o.store || 'the store'} — set your supplier price`,
     imageUrls: [],

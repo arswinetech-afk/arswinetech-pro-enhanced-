@@ -48,7 +48,7 @@ const DDG_FIXTURE = `<table>
 <tr><td>2.</td><td><a rel="nofollow" class="result-link" href="https://agrilife.ph/product/ivermectin-100ml/">Ivermectin 100ml - Agrilife Philippines</a></td></tr>
 <tr><td></td><td class="result-snippet"><b>Ivermectin</b> 100ml ₱980.00 Add to cart SKU: IVERMECTINML100</td></tr>
 <tr><td>3.</td><td><a rel="nofollow" class="result-link" href="https://shopee.ph/Iverjec-Ivermectin-Endectocide-Dewormer-(10ml)-i.1047011131.22162420595">Iverjec Ivermectin Endectocide - Dewormer (10ml) - Shopee Philippines</a></td></tr>
-<tr><td></td><td class="result-snippet">Buy Iverjec Ivermectin (10ml). Dosage and Administration: Swine: 1ml per 33kg body weight. Withdrawal Period: Withdraw medication 28 days.</td></tr>
+<tr><td></td><td class="result-snippet">Buy Iverjec Ivermectin (10ml). Dosage and Administration: Swine: 1ml per 33kg body weight. Piglets: 1 ml per 33 kg body weight. Sows: 5 ml pre-farrow. Repeat after 14 days. Withdrawal Period: Withdraw medication 28 days.</td></tr>
 </table>`;
 
 const results = parseDdg(DDG_FIXTURE);
@@ -64,6 +64,7 @@ const o3 = extractOffer(results[2]);
 ok('offer 3: swine dosage mined from snippet', /swine/i.test(o3.dosage) && /33\s*kg/i.test(o3.dosage), o3.dosage);
 ok('offer 3: withdrawal mined', /28 days/i.test(o3.withdrawal), o3.withdrawal);
 ok('offer 3: store = Shopee', o3.store === 'Shopee', o3.store);
+ok('offer 3: Piglet / Sow / Frequency lines mined', /Piglets:/i.test(o3.piglet) && /Sows:/i.test(o3.sow) && /Repeat after 14 days/i.test(o3.frequency), JSON.stringify([o3.piglet, o3.sow, o3.frequency]));
 
 /* second DDG face: the html frontend with its /l/?uddg= redirect links */
 const DDG_HTML_FIXTURE = `<div class="results">
@@ -86,6 +87,7 @@ ok('merge: offers become chooser products (≤4)', merged.products.length >= 2 &
 ok('merge: priced offers first', merged.products[0].pricePhp === 179, String(merged.products[0].pricePhp));
 ok('merge: priceNote carries live-web provenance', /live web price/.test(merged.products[0].priceNote), merged.products[0].priceNote);
 ok('merge: FDA facts land on every product', merged.products.every(p => p.type === 'Antiparasitic / Dewormer' && /IVERMECTIN/.test(p.activeIngredient)));
+ok('merge: per-class lines reach the card data', /Sows:/.test(merged.products[2].sow) && /Repeat after 14 days/.test(merged.products[2].frequency));
 ok('merge: generic + photo surface for the client', merged.genericName === 'IVERMECTIN' && merged.photo === WIKI_FIXTURE.thumb);
 ok('merge: sources kept (the farm can tap through)', merged.products[0].sources[0].url.includes('lazada.com.ph'));
 const noOffers = buildProducts('Farrowsure', WIKI_FIXTURE, null, []);
@@ -98,7 +100,20 @@ ok('client has NO Gemini endpoint', !AI.includes('generativelanguage.googleapis.
 ok('client has NO keyless LLM relay', !AI.includes('pollinations'));
 ok('client stores NO api key', !AI.includes('ars-ai-key') && !AI.includes('openAiSetup'));
 ok('client degrades to Wikipedia when no worker', AI.includes('wikiDirect'));
-ok('card shows the auto cost/unit division', /Auto cost per unit/.test(AI) && /round2\(price \/ qty\)/.test(AI));
+/* the clean reference card — the exact format the farm showed us */
+ok('card: header thumb, not a big photo block', /mc-thumb" id="aiProdImg/.test(AI));
+ok('card: Brand line', /Brand: \$\{esc\(p\.brand\)\}/.test(AI));
+ok('card: Used for / General dosage lines', AI.includes('Used for:') && AI.includes('General dosage'));
+ok('card: Piglet/Sow/Boar lines with class colours', AI.includes('mc-cat piglet') && AI.includes('mc-cat sow') && AI.includes('mc-cat boar'));
+ok('card: Est. Price + auto cost/unit division', /Est\. Price:/.test(AI) && /round2\(price \/ qty\)/.test(AI));
+ok('card: Add to Inventory + Refresh buttons', AI.includes('✓ Add to Inventory') && AI.includes('⟳ Refresh'));
+ok('card: sources collapse to one muted line', AI.includes('mc-src">Sources:') && !AI.includes('med-live-links'));
+ok('card: dismissible (× removes just that card)', AI.includes('mc-x') && AI.includes("this.closest('.vet-result-card').remove()"));
+/* library name-search card got the same clean treatment */
+ok('library name search renders the clean card', MI.includes('cleanLibCard') && !MI.includes('libCardHTML('));
+ok('name search caps library hits at 3 (no bombardment)', MI.includes('byName(q).slice(0, 3)'));
+ok('name search no longer hydrates link walls', !/hydrateLive\('medLive'/.test(MI) && !/hydrateDailyMed\('medDm'/.test(MI));
+ok('worker mines per-class + frequency lines', WORKER.includes('piglet: clsLine'));
 const prefill = AI.slice(AI.indexOf('function useAiProduct'), AI.indexOf('function aiRefresh'));
 ok('prefill covers every Add-medicine field', ['item_name', 'brand_name', 'active_ingredient', 'med_type', 'form', 'unit', 'unit_cost', 'supplier', 'notes:'].every(f => prefill.includes(f)));
 const grab = (src, n) => (src.match(new RegExp(`const ${n} = \\[(.*?)\\]`)) || [])[1];

@@ -81,25 +81,32 @@
   /* ── rendering: the chooser cards ── */
   let lastRes = null; /* { q, d, via } */
 
+  /* [FIX 196] same clean reference card as the library — the format the farm
+     showed us and asked for: name (+generic), brand, used-for, general dosage,
+     Piglet/Sow/Boar, frequency, est. price, two buttons. Sources collapse to a
+     single muted line; the photo is a small header thumb, not a big block. */
   function productCardHTML(p, i, q) {
     const qty = packQtyOf(p), unit = normUnit(p);
     const price = parseFloat(p.pricePhp) || 0;
     const unitCost = price > 0 && qty > 0 ? round2(price / qty) : 0;
-    const chips =
-      (p.brand ? `<span class="med-chip">Brand: ${esc(p.brand)}</span>` : '') +
-      `<span class="med-chip ghost">${esc(normType(p))}</span>` +
-      `<span class="med-chip ghost">${esc(normForm(p))}</span>` +
-      (p.activeIngredient ? `<span class="med-chip ghost">${esc(p.activeIngredient)}</span>` : '');
-    const srcs = (Array.isArray(p.sources) ? p.sources : []).filter(s => s && safeUrl(s.url)).slice(0, 3);
-    return `<article class="vet-result-card med-lib-card ai-card ai-prod"><div class="med-lib-head"><b>${esc(p.name || q)}</b><div class="med-chips">${chips}</div></div><div class="vet-result-body">` +
-      `<div class="med-img ai-img" id="aiProdImg${i}"><span class="muted">🖼 Looking for a product photo…</span></div>` +
-      (p.activeIngredient ? `<section><h4>🧪 Active ingredient</h4><p>${esc(p.activeIngredient)}</p></section>` : '') +
-      (p.dosage ? `<section><h4>💉 Swine dosage</h4><p>${esc(p.dosage)}</p></section>` : '') +
-      `<section><h4>📦 Pack &amp; price</h4><p class="med-price ai-price">${esc(p.priceNote || 'Price not available — set your supplier price below.')}</p>` +
-      (unitCost ? `<p class="ai-unit-cost">🧮 Auto cost per unit: <b>₱${unitCost.toFixed(2)} per ${esc(unit)}</b> <small class="muted">(₱${price} ÷ ${qty} ${esc(unit)})</small></p>` : '') +
-      `</section>` +
-      (srcs.length ? `<div class="med-live-links ai-src">${srcs.map(s => `<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.title || s.url)} ↗</a>`).join('')}</div>` : '') +
-      `<div class="ai-actions"><button type="button" class="btn" onclick="useAiProduct(${i})">✓ Use this — add to inventory</button></div>` +
+    const line = (label, cls, val) => val ? `<p class="mc-line"><b class="${cls}">${label}:</b> ${esc(val)}</p>` : '';
+    const gen = lastRes && lastRes.d.genericName ? String(lastRes.d.genericName) : '';
+    const title = p.name || q;
+    const srcs = (Array.isArray(p.sources) ? p.sources : []).filter(s => s && safeUrl(s.url)).slice(0, 2);
+    return `<article class="vet-result-card med-clean-card"><div class="mc-head"><b>${esc(title)}${gen && !title.toLowerCase().includes(gen.toLowerCase()) ? ` <span class="mc-muted">(${esc(gen)})</span>` : ''}</b><span class="mc-thumb" id="aiProdImg${i}"></span><button type="button" class="mc-x" data-neo="flat" onclick="this.closest('.vet-result-card').remove()" aria-label="Dismiss card">×</button></div>` +
+      `<div class="mc-body">` +
+      (p.brand ? `<p class="mc-muted">Brand: ${esc(p.brand)}</p>` : '') +
+      (p.activeIngredient ? `<p class="mc-line"><b>Active ingredient:</b> ${esc(p.activeIngredient)}</p>` : '') +
+      `<p class="mc-line"><b>Used for:</b> ${esc(p.usedFor || p.summary || normType(p) + ' for swine.')}</p>` +
+      line('General dosage', '', p.dosage) +
+      line('Piglet', 'mc-cat piglet', p.piglet) +
+      line('Sow', 'mc-cat sow', p.sow) +
+      line('Boar', 'mc-cat boar', p.boar) +
+      line('Frequency', '', p.frequency) +
+      `<p class="mc-price">Est. Price: ${esc(p.priceNote || 'Not listed — set your supplier price')}</p>` +
+      (unitCost ? `<p class="mc-unit">🧮 ≈ ${unitCost.toFixed(2)} per ${esc(unit)} (₱${price} ÷ ${qty} ${esc(unit)})</p>` : '') +
+      `<div class="mc-actions"><button type="button" class="btn" onclick="useAiProduct(${i})">✓ Add to Inventory</button><button type="button" class="btn ghost" onclick="aiRefresh(${jsq(q)})">⟳ Refresh</button></div>` +
+      (srcs.length ? `<p class="mc-src">Sources: ${srcs.map(s => `<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.title || s.url)} ↗</a>`).join(' · ')}</p>` : '') +
       `</div></article>`;
   }
 
@@ -118,10 +125,7 @@
           if (!box.isConnected) return;
           box.innerHTML = '';
           im.alt = 'Product reference photo';
-          box.appendChild(im);
-          box.insertAdjacentHTML('beforeend',
-            '<small class="muted med-img-cap">📷 Reference photo from the internet — confirm the actual pack / label.</small>' +
-            (cand[k].note ? '<small class="muted med-img-cap">📍 ' + esc(cand[k].note) + '</small>' : ''));
+          box.appendChild(im); /* small header thumb — FIX 196 clean card */
         };
         im.onerror = () => tryNext(k + 1);
         im.src = cand[k].url;

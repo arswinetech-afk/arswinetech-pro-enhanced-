@@ -143,6 +143,8 @@
     });
   }
 
+  /* stock shortcut — kept for the Signs/Symptoms suggestions view only; the
+     name-search card (FIX 196) folds its actions into the clean card itself. */
   function liveStockBlock(entry) {
     const m = stockedMatchesFor(entry)[0];
     if (!m) return `<div class="med-live-stock">📦 <b>Not in your inventory.</b> <button type="button" class="btn ghost med-mini-btn" onclick="openMedEditor(null,${jsq(entry.key)})">＋ Add to inventory</button></div>`;
@@ -152,24 +154,31 @@
       `<button type="button" class="btn ghost med-mini-btn" onclick="openRestock(${jsq(m.id)})">＋ Restock</button></div>`;
   }
 
-  function doseTableHTML(entry) {
-    const bucket = VetLib.ageGroupKey(document.getElementById('vetAnimal')?.value, document.getElementById('vetAge')?.value);
-    const rows = VetLib.DOSE_ORDER.filter(k => entry.doses && entry.doses[k]).map(k =>
-      `<div class="med-dose-row${k === bucket || (bucket === 'piglet' && k === 'nursery') ? ' focus' : ''}"><span>${VetLib.ANIMAL_LABELS[k]}</span><b>${esc(entry.doses[k])}</b></div>`).join('');
-    return `<div class="med-dose-box"><b>💉 Dosage — ${VetLib.ANIMAL_LABELS[bucket] || 'selected group'}:</b> <span class="med-dose-focus">${esc(VetLib.doseFor(entry, bucket))}</span><div class="med-dose-rows">${rows}</div></div>`;
-  }
-
-  function libCardHTML(entry, i) {
-    const chips = `<span class="med-chip">${esc(entry.typeMed || entry.type)}</span><span class="med-chip ghost">${esc(entry.form)}</span><span class="med-chip ghost">${esc(entry.unit)}</span>`;
-    return `<article class="vet-result-card med-lib-card"><div class="med-lib-head"><b>${esc(entry.name)}</b><div class="med-chips">${chips}</div><small>${esc(entry.active)}</small></div>` +
-      `<div class="vet-result-body">` +
-        `<div class="med-img" id="medImg${i}"></div>` +
-        `<section><h4>💊 Usage</h4><p>${esc(entry.usage)}</p></section>` +
-        `<section><h4>💉 Dosage by pig type &amp; age</h4>${doseTableHTML(entry)}<p class="muted med-route">📍 Route: ${esc(entry.route)} &nbsp;·&nbsp; 🥩 Withdrawal: ${esc(entry.withdrawal)}</p></section>` +
-        `<section><h4>💰 Indicative price (PH farm store)</h4><p class="med-price">${esc(entry.price)}</p><small class="muted">Indicative range only — confirm current prices with your supplier.</small></section>` +
-        `${liveStockBlock(entry)}` +
-        `<div class="med-live" id="medLive${i}"><span class="muted">🌐 Checking live internet sources…</span></div><div class="med-live" id="medDm${i}"></div>` +
-        `<section><small class="muted">Reference: ${esc(entry.source)}</small></section>` +
+  /* [FIX 196] the clean reference card the farm asked for — the fields you read
+     on a label, nothing else: name, brands, used-for, general dosage,
+     Piglet / Sow / Boar lines, frequency, est. price, one or two actions.
+     The old card's chip wall, 7-row dosage grid, Wikipedia/DailyMed link walls
+     and chemical-structure images were the "bombardment". */
+  function cleanLibCard(entry) {
+    const d = entry.doses || {};
+    const line = (label, cls, val) => val ? `<p class="mc-line"><b class="${cls}">${label}:</b> ${esc(val)}</p>` : '';
+    const m = stockedMatchesFor(entry)[0];
+    const actions = m
+      ? `<button type="button" class="btn" onclick="openMedTreatment(${jsq(m.id)})">💉 Record treatment</button><button type="button" class="btn ghost" onclick="openRestock(${jsq(m.id)})">＋ Restock</button>`
+      : `<button type="button" class="btn" onclick="openMedEditor(null,${jsq(entry.key)})">✓ Add to Inventory</button>`;
+    return `<article class="vet-result-card med-clean-card"><div class="mc-head"><b>${esc(entry.name)}</b><button type="button" class="mc-x" data-neo="flat" onclick="this.closest('.vet-result-card').remove()" aria-label="Dismiss card">×</button></div>` +
+      `<div class="mc-body">` +
+      ((entry.aliases || []).length ? `<p class="mc-muted">Brand: ${esc(entry.aliases.slice(0, 5).join(', '))}</p>` : '') +
+      `<p class="mc-line"><b>Used for:</b> ${esc(entry.usage)}</p>` +
+      `<p class="mc-line"><b>General dosage:</b> ${esc(entry.dosage || '')}</p>` +
+      line('Piglet', 'mc-cat piglet', d.piglet || d.weaned || d.nursery) +
+      line('Sow', 'mc-cat sow', d.sow || d.lactating) +
+      line('Boar', 'mc-cat boar', d.boar) +
+      `<p class="mc-line"><b>Frequency:</b> ${esc(entry.frequency || 'Single dose unless the dosage notes say otherwise.')}</p>` +
+      `<p class="mc-line mc-muted">📍 ${esc(entry.route)} &nbsp;·&nbsp; 🥩 Withdrawal: ${esc(entry.withdrawal)}</p>` +
+      `<p class="mc-price">Est. Price: ${esc(entry.price)}</p>` +
+      `<div class="mc-actions">${actions}</div>` +
+      `<p class="mc-src">Reference: ${esc(entry.source)}</p>` +
       `</div></article>`;
   }
 
@@ -179,20 +188,10 @@
     document.getElementById('vetResults').innerHTML = '';
     if (q.length < 2) { out.innerHTML = '<div class="form-error show">Enter at least two characters to search.</div>'; return; }
     out.innerHTML = '<div class="empty">Searching the swine veterinary library…</div>';
-    const hits = VetLib.byName(q);
+    const hits = VetLib.byName(q).slice(0, 3);
     out.innerHTML = hits.length
-      ? `<div style="display:flex;justify-content:space-between;align-items:center;margin:12px 0 8px 0"><b style="color:var(--teal2)">🔍 Found ${hits.length} matching veterinary products</b><button type="button" class="btn ghost small" onclick="clearMedSearch()">✕ Clear Results</button></div><div class="vet-result-list">${hits.slice(0, 12).map((x, i) => libCardHTML(x, i)).join('')}</div>`
-      : `<div class="empty">“${esc(q)}” is not in the built-in swine library.</div>`;
-    /* live internet enrichment */
-    hits.slice(0, 12).forEach((x, i) => { hydrateLive('medLive' + i, x.wiki || x.name.split('(')[0].trim()); hydrateDailyMed('medDm' + i, x.active || x.name.split('(')[0].trim()); });
-    if (!hits.length) {
-      out.insertAdjacentHTML('beforeend',
-        `<div class="vet-result-list"><article class="vet-result-card med-lib-card"><div class="med-lib-head"><b>${esc(q)}</b><div class="med-chips"><span class="med-chip ghost">online lookup</span></div><small>Not found in the built-in library — live internet information below if available.</small></div>` +
-        `<div class="vet-result-body"><div class="med-img" id="medImgU"></div><div class="med-live" id="medLiveU"><span class="muted">🌐 Checking live internet sources…</span></div><div class="med-live" id="medDmU"></div>` +
-        `<div class="med-live-stock">📦 <b>Track it in your inventory anyway?</b> <button type="button" class="btn ghost med-mini-btn" onclick="openMedEditor(null,null,${jsq(q)})">＋ Add “${esc(q)}” to inventory</button></div>` +
-        `<section><small class="muted">Always confirm label dosage with a licensed veterinarian.</small></section></div></article></div>`);
-      hydrateLive('medLiveU', q); hydrateDailyMed('medDmU', q);
-    }
+      ? `<div style="display:flex;justify-content:space-between;align-items:center;margin:12px 0 8px 0"><b style="color:var(--teal2)">🔍 ${hits.length} matching reference${hits.length === 1 ? '' : 's'} — internet results below</b><button type="button" class="btn ghost small" onclick="clearMedSearch()">✕ Clear Results</button></div><div class="vet-result-list">${hits.map(x => cleanLibCard(x)).join('')}</div>`
+      : `<div class="empty">“${esc(q)}” is not in the built-in swine library — internet results below.</div>`;
   }
 
   function medSymptomSearch() {

@@ -6136,3 +6136,28 @@ html, body, .shell, .main {
   .order-board-chips{display:grid;grid-template-columns:1fr 1fr;gap:6px}
   .order-board-chips .btn{min-width:0;width:auto;min-height:40px}
 }
+
+/* [FIX 196] clean reference card — the label format the farm asked for:
+   one column of readable lines, no chip walls, no grids, no link walls. */
+.med-clean-card{border:1px solid rgba(94,219,207,.22);border-radius:14px;background:rgba(9,35,40,.65);overflow:hidden}
+.light-theme .med-clean-card{background:#fff;border-color:#dce7e8}
+.mc-head{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;padding:14px 14px 2px}
+.mc-head b{font-size:16px;line-height:1.35}
+.mc-x{background:transparent;color:var(--muted);font-size:18px;padding:0 8px;border-radius:8px;flex:0 0 auto}
+.mc-body{padding:2px 14px 14px}
+.mc-muted{color:var(--muted);font-size:12px;margin:5px 0}
+.mc-line{margin:9px 0;line-height:1.5;font-size:13.5px}
+.mc-line b{font-weight:800}
+.mc-cat.piglet{color:#f0b64b}.mc-cat.sow{color:#ff8fb3}.mc-cat.boar{color:#f59e0b}
+.light-theme .mc-cat.piglet{color:#a15d08}.light-theme .mc-cat.sow{color:#b33f6b}.light-theme .mc-cat.boar{color:#a15d08}
+.mc-price{margin:12px 0 2px;font-size:15px;font-weight:800;color:#a7f3ec}
+.light-theme .mc-price{color:#075e63}
+.mc-unit{color:#7fe9df;font-size:12px;margin:2px 0}
+.light-theme .mc-unit{color:#075e63}
+.mc-actions{display:flex;gap:10px;margin-top:12px;flex-wrap:wrap}
+.mc-src{margin-top:10px;font-size:11px;color:var(--muted)}
+.mc-src a{color:#62e4d7;font-weight:700}
+.light-theme .mc-src a{color:#075e63}
+.mc-thumb{flex:0 0 auto;width:46px;height:46px;border-radius:10px;overflow:hidden;background:rgba(255,255,255,.06)}
+.mc-thumb img{width:100%;height:100%;object-fit:cover}
+.mc-thumb:empty{display:none}
