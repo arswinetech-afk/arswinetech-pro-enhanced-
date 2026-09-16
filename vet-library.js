@@ -262,7 +262,7 @@
     /* ─── 2. ANTIPARASITICS, DEWORMERS & COCCIDIOCIDES ──────────────── */
     {
       key: 'ivermectin', name: 'Ivermectin 1% Injectable', active: 'Ivermectin 10 mg/ml',
-      aliases: ['ivomec', 'iver', 'noromectin', 'bimectin', 'ivermitol', 'ivermectin 1%', 'galis shot'],
+      aliases: ['ivomec', 'iver', 'noromectin', 'bimectin', 'ivermitol', 'ivermectin 1%', 'galis shot', 'iverjec', 'ivermec', 'genvet ivermec', 'univet ivermec'],
       type: 'Antiparasitic / Dewormer', form: 'Injection (vial)', unit: 'ml', wiki: 'Ivermectin',
       usage: 'Controls internal worms (roundworms, lungworms, kidney worms) and external parasites (sarcoptic mange mites, lice). Core sow pre-farrowing program.',
       dosage: '300 mcg/kg BW SC = 1 ml per 33 kg BW, single subcutaneous dose.',

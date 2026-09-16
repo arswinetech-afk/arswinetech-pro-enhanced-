@@ -1,4 +1,4 @@
-# Edge Head Cache — 10,000-user sync upgrade (FIX 123 + FIX 124)
+# Edge worker — head cache (FIX 123/124) + self-hosted medicine search (FIX 195)
 
 Your app already works offline-first and only downloads the farm when a
 lightweight "head" probe says something changed. These two fixes make that
@@ -28,4 +28,20 @@ pattern scale to thousands of concurrent users:
 3. Upload the build folder as usual — `_worker.js` is already inside the zip.
 4. Done. New app versions start using the edge automatically.
 
-If you skip these steps, the app keeps working exactly as it does today.
+If you skip these steps, the app keeps working exactly like it does today.
+
+## FIX 195 — `/ars-med?q=…`: the medicine search's own internet engine
+
+The medicine / vaccine search no longer depends on third-party API keys or
+free LLM relays. `GET /ars-med?q=iverjec` runs **on your own domain**, in this
+worker, merging three key-free public sources server-side (no CORS, no
+tokens): DuckDuckGo lite (live PH store listings — real ₱ prices, packs and
+label dosage text), openFDA drugsfda (active ingredient, class, dosage form,
+route, maker) and Wikipedia (summary + reference photo). The response is the
+exact product-card JSON the app's chooser renders, and it is **edge-cached
+for 1 h**, so a source hiccup still serves the last good answer.
+
+* Needs **no KV binding and no setup** — it ships with `_worker.js`.
+* On hosts without the worker (static preview, plain hosting) the app
+  degrades to a direct Wikipedia card; the built-in library stays the
+  offline floor. QA: `node qa/test-med-internet-products.mjs`.
