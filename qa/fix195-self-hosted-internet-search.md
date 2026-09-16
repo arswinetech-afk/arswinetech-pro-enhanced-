@@ -18,10 +18,13 @@ turn a search into an error card.
 `_worker.js` now serves **`GET /ars-med?q=…`** on the farm's own Cloudflare domain and
 merges, server-side (no CORS, no tokens, no keys), three key-free public sources:
 
-1. **DuckDuckGo lite** — live web results: real PH store listings with real ₱ prices,
+1. **DuckDuckGo** — live web results: real PH store listings with real ₱ prices,
    packs (10ml/100ml) and label dosage text ("Swine: 1ml per 33kg body weight",
    "Withdrawal… 28 days") mined from snippets; verified live during development —
-   "Iverjec" returned Iverjec ₱179 (Lazada) and Ivermectin 100ml ₱980 (agrilife.ph);
+   "Iverjec" returned Iverjec ₱179 (Lazada) and Ivermectin 100ml ₱980 (agrilife.ph).
+   v244 queries TWO independent frontends (lite first, html — with its `uddg`
+   redirect links unwrapped — as the second face), so one frontend refusing
+   service cannot empty the results;
 2. **openFDA drugsfda** — authoritative facts: active ingredient + strength,
    pharmacologic class → Type, dosage form → Form, route, manufacturer;
 3. **Wikipedia** — the generic's summary + a real reference photo.

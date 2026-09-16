@@ -50,6 +50,21 @@ export function parseDdg(html) {
     .filter(r => r.title && /^https?:\/\//i.test(r.url));
 }
 
+/* DuckDuck "html" frontend — the second face if lite ever says no. Its links
+   are /l/?uddg=<encoded> redirects, so unwrap the real destination. */
+const unwrap = u => {
+  const m = String(u || '').match(/[?&]uddg=([^&]+)/);
+  try { return m ? decodeURIComponent(m[1]) : u; } catch (e) { return u; }
+};
+export function parseDdgHtml(html) {
+  const links = [...String(html).matchAll(/<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi)]
+    .map(m => ({ url: unwrap(m[1]), title: stripHtml(m[2]) }));
+  const snaps = [...String(html).matchAll(/<(?:a|td|div)[^>]*class="result__snippet"[^>]*>([\s\S]*?)<\/(?:a|td|div)>/gi)]
+    .map(m => stripHtml(m[1]));
+  return links.map((l, i) => ({ title: l.title, url: l.url, snippet: snaps[i] || '' }))
+    .filter(r => r.title && /^https?:\/\//i.test(r.url));
+}
+
 const cleanTitle = t => stripHtml(t)
   .replace(/\s*[-–|·]\s*(Lazada|Shopee|TikTok Shop|TikTok|BigGo|eCommerce|Price & Voucher[^\-|]*)[^-|]*$/i, '')
   .replace(/\([\d,]+\s*reviews?\)/i, '').trim();
@@ -189,11 +204,16 @@ export function buildProducts(q, wiki, fda, rawOffers) {
 const withTimeout = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms))]);
 
 async function srcDdg(q) {
-  const r = await fetch(`https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(q + ' price philippines')}`, {
-    headers: { 'User-Agent': 'Mozilla/5.0 (ARSwineTech farm app)' }
-  });
-  if (!r.ok) throw new Error('ddg ' + r.status);
-  return parseDdg(await r.text());
+  const headers = { 'User-Agent': 'Mozilla/5.0 (ARSwineTech farm app)' };
+  const query = encodeURIComponent(q + ' price philippines');
+  /* two independent frontends: lite first, html as the second face */
+  try {
+    const r = await fetch(`https://lite.duckduckgo.com/lite/?q=${query}`, { headers });
+    if (r.ok) { const p = parseDdg(await r.text()); if (p.length) return p; }
+  } catch (e) { /* fall through to the html frontend */ }
+  const r2 = await fetch(`https://html.duckduckgo.com/html/?q=${query}`, { headers });
+  if (!r2.ok) throw new Error('ddg ' + r2.status);
+  return parseDdgHtml(await r2.text());
 }
 async function srcFda(q) {
   const r = await fetch(`https://api.fda.gov/drug/drugsfda.json?search=${encodeURIComponent(q)}&limit=3`);

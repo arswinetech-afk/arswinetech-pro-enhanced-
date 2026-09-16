@@ -65,6 +65,15 @@ ok('offer 3: swine dosage mined from snippet', /swine/i.test(o3.dosage) && /33\s
 ok('offer 3: withdrawal mined', /28 days/i.test(o3.withdrawal), o3.withdrawal);
 ok('offer 3: store = Shopee', o3.store === 'Shopee', o3.store);
 
+/* second DDG face: the html frontend with its /l/?uddg= redirect links */
+const DDG_HTML_FIXTURE = `<div class="results">
+<div class="result"><a rel="nofollow" class="result__a" href="/l/?uddg=https%3A%2F%2Fagrilife.ph%2Fproduct%2Fivermectin-100ml%2F">Ivermectin 100ml - Agrilife Philippines</a>
+<a class="result__snippet" href="/l/?uddg=x">Ivermectin 100ml ₱980.00 Add to cart SKU: IVERMECTINML100</a></div>
+</div>`;
+const hres = mod.parseDdgHtml(DDG_HTML_FIXTURE);
+ok('parseDdgHtml unwraps uddg redirects', hres.length === 1 && hres[0].url === 'https://agrilife.ph/product/ivermectin-100ml/', hres[0] && hres[0].url);
+ok('parseDdgHtml pairs snippets + mines price', extractOffer(hres[0]).pricePhp === 980);
+
 const FDA_FIXTURE = { results: [{ sponsor_name: 'X', openfda: { generic_name: ['IVERMECTIN'], substance_name: ['IVERMECTIN'], manufacturer_name: ['Edenbridge Pharmaceuticals LLC.'], pharm_class_epc: ['Antiparasitic [EPC]', 'Pediculicide [EPC]'] }, products: [{ brand_name: 'IVERMECTIN', active_ingredients: [{ name: 'IVERMECTIN', strength: '3MG' }], dosage_form: 'TABLET', route: 'ORAL' }] }] };
 const facts = fdaFacts(FDA_FIXTURE);
 ok('fdaFacts: class → Antiparasitic / Dewormer', facts.type === 'Antiparasitic / Dewormer', facts.type);
@@ -99,6 +108,7 @@ const grab = (src, n) => (src.match(new RegExp(`const ${n} = \\[(.*?)\\]`)) || [
 ok('worker routes /ars-med', WORKER.includes("url.pathname === '/ars-med'"));
 ok('worker edge-caches answers 1 h', WORKER.includes('public, max-age=3600'));
 ok('worker: DDG lite + openFDA + Wikipedia sources', WORKER.includes('lite.duckduckgo.com') && WORKER.includes('api.fda.gov/drug/drugsfda.json') && WORKER.includes('en.wikipedia.org'));
+ok('worker: DDG has two frontends (lite + html fallback)', WORKER.includes('html.duckduckgo.com'));
 ok('worker keeps /ars-head (FIX 124)', WORKER.includes("url.pathname !== '/ars-head'") && WORKER.includes('env.ARS_HEADS'));
 ok('worker keeps static fallback', WORKER.includes('env.ASSETS.fetch(request)'));
 ok('worker sources are individually optional (allSettled)', WORKER.includes('Promise.allSettled'));
