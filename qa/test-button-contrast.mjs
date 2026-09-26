@@ -215,7 +215,8 @@ ok('[contrast] the block was appended, not spliced: every rule that was there be
 /* ── 5. released as a build, not as a hope ────────────────────────────────────────────────── */
 const sw = read('sw.js'), cfg = read('config.js');
 ok('[contrast] CACHE_NAME and the About build string moved together, or the phone keeps the old CSS',
-  /v241-board-contrast/.test(sw) && /v241-board-contrast/.test(cfg) && /css\/app\.css'/.test(sw),
+  /* [FIX 198] was pinned to v241, so every later release failed it; the invariant is that the two move together */
+  ((sw.match(/CACHE_NAME = 'arswinetech-pro-([^']+)'/) || [])[1] || 'x') === ((cfg.match(/ARS_APP_VERSION = '([^']+)'/) || [])[1] || 'y') && /css\/app\.css'/.test(sw),
   (sw.match(/CACHE_NAME = '[^']+'/) || [''])[0]);
 ok('[contrast] no new file, no new <link>: the fix rides in app.css and semen-sales.js, both already cached',
   !/board-contrast|fix192/.test(read('index.html')) && /css\/app\.css\?v=104-semen-save-verification/.test(read('index.html')));

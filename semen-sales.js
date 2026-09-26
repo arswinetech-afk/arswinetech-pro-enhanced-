@@ -2414,6 +2414,442 @@
     return tx;
   }
 
+  /* ═══════════════════════════════════════════════════════════════════════════
+     [FIX 198] RESELLER INSIGHTS — "Top Resellers of the Month" + a per-profile
+     performance summary (this month / last month / custom range).
+
+     ONE counting engine feeds both screens, so the leaderboard and a profile can
+     never disagree about the same reseller and the same dates:
+
+       • a pickup belongs to the LOCAL calendar day of its timestamp (fallback: its
+         stored date) — never a UTC slice, see FIX 197;
+       • voided pickups are excluded, exactly like the balance;
+       • picked up   = Σ dispatched bottles on those pickups;
+       • returned    = Σ returned bottles on those same pickups (capped at the line);
+       • replaced    = Σ replacement bottles handed over on those same pickups;
+       • net sold    = picked up − returned + replaced   (= the bottles billed);
+       • return rate = returned ÷ picked up; replacement rate = replaced ÷ picked up;
+       • net sales   = billed − discounts; collected = paid, capped per pickup at its
+         net due so an over-keyed payment can never push a rate past 100 %.
+
+     Returns and replacements are counted against the pickup they came from (the
+     line data carries no reliable per-return date), so "this month's return rate"
+     answers: of the bottles picked up this month, how many came back.
+     ═══════════════════════════════════════════════════════════════════════════ */
+  const escA = v => escH(v).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  const rsPad = n => String(n).padStart(2, '0');
+  const rsYMD = d => `${d.getFullYear()}-${rsPad(d.getMonth() + 1)}-${rsPad(d.getDate())}`;
+  const rsYM = d => `${d.getFullYear()}-${rsPad(d.getMonth() + 1)}`;
+  const rsParseYMD = s => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(s || '')); return m ? new Date(+m[1], +m[2] - 1, +m[3]) : null; };
+  const rsAddDays = (s, n) => { const d = rsParseYMD(s); d.setDate(d.getDate() + n); return rsYMD(d); };
+  const rsDaysBetween = (a, b) => Math.round((rsParseYMD(b) - rsParseYMD(a)) / 864e5);
+  const rsMonthLabel = ym => { const [y, m] = String(ym).split('-').map(Number); return new Date(y, m - 1, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' }); };
+  const rsShort = s => { const d = rsParseYMD(s); return d ? d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—'; };
+  const rsRangeLabel = (a, b) => {
+    const da = rsParseYMD(a), db = rsParseYMD(b);
+    if (!da || !db) return '—';
+    if (a === b) return da.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    if (da.getFullYear() === db.getFullYear() && da.getMonth() === db.getMonth()) return `${rsShort(a)} – ${db.getDate()}, ${db.getFullYear()}`;
+    if (da.getFullYear() === db.getFullYear()) return `${rsShort(a)} – ${rsShort(b)}, ${db.getFullYear()}`;
+    return `${da.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} – ${db.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`;
+  };
+  const rsPct = (a, b) => (b > 0 ? (a / b) * 100 : 0);
+  const rsFmtPct = v => { const r = Math.round((+v || 0) * 10) / 10; return `${Number.isInteger(r) ? r : r.toFixed(1)}%`; };
+  const rsInt = n => Math.round(+n || 0).toLocaleString('en-US');
+  const rsToday = () => rsYMD(new Date());
+
+  /* The local calendar day a pickup belongs to. */
+  function resellerTxDay(tx) {
+    if (tx && tx.timestamp) {
+      const d = new Date(tx.timestamp);
+      if (!isNaN(d.getTime())) return rsYMD(d);
+    }
+    const s = String((tx && (tx.date || tx.created_at)) || '');
+    return /^\d{4}-\d{2}-\d{2}/.test(s) ? s.slice(0, 10) : '';
+  }
+
+  /* Every number both screens show, for any set of pickups. */
+  function resellerStatsFromTxs(txs) {
+    const st = { pickups: 0, picked: 0, returned: 0, replaced: 0, net: 0, billed: 0, discounts: 0, netSales: 0, collected: 0, outstanding: 0,
+      replacedValue: 0, returnedValue: 0, breeds: {}, reasons: {}, lastDay: '', firstDay: '' };
+    const breed = (key) => (st.breeds[key] = st.breeds[key] || { picked: 0, returned: 0, replacedIn: 0, net: 0 });
+    txs.forEach(tx => {
+      st.pickups++;
+      const day = resellerTxDay(tx);
+      if (day && (!st.lastDay || day > st.lastDay)) st.lastDay = day;
+      if (day && (!st.firstDay || day < st.firstDay)) st.firstDay = day;
+      (tx.lines || []).forEach(l => {
+        const qty = Math.max(0, +l.qty || 0);
+        const ret = Math.min(qty, Math.max(0, +l.returned_qty || 0));
+        const reps = lineReplacements(l);
+        const rep = reps.reduce((a, r) => a + r.qty, 0);
+        st.picked += qty; st.returned += ret; st.replaced += rep;
+        st.returnedValue += ret * Math.max(0, +l.rate || 0);
+        st.replacedValue += reps.reduce((a, r) => a + r.qty * r.rate, 0);
+        const bk = String(l.breed || l.boar || 'Unspecified').trim() || 'Unspecified';
+        const b = breed(bk); b.picked += qty; b.returned += ret; b.net += qty - ret;
+        reps.forEach(r => { const rb = breed(String(r.breed || r.boar || bk).trim() || bk); rb.replacedIn += r.qty; rb.net += r.qty; });
+        if (ret > 0) { const why = String(l.return_reason || 'Unspecified').trim() || 'Unspecified'; st.reasons[why] = (st.reasons[why] || 0) + ret; }
+      });
+      const billed = Math.max(0, +(tx.total_amount || 0));
+      const disc = resellerTxDiscount(tx);
+      const due = Math.max(0, billed - disc);
+      st.billed += billed; st.discounts += disc;
+      st.collected += Math.min(due, Math.max(0, +(tx.paid_amount || 0)));
+      st.outstanding += resellerTxBalance(tx);
+    });
+    st.net = st.picked - st.returned + st.replaced;
+    st.netSales = Math.max(0, st.billed - st.discounts);
+    st.returnRate = rsPct(st.returned, st.picked);
+    st.replaceRate = rsPct(st.replaced, st.picked);
+    st.collectRate = rsPct(st.collected, st.netSales);
+    st.avgPerPickup = st.pickups ? st.picked / st.pickups : 0;
+    /* returned bottles that were swapped for another bottle vs simply credited back */
+    st.swapped = Math.min(st.returned, st.replaced);
+    st.credited = Math.max(0, st.returned - st.replaced);
+    st.kept = st.picked - st.returned;
+    return st;
+  }
+
+  function resellerTxsInRange(f, reseller, from, to) {
+    return resellerTransactionsFor(f, reseller).filter(tx => {
+      if (!tx || tx.voided) return false;
+      const day = resellerTxDay(tx);
+      return !!day && day >= from && day <= to;
+    });
+  }
+  function resellerPeriodStats(f, reseller, from, to) {
+    return resellerStatsFromTxs(resellerTxsInRange(f, reseller, from, to));
+  }
+
+  /* Period presets. "This month" is month-to-date and compares with the SAME days of
+     last month (Sep 1–26 vs Aug 1–26), so a half-finished month is never held
+     against a whole one. Last month compares with the month before it. A custom
+     range compares with the window of equal length right before it. */
+  function resellerPeriod(kind, from, to, todayStr) {
+    const today = todayStr || rsToday();
+    const t = rsParseYMD(today);
+    if (kind === 'last') {
+      const a = new Date(t.getFullYear(), t.getMonth() - 1, 1), b = new Date(t.getFullYear(), t.getMonth(), 0);
+      const pa = new Date(t.getFullYear(), t.getMonth() - 2, 1), pb = new Date(t.getFullYear(), t.getMonth() - 1, 0);
+      return { kind, from: rsYMD(a), to: rsYMD(b), prevFrom: rsYMD(pa), prevTo: rsYMD(pb), label: rsMonthLabel(rsYM(a)), prevLabel: rsMonthLabel(rsYM(pa)) };
+    }
+    if (kind === 'custom' && rsParseYMD(from) && rsParseYMD(to)) {
+      let a = String(from).slice(0, 10), b = String(to).slice(0, 10);
+      if (a > b) [a, b] = [b, a];
+      const len = rsDaysBetween(a, b) + 1;
+      const pb = rsAddDays(a, -1), pa = rsAddDays(a, -len);
+      return { kind, from: a, to: b, prevFrom: pa, prevTo: pb, label: rsRangeLabel(a, b), prevLabel: rsRangeLabel(pa, pb) };
+    }
+    const a = new Date(t.getFullYear(), t.getMonth(), 1);
+    const lastMonthEnd = new Date(t.getFullYear(), t.getMonth(), 0);
+    const pa = new Date(t.getFullYear(), t.getMonth() - 1, 1);
+    const pb = new Date(t.getFullYear(), t.getMonth() - 1, Math.min(t.getDate(), lastMonthEnd.getDate()));
+    return { kind: 'this', from: rsYMD(a), to: today, prevFrom: rsYMD(pa), prevTo: rsYMD(pb), label: `${rsRangeLabel(rsYMD(a), today)} · month to date`, prevLabel: rsRangeLabel(rsYMD(pa), rsYMD(pb)) };
+  }
+
+  /* Count-up for the big numbers. The HTML already carries the final value, so a
+     phone that never runs this (or asks for reduced motion) still reads correctly. */
+  function rsAnimateCountUps(root) {
+    try {
+      if (!root || typeof root.querySelectorAll !== 'function' || typeof requestAnimationFrame !== 'function') return;
+      if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+      root.querySelectorAll('[data-countup]').forEach(el => {
+        const target = +el.getAttribute('data-countup') || 0;
+        const fmt = el.getAttribute('data-fmt') || 'int';
+        const render = v => (fmt === 'peso' ? peso(v) : fmt === 'pct' ? rsFmtPct(v) : rsInt(v));
+        const t0 = performance.now(), dur = 900;
+        const step = now => {
+          const p = Math.min(1, (now - t0) / dur);
+          const e = 1 - Math.pow(1 - p, 3);
+          el.textContent = render(target * e);
+          if (p < 1) requestAnimationFrame(step); else el.textContent = render(target);
+        };
+        requestAnimationFrame(step);
+      });
+    } catch (_) { /* decoration only */ }
+  }
+
+  /* ── 1) TOP RESELLERS OF THE MONTH ───────────────────────────────────────── */
+  const RS_METRICS = {
+    bottles: { label: 'Bottles sold', unit: 'net bottles sold', fmt: 'int', get: s => s.net },
+    sales: { label: 'Net sales', unit: 'net sales', fmt: 'peso', get: s => s.netSales },
+    collected: { label: 'Collected', unit: 'collected', fmt: 'peso', get: s => s.collected }
+  };
+  const rsTopState = { month: '', metric: 'bottles', picked: '' };
+  const rsFmtMetric = (metric, v) => (RS_METRICS[metric].fmt === 'peso' ? peso(v) : rsInt(v));
+
+  /* Months that have any (non-voided) pickup, newest first, plus the current one. */
+  function resellerActivityMonths(f) {
+    const set = new Set([rsYM(new Date())]);
+    (f.semenResellerTx || []).forEach(tx => { if (tx && !tx.voided) { const d = resellerTxDay(tx); if (d) set.add(d.slice(0, 7)); } });
+    return [...set].sort().reverse();
+  }
+
+  /* The ranking, with the reason each place was decided. Order: the chosen metric,
+     then net sales, then net bottles, then the LOWER return rate, then the name. */
+  function resellerLeaderboard(f, ym, metric) {
+    const m = RS_METRICS[metric] ? metric : 'bottles';
+    const [y, mo] = String(ym).split('-').map(Number);
+    const from = rsYMD(new Date(y, mo - 1, 1)), to = rsYMD(new Date(y, mo, 0));
+    const rows = (f.semenResellers || []).map(r => ({ r, s: resellerPeriodStats(f, r, from, to) })).filter(x => x.s.pickups > 0);
+    const keys = [
+      { id: m, label: RS_METRICS[m].unit, v: x => RS_METRICS[m].get(x.s), dir: -1 },
+      { id: 'sales', label: 'net sales', v: x => x.s.netSales, dir: -1 },
+      { id: 'bottles', label: 'net bottles sold', v: x => x.s.net, dir: -1 },
+      { id: 'returns', label: 'a lower return rate', v: x => x.s.returnRate, dir: 1 }
+    ].filter((k, i, arr) => arr.findIndex(z => z.id === k.id) === i);
+    const cmp = (a, b) => {
+      /* dir −1 = higher first, +1 = lower first; a negative result puts `a` first */
+      for (const k of keys) { const d = k.v(a) - k.v(b); if (Math.abs(d) > 1e-9) return d * k.dir > 0 ? 1 : -1; }
+      return String(a.r.name || '').localeCompare(String(b.r.name || ''));
+    };
+    rows.sort(cmp);
+    const all = resellerStatsFromTxs(rows.reduce((acc, x) => acc.concat(resellerTxsInRange(f, x.r, from, to)), []));
+    rows.forEach((x, i) => {
+      x.rank = i + 1; x.value = RS_METRICS[m].get(x.s);
+      /* which rule put this row above the next one down */
+      const next = rows[i + 1];
+      x.decidedBy = null;
+      if (next) for (const k of keys) { if (Math.abs(k.v(x) - k.v(next)) > 1e-9) { x.decidedBy = k; break; } }
+    });
+    return { ym, metric: m, from, to, rows, all, idle: (f.semenResellers || []).length - rows.length };
+  }
+
+  /* Plain-language reasons, every figure traceable to the pickups of that month. */
+  function resellerWhyLines(board, row) {
+    const { metric, all, rows } = board;
+    const M = RS_METRICS[metric];
+    const s = row.s, out = [];
+    const total = M.get(all);
+    out.push({ ico: '🏆', t: `<b>${rsFmtMetric(metric, row.value)}</b> ${M.unit} — <b>${rsFmtPct(rsPct(row.value, total))}</b> of all resellers’ ${rsFmtMetric(metric, total)} in ${rsMonthLabel(board.ym)}.` });
+    const above = rows[row.rank - 2], below = rows[row.rank];
+    if (row.rank === 1 && below) {
+      const gap = row.value - below.value;
+      out.push({ ico: '📈', t: gap > 1e-9
+        ? `Leads #2 <b>${escH(below.r.name)}</b> by <b>${rsFmtMetric(metric, gap)}</b>.`
+        : `Tied with #2 <b>${escH(below.r.name)}</b> on ${M.unit}; placed first on <b>${escH(row.decidedBy ? row.decidedBy.label : 'name order')}</b>.` });
+    } else if (row.rank === 1) {
+      out.push({ ico: '📈', t: 'The only reseller with pickups this month.' });
+    } else if (above) {
+      const gap = above.value - row.value;
+      out.push({ ico: '🎯', t: gap > 1e-9
+        ? `<b>${rsFmtMetric(metric, gap)}</b> behind #${above.rank} <b>${escH(above.r.name)}</b>.`
+        : `Level with #${above.rank} <b>${escH(above.r.name)}</b> on ${M.unit}; placed below on <b>${escH(above.decidedBy ? above.decidedBy.label : 'name order')}</b>.` });
+    }
+    const avgRet = all.returnRate;
+    const retWord = s.returned === 0 ? 'no bottles came back' : Math.abs(s.returnRate - avgRet) < 0.05 ? 'on par with the group' : s.returnRate < avgRet ? 'better than the group' : 'higher than the group';
+    out.push({ ico: s.returnRate <= avgRet ? '✅' : '⚠️', t: `Return rate <b>${rsFmtPct(s.returnRate)}</b> (${rsInt(s.returned)} of ${rsInt(s.picked)} bottles) vs <b>${rsFmtPct(avgRet)}</b> across all resellers — ${retWord}.` });
+    if (s.returned > 0) out.push({ ico: '🔁', t: `${rsInt(s.swapped)} of ${rsInt(s.returned)} returned bottle(s) were swapped for replacements; ${rsInt(s.credited)} credited back.` });
+    out.push({ ico: s.collectRate >= 99.95 ? '💰' : '🧾', t: `Collected <b>${rsFmtPct(s.collectRate)}</b> of the ${peso(s.netSales)} billed on this month’s pickups${s.outstanding > 0 ? ` · ${peso(s.outstanding)} still open` : ' · fully paid'}.` });
+    const topBreed = Object.entries(s.breeds).sort((a, b) => b[1].net - a[1].net)[0];
+    out.push({ ico: '🧬', t: `${rsInt(s.pickups)} pickup(s) · avg ${(Math.round(s.avgPerPickup * 10) / 10)} bottles each${topBreed ? ` · mostly <b>${escH(topBreed[0])}</b> (${rsFmtPct(rsPct(topBreed[1].net, s.net))})` : ''}.` });
+    return out;
+  }
+
+  function renderResellerWhyHTML(board, row) {
+    if (!row) return '';
+    const s = row.s;
+    return `
+      <div class="rtop-why" data-reseller="${escA(row.r.id)}">
+        <div class="rtop-why-head">
+          <div><small>Why #${row.rank}</small><b>${escH(row.r.name)}</b></div>
+          <button type="button" class="btn ghost small" onclick="window.arsOpenResellerProfile('${escA(row.r.id)}')">Open profile ›</button>
+        </div>
+        <div class="rtop-why-chips">
+          <span><small>Net bottles</small><b>${rsInt(s.net)}</b></span>
+          <span><small>Net sales</small><b>${peso(s.netSales)}</b></span>
+          <span><small>Returned</small><b>${rsFmtPct(s.returnRate)}</b></span>
+          <span><small>Collected</small><b>${rsFmtPct(s.collectRate)}</b></span>
+        </div>
+        <ul class="rtop-why-list">${resellerWhyLines(board, row).map(x => `<li><i>${x.ico}</i><span>${x.t}</span></li>`).join('')}</ul>
+      </div>`;
+  }
+
+  function renderTopResellersHTML() {
+    const f = F();
+    const months = resellerActivityMonths(f);
+    if (!rsTopState.month || !months.includes(rsTopState.month)) {
+      /* open on the current month; if it has no pickups yet (the 1st), fall back to the latest month that does */
+      const cur = rsYM(new Date());
+      const hasCur = resellerLeaderboard(f, cur, rsTopState.metric).rows.length > 0;
+      rsTopState.month = hasCur ? cur : (months.find(m => resellerLeaderboard(f, m, rsTopState.metric).rows.length > 0) || cur);
+    }
+    const board = resellerLeaderboard(f, rsTopState.month, rsTopState.metric);
+    const M = RS_METRICS[board.metric];
+    const rows = board.rows;
+    if (!rows.some(x => x.r.id === rsTopState.picked)) rsTopState.picked = rows[0] ? rows[0].r.id : '';
+    const picked = rows.find(x => x.r.id === rsTopState.picked);
+    const top = rows[0] ? rows[0].value : 0;
+    const podium = [rows[1], rows[0], rows[2]]; /* 2nd · 1st · 3rd, the classic podium */
+    const medal = ['🥇', '🥈', '🥉'];
+    const col = (x, slot) => {
+      if (!x) return `<div class="rtop-col rtop-empty rtop-p${slot}"><div class="rtop-step"><span>—</span></div></div>`;
+      const initials = String(x.r.name || '?').trim().split(/\s+/).map(w => w[0]).slice(0, 2).join('').toUpperCase();
+      return `
+        <button type="button" class="rtop-col rtop-p${x.rank}${x.r.id === rsTopState.picked ? ' is-picked' : ''}" data-rid="${escA(x.r.id)}" onclick="window.arsTopResellersPick('${escA(x.r.id)}')" aria-label="${escA(`#${x.rank} ${x.r.name}`)}">
+          ${x.rank === 1 ? '<span class="rtop-crown" aria-hidden="true">👑</span>' : ''}
+          <span class="rtop-avatar">${escH(initials)}<i>${medal[x.rank - 1]}</i></span>
+          <span class="rtop-name">${escH(x.r.name)}</span>
+          <span class="rtop-value" data-countup="${x.value}" data-fmt="${M.fmt}">${rsFmtMetric(board.metric, x.value)}</span>
+          <span class="rtop-step"><b>${x.rank}</b></span>
+        </button>`;
+    };
+    const monthOpts = months.map(m => `<option value="${m}"${m === board.ym ? ' selected' : ''}>${rsMonthLabel(m)}</option>`).join('');
+    const tabs = Object.keys(RS_METRICS).map(k => `<button type="button" class="rtop-tab${k === board.metric ? ' is-on' : ''}" onclick="window.arsTopResellersMetric('${k}')">${RS_METRICS[k].label}</button>`).join('');
+    const rest = rows.slice(3);
+    return `
+      <section class="rtop" aria-label="Top resellers of the month">
+        <div class="rtop-head">
+          <div>
+            <div class="rtop-eyebrow">🏆 Leaderboard</div>
+            <h3>Top Resellers of the Month</h3>
+          </div>
+          <select class="select rtop-month" aria-label="Month" onchange="window.arsTopResellersMonth(this.value)">${monthOpts}</select>
+        </div>
+        <div class="rtop-tabs" role="tablist" aria-label="Rank by">${tabs}</div>
+        ${rows.length ? `
+          <div class="rtop-podium">${podium.map((x, i) => col(x, [2, 1, 3][i])).join('')}</div>
+          <div id="rtopWhy">${renderResellerWhyHTML(board, picked)}</div>
+          ${rest.length ? `<div class="rtop-rest">${rest.map((x, i) => `
+            <button type="button" class="rtop-row${x.r.id === rsTopState.picked ? ' is-picked' : ''}" data-rid="${escA(x.r.id)}" style="--i:${i}" onclick="window.arsTopResellersPick('${escA(x.r.id)}')">
+              <span class="rtop-rank">#${x.rank}</span>
+              <span class="rtop-row-main"><b>${escH(x.r.name)}</b><span class="rtop-bar"><i style="width:${top > 0 ? Math.max(2, (x.value / top) * 100).toFixed(1) : 0}%"></i></span></span>
+              <span class="rtop-row-val">${rsFmtMetric(board.metric, x.value)}<small>${rsFmtPct(x.s.returnRate)} ret.</small></span>
+            </button>`).join('')}</div>` : ''}
+          <div class="rtop-foot">
+            <span>${rsInt(board.all.net)} net bottles · ${peso(board.all.netSales)} net sales · ${rsFmtPct(board.all.returnRate)} returned across ${rows.length} active reseller(s)${board.idle > 0 ? ` · ${board.idle} with no pickups` : ''}</span>
+            <small>Ranked by ${M.unit} on pickups dated ${rsRangeLabel(board.from, board.to)} (voided excluded). Net bottles = picked up − returned + replacements. Ties go to net sales, then bottles, then the lower return rate. Tap a reseller to see why.</small>
+          </div>` : `
+          <div class="rtop-emptybox">No reseller pickups in ${rsMonthLabel(board.ym)} yet. The leaderboard fills in as pickups are recorded.</div>`}
+      </section>`;
+  }
+
+  function rerenderTopResellers() {
+    const host = document.getElementById('resellerTopBoard');
+    if (!host) return;
+    host.innerHTML = renderTopResellersHTML();
+    rsAnimateCountUps(host);
+  }
+  window.arsTopResellersMonth = function (ym) { rsTopState.month = String(ym || ''); rsTopState.picked = ''; rerenderTopResellers(); };
+  window.arsTopResellersMetric = function (m) { rsTopState.metric = RS_METRICS[m] ? m : 'bottles'; rsTopState.picked = ''; rerenderTopResellers(); };
+  /* Picking a reseller swaps only the "why" panel — the podium keeps its place instead of replaying the animation. */
+  window.arsTopResellersPick = function (rId) {
+    rsTopState.picked = String(rId || '');
+    const board = resellerLeaderboard(F(), rsTopState.month, rsTopState.metric);
+    const row = board.rows.find(x => x.r.id === rsTopState.picked);
+    const why = document.getElementById('rtopWhy');
+    if (why) why.innerHTML = renderResellerWhyHTML(board, row);
+    const host = document.getElementById('resellerTopBoard');
+    if (host && typeof host.querySelectorAll === 'function') {
+      host.querySelectorAll('[data-rid]').forEach(el => el.classList.toggle('is-picked', el.getAttribute('data-rid') === rsTopState.picked));
+    }
+  };
+  window.arsOpenResellerProfile = function (rId) {
+    const body = document.getElementById(`resBody_${rId}`);
+    if (body && (body.classList.contains('collapsed') || body.style.display === 'none')) window.toggleResellerCollapse(rId);
+    const card = document.getElementById(`resCard_${rId}`);
+    if (card && card.scrollIntoView) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  /* ── 2) PER-PROFILE PERFORMANCE SUMMARY ──────────────────────────────────── */
+  const rsSumState = {};   /* resellerId → { kind, from, to } — survives hub re-renders */
+
+  function rsDelta(cur, prev, { unit = '', pts = false, goodUp = true } = {}) {
+    const d = cur - prev;
+    if (Math.abs(d) < (pts ? 0.05 : 0.5)) return `<span class="rsum-delta flat">— same</span>`;
+    const up = d > 0;
+    const good = up === goodUp;
+    const txt = pts ? `${(Math.round(Math.abs(d) * 10) / 10).toFixed(1)} pts` : `${rsInt(Math.abs(d))}${unit}`;
+    return `<span class="rsum-delta ${good ? 'good' : 'bad'}">${up ? '▲' : '▼'} ${txt}</span>`;
+  }
+
+  function renderResellerSummaryHTML(r) {
+    const f = F();
+    const state = rsSumState[r.id] || { kind: 'this' };
+    const p = resellerPeriod(state.kind, state.from, state.to);
+    const s = resellerPeriodStats(f, r, p.from, p.to);
+    const prev = resellerPeriodStats(f, r, p.prevFrom, p.prevTo);
+    const id = escA(r.id);
+    const chip = (k, label) => `<button type="button" class="rsum-chip${p.kind === k ? ' is-on' : ''}" onclick="window.arsResellerSummaryPeriod('${id}','${k}')">${label}</button>`;
+    const showCustom = state.kind === 'custom' || state.editing;
+    const keptPct = rsPct(s.kept, s.picked), swapPct = rsPct(s.swapped, s.picked), credPct = rsPct(s.credited, s.picked);
+    const breeds = Object.entries(s.breeds).filter(([, b]) => b.net > 0 || b.picked > 0).sort((a, b) => b[1].net - a[1].net).slice(0, 4);
+    const reasons = Object.entries(s.reasons).sort((a, b) => b[1] - a[1]).slice(0, 3);
+    const hasPrev = prev.pickups > 0;
+    const cmp = hasPrev ? `vs ${escH(p.prevLabel)}` : `no pickups in ${escH(p.prevLabel)} to compare`;
+    return `
+      <div class="rsum-head">
+        <div><small>📊 Performance summary</small><b>${escH(p.label)}</b></div>
+        <div class="rsum-chips">${chip('this', 'This month')}${chip('last', 'Last month')}<button type="button" class="rsum-chip${p.kind === 'custom' ? ' is-on' : ''}" onclick="window.arsResellerSummaryCustomOpen('${id}')">Custom</button></div>
+      </div>
+      ${showCustom ? `
+        <div class="rsum-custom">
+          <label>From<input type="date" id="rsFrom_${id}" value="${escA(state.from || p.from)}" max="${rsToday()}"></label>
+          <label>To<input type="date" id="rsTo_${id}" value="${escA(state.to || p.to)}" max="${rsToday()}"></label>
+          <button type="button" class="btn small" onclick="window.arsResellerSummaryCustom('${id}')">Apply</button>
+        </div>` : ''}
+      ${s.pickups === 0 ? `<div class="rsum-empty">No pickups for ${escH(r.name)} in this period.${hasPrev ? ` ${escH(p.prevLabel)} had ${rsInt(prev.picked)} bottle(s) over ${rsInt(prev.pickups)} pickup(s).` : ''}</div>` : `
+        <div class="rsum-kpis">
+          <div class="rsum-kpi"><small>Bottles picked up</small><b data-countup="${s.picked}">${rsInt(s.picked)}</b><span>${rsInt(s.pickups)} pickup(s) · avg ${(Math.round(s.avgPerPickup * 10) / 10)}</span>${hasPrev ? rsDelta(s.picked, prev.picked) : ''}</div>
+          <div class="rsum-kpi hl"><small>Net bottles sold</small><b data-countup="${s.net}">${rsInt(s.net)}</b><span>picked − returned + replaced</span>${hasPrev ? rsDelta(s.net, prev.net) : ''}</div>
+          <div class="rsum-kpi warn"><small>Returned</small><b>${rsFmtPct(s.returnRate)}</b><span>${rsInt(s.returned)} of ${rsInt(s.picked)} bottles</span>${hasPrev ? rsDelta(s.returnRate, prev.returnRate, { pts: true, goodUp: false }) : ''}</div>
+          <div class="rsum-kpi teal"><small>Replaced</small><b>${rsFmtPct(s.replaceRate)}</b><span>${rsInt(s.replaced)} bottle(s) handed over</span>${hasPrev ? rsDelta(s.replaceRate, prev.replaceRate, { pts: true, goodUp: false }) : ''}</div>
+        </div>
+        <div class="rsum-split" role="img" aria-label="${escA(`${rsInt(s.kept)} kept, ${rsInt(s.swapped)} returned and replaced, ${rsInt(s.credited)} returned and credited`)}">
+          <i class="k" style="width:${keptPct.toFixed(2)}%"></i><i class="s" style="width:${swapPct.toFixed(2)}%"></i><i class="c" style="width:${credPct.toFixed(2)}%"></i>
+        </div>
+        <div class="rsum-legend">
+          <span><i class="k"></i>Kept ${rsInt(s.kept)} (${rsFmtPct(keptPct)})</span>
+          <span><i class="s"></i>Returned → replaced ${rsInt(s.swapped)} (${rsFmtPct(swapPct)})</span>
+          <span><i class="c"></i>Returned → credited ${rsInt(s.credited)} (${rsFmtPct(credPct)})</span>
+        </div>
+        <div class="rsum-money">
+          <div><small>Net sales</small><b>${peso(s.netSales)}</b>${s.discounts > 0 ? `<span>after ${peso(s.discounts)} discount</span>` : `<span>billed on these pickups</span>`}</div>
+          <div><small>Collected</small><b class="ok">${peso(s.collected)}</b><span>${rsFmtPct(s.collectRate)} of net sales</span></div>
+          <div><small>Still open</small><b class="${s.outstanding > 0 ? 'warn' : 'ok'}">${peso(s.outstanding)}</b><span>on these pickups</span></div>
+        </div>
+        <div class="rsum-cols">
+          <div>
+            <small class="rsum-sub">Breed mix · net bottles</small>
+            ${breeds.map(([name, b]) => `<div class="rsum-breed"><span>${escH(name)}</span><span class="rsum-bar"><i style="width:${Math.max(2, rsPct(b.net, s.net)).toFixed(1)}%"></i></span><b>${rsInt(b.net)}</b></div>`).join('') || '<div class="muted">—</div>'}
+          </div>
+          <div>
+            <small class="rsum-sub">Return reasons</small>
+            ${reasons.length ? reasons.map(([why, n]) => `<div class="rsum-reason"><span>${escH(why)}</span><b>${rsInt(n)}</b></div>`).join('') : '<div class="rsum-reason ok"><span>No returns in this period 🎉</span></div>'}
+          </div>
+        </div>
+        <div class="rsum-foot">${cmp}. Returns and replacements count against the pickup they came from; voided pickups excluded. Last pickup ${escH(rsShort(s.lastDay))}.</div>`}
+    `;
+  }
+
+  function rerenderResellerSummary(rId) {
+    const host = document.getElementById(`resSum_${rId}`);
+    const r = (F().semenResellers || []).find(x => x.id === rId);
+    if (!host || !r) return;
+    host.innerHTML = renderResellerSummaryHTML(r);
+    rsAnimateCountUps(host);
+  }
+  window.arsResellerSummaryPeriod = function (rId, kind) {
+    rsSumState[rId] = { kind: kind === 'last' ? 'last' : 'this' };
+    rerenderResellerSummary(rId);
+  };
+  window.arsResellerSummaryCustomOpen = function (rId) {
+    const cur = rsSumState[rId] || { kind: 'this' };
+    const p = resellerPeriod(cur.kind, cur.from, cur.to);
+    rsSumState[rId] = cur.kind === 'custom' ? cur : { kind: cur.kind, editing: true, from: p.from, to: p.to };
+    rerenderResellerSummary(rId);
+  };
+  window.arsResellerSummaryCustom = function (rId) {
+    const from = String((document.getElementById(`rsFrom_${rId}`) || {}).value || '');
+    const to = String((document.getElementById(`rsTo_${rId}`) || {}).value || '');
+    if (!rsParseYMD(from) || !rsParseYMD(to)) { toast('⚠ Pick both a From and a To date.'); return; }
+    rsSumState[rId] = { kind: 'custom', from, to };
+    rerenderResellerSummary(rId);
+  };
+  /* for the qa harness and on-device checks: the exact numbers both screens use */
+  window.arsResellerInsights = { periodStats: resellerPeriodStats, statsFromTxs: resellerStatsFromTxs, leaderboard: resellerLeaderboard, period: resellerPeriod, txDay: resellerTxDay, whyLines: resellerWhyLines };
+
   function openSemenResellerHub() {
     ensureResellerData();
     ensureResellerOrderMenu();        /* [FIX 189] their page needs a menu to show */
@@ -2478,6 +2914,9 @@
             </div>
           </div>
 
+          <!-- [FIX 198] Top Resellers of the Month -->
+          <div id="resellerTopBoard">${renderTopResellersHTML()}</div>
+
           <!-- Search & Filter Bar -->
           <div class="toolbar" style="margin-bottom:12px">
             <input type="search" class="search" style="width:100%;max-width:380px" placeholder="🔍 Search reseller name, contact, address..." oninput="window.filterResellerAccounts(this.value)">
@@ -2496,6 +2935,7 @@
         </div>
       </div>
     `);
+    rsAnimateCountUps(document.getElementById('resellerTopBoard'));
   }
 
   function renderResellerAccountCardHTML(r, rIdx, allTxs) {
@@ -2539,6 +2979,9 @@
             <button type="button" class="btn small ghost" onclick="openResellerProfileModal('${r.id}')">✎ Edit Profile</button>
             <button type="button" class="btn small ghost delete-action" onclick="deleteResellerProfile('${r.id}')" style="color:var(--danger);border-color:rgba(255,92,104,0.35)">🗑 Delete Profile</button>
           </div>
+
+          <!-- [FIX 198] Performance summary: this month / last month / custom -->
+          <div class="rsum" id="resSum_${r.id}">${renderResellerSummaryHTML(r)}</div>
 
           <!-- Transactions List -->
           <div class="reseller-tx-list">
@@ -2609,6 +3052,7 @@
       body.classList.remove('collapsed');
       body.style.display = 'block';
       if (arrow) arrow.textContent = '▲';
+      rsAnimateCountUps(document.getElementById(`resSum_${rId}`));   /* [FIX 198] */
     } else {
       body.classList.add('collapsed');
       body.style.display = 'none';
