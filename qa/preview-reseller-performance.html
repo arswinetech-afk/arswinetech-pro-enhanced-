@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>[FIX 198] Reseller performance — preview harness</title>
+<!--
+  A throw-away harness for eyeballing the two new screens without a Supabase
+  sign-in: it boots the REAL semen-sales.js against the REAL app.css with a
+  mock farm in memory. Nothing here ships (it is not in build-deploy-layout.sh).
+  Serve the repo root and open /qa/preview-reseller-performance.html
+-->
+<link rel="stylesheet" href="../app.css">
+<link rel="stylesheet" href="../neumorphic.css">
+<style>
+  body{padding:20px 18px 60px}
+  .harness-top{max-width:980px;margin:0 auto 18px}
+  .harness-top h1{font-size:20px;margin:6px 0 4px}
+  .harness-top p{color:var(--muted);margin:0 0 12px;font-size:12.5px;line-height:1.6}
+  .harness-actions{display:flex;gap:8px;flex-wrap:wrap}
+</style>
+</head>
+<body>
+<div class="harness-top">
+  <div class="eyebrow">QA PREVIEW · NOT PART OF THE SHIPPED APP</div>
+  <h1>Semen Reseller Center — Top Resellers of the Month &amp; profile summaries</h1>
+  <p>Mock farm, real module. Open the center, switch the board between this month and last month,
+     expand any reseller to see the performance summary, and try a custom date range.</p>
+  <div class="harness-actions">
+    <button class="btn" onclick="openSemenResellerHub()">👥 Open Semen Reseller Center</button>
+    <button class="btn ghost" onclick="document.documentElement.classList.toggle('light-theme');document.body.classList.toggle('light-theme')">🌗 Toggle light theme</button>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* ── the handful of app.js globals semen-sales.js reaches for ───────────────── */
+const pad = n => String(n).padStart(2, '0');
+const D = (mo, day, h = 9) => new Date(new Date().getFullYear(), new Date().getMonth() + mo, day, h, 30);
+const key = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const stamp = d => d.toISOString();
+
+window.farmId = 'FARM-DEMO';
+window.__arsActiveFarmId = 'FARM-DEMO';
+window.peso = x => new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP', maximumFractionDigits: 0 }).format(+x || 0);
+window.fmtDate = v => (v ? new Date(String(v).length <= 10 ? v + 'T00:00' : v).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—');
+window.localDateTimeValue = (d = new Date()) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+window.save = () => {};
+window.renderAll = () => {};
+window.closeModal = () => {};
+window.toast = m => { const t = document.getElementById('toast'); t.textContent = m; t.classList.add('show'); setTimeout(() => t.classList.remove('show'), 2600); };
+window.ARSCloud = { syncFarmRecord: async () => ({ success: true }), verifyFarmSave: async () => ({ success: true }), saveLocalRecovery() {} };
+
+const line = (o) => Object.assign({ boar: 'B1 Large White', breed: 'Largewhite', semen_batch_no: 'B1LW', qty: 4, rate: 400, amount: 1600, returned_qty: 0, replacements: [] }, o);
+
+const DB = {
+  id: 'FARM-DEMO', name: "RM's Hog Farm",
+  semen: [
+    { id: 'SEM-LW', semen_batch_no: 'B1LW', boar_name: 'B1 Large White', breed: 'Largewhite', price_per_dose: 400, available_bottles: 40, bottles: 40, status: 'active' },
+    { id: 'SEM-BD', semen_batch_no: 'BDD', boar_name: 'Duroc (BD)', breed: 'Duroc', price_per_dose: 450, available_bottles: 25, bottles: 25, status: 'active' }
+  ],
+  semenSales: [], reservations: [],
+  semenResellers: [
+    { id: 'R-AN', name: 'Greg Biron', contact: '0918 555 0101', address: 'Brgy. Bibincahan, Sorsogon' },
+    { id: 'R-JO', name: 'Jo Dacara', contact: '0917 555 0144', address: 'Brgy. San Jose, Casiguran' },
+    { id: 'R-AX', name: 'Ana Reyes', contact: '0919 555 0177', address: 'Brgy. Cabid-an, Sorsogon' },
+    { id: 'R-TR', name: 'Tino Cruz', contact: '0920 555 0190', address: 'Brgy. Balogo, Juban' }
+  ],
+  semenResellerTx: [
+    { id: 'RTX-B1', reseller_id: 'R-AN', reseller_name: 'Greg Biron', date: key(D(0, 5)), timestamp: stamp(D(0, 5)), total_amount: 6300, paid_amount: 6300, discount_amount: 0,
+      lines: [line({ boar: 'Duroc (BD)', breed: 'Duroc', semen_batch_no: 'BDD', qty: 14, rate: 450, amount: 6300 })] },
+    { id: 'RTX-B2', reseller_id: 'R-AN', reseller_name: 'Greg Biron', date: key(D(0, 17)), timestamp: stamp(D(0, 17)), total_amount: 3600, paid_amount: 3600, discount_amount: 0,
+      lines: [line({ qty: 9, rate: 400, amount: 3600 })] },
+    { id: 'RTX-A1', reseller_id: 'R-JO', reseller_name: 'Jo Dacara', date: key(D(0, 3)), timestamp: stamp(D(0, 3)), total_amount: 4000, paid_amount: 0, discount_amount: 0,
+      lines: [line({ qty: 10, rate: 400, amount: 4000 })] },
+    { id: 'RTX-A2', reseller_id: 'R-JO', reseller_name: 'Jo Dacara', date: key(D(-1, 12)), timestamp: stamp(D(-1, 12)), total_amount: 2400, paid_amount: 0, discount_amount: 0,
+      return_adjusted_at: stamp(D(0, 8)), adjusted_at: stamp(D(0, 8)),
+      return_audit: [{ at: stamp(D(0, 8)), returns: 2, replacements: 2, cancelled: 0, undone: 0, lines: [] }],
+      lines: [line({ qty: 6, amount: 2400, returned_qty: 2, return_reason: 'Unused / Unsold',
+        replacements: [{ semen_id: 'SEM-LW', boar: 'B1 Large White', breed: 'Largewhite', batch_no: 'B1LW', qty: 2, rate: 400, at: stamp(D(0, 8)) }] })] },
+    { id: 'RTX-C1', reseller_id: 'R-AX', reseller_name: 'Ana Reyes', date: key(D(0, 9)), timestamp: stamp(D(0, 9)), total_amount: 2000, paid_amount: 800, discount_amount: 200,
+      return_adjusted_at: stamp(D(0, 14)),
+      return_audit: [{ at: stamp(D(0, 14)), returns: 1, replacements: 1, cancelled: 0, undone: 0, lines: [] }],
+      lines: [line({ qty: 5, amount: 2000, returned_qty: 1, return_reason: 'Damaged container',
+        replacements: [{ semen_id: 'SEM-BD', boar: 'Duroc (BD)', breed: 'Duroc', batch_no: 'BDD', qty: 1, rate: 450, at: stamp(D(0, 14)) }] })] },
+    { id: 'RTX-D1', reseller_id: 'R-TR', reseller_name: 'Tino Cruz', date: key(D(0, 4)), timestamp: stamp(D(0, 4)), total_amount: 3200, paid_amount: 0, discount_amount: 0,
+      return_adjusted_at: stamp(D(0, 11)),
+      return_audit: [{ at: stamp(D(0, 11)), returns: 3, replacements: 0, cancelled: 0, undone: 0, lines: [] }],
+      lines: [line({ boar: 'Hamruc', breed: 'Hamruc', semen_batch_no: 'HM1', qty: 8, amount: 2000, returned_qty: 3, return_reason: 'Poor motility' })] },
+    { id: 'RTX-D0', reseller_id: 'R-TR', reseller_name: 'Tino Cruz', date: key(D(-1, 22)), timestamp: stamp(D(-1, 22)), total_amount: 2800, paid_amount: 2800, discount_amount: 0,
+      lines: [line({ qty: 7, amount: 2800 })] }
+  ],
+  semenResellerAdjustments: [], semenResellerOrders: [], semenResellerOrderLinks: [], semenOrderBreeds: [],
+  transactions: [
+    { id: 'INC-1', type: 'Income', reseller_id: 'R-JO', amount: 3000, description: 'Reseller payment (Cash) — Jo Dacara', date: key(D(0, 9)), payment_allocations: [] },
+    { id: 'INC-2', type: 'Income', reseller_id: 'R-AX', amount: 600, description: 'Reseller payment (GCash) — Ana Reyes', date: key(D(0, 20)), payment_allocations: [] },
+    { id: 'INC-0', type: 'Income', reseller_id: 'R-JO', amount: 999, description: 'Reseller payment (Cash) — Jo Dacara', date: key(D(-1, 15)), payment_allocations: [] }
+  ],
+  deleted_ids: []
+};
+window.F = () => DB;
+</script>
+<script src="../semen-sales.js"></script>
+<script>window.addEventListener('load', () => openSemenResellerHub());</script>
+</body>
+</html>

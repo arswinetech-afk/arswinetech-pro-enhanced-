@@ -2414,6 +2414,721 @@
     return tx;
   }
 
+  /* ═══════════════════════════════════════════════════════════════════════════
+     [FIX 198] RESELLER PERFORMANCE ANALYTICS
+     ──────────────────────────────────────────────────────────────────────────
+     Two screens are built on one engine so the numbers can never disagree:
+
+       • "🏆 Top Resellers of the Month" on the reseller page — an animated,
+         interactive league table that also EXPLAINS its ranking (every point a
+         reseller scored is shown, with the metric it came from).
+       • A "Performance Summary" inside every reseller profile — bottles sold,
+         returned %, replaced % for This month / Last month / a custom range.
+
+     Accounting rules used everywhere below (they are the whole point of the
+     feature — a leaderboard that counts the wrong bottles is worse than none):
+
+       1. DATES ARE LOCAL, never UTC. `2026-10-01T00:00+08:00` is October on the
+          farm's phone; `toISOString()` would file it under September (see FIX 197).
+       2. A PICKUP is counted in the period its dispatch is dated in.
+       3. A RETURN / REPLACEMENT is counted in the period IT was recorded in —
+          not the period of the pickup it corrects. Bottles that came back in
+          October are October's returns even if they were picked up in September.
+          The per-save audit trail (`tx.return_audit[].at`) carries those dates;
+          an entry that only undid a mis-keyed return counts negative, because
+          that is exactly what it did to the month's return count.
+       4. The audit trail is capped at the last 20 saves, and records written by
+          older builds have none at all. So the audit is RECONCILED against the
+          stored line state, and any unexplained remainder is dated at the
+          transaction's own adjustment stamp. Totals therefore always add up to
+          what the invoice really holds.
+       5. VOIDED pickups are excluded (they are not sales).
+       6. CASH is counted from the dated payment history (FIX 95), so money paid
+          in November against an October invoice is November's collection.
+     ═══════════════════════════════════════════════════════════════════════════ */
+
+  /* Local YYYY-MM-DD for any stored date shape (plain date, ISO stamp, Date). */
+  function resDayKey(v) {
+    if (!v) return '';
+    if (v instanceof Date) return isNaN(v.getTime()) ? '' : `${v.getFullYear()}-${String(v.getMonth() + 1).padStart(2, '0')}-${String(v.getDate()).padStart(2, '0')}`;
+    const s = String(v).trim();
+    if (!s) return '';
+    const plain = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (plain) return s;                                  /* already a local calendar day */
+    const d = new Date(s);
+    if (!isNaN(d.getTime())) return resDayKey(d);
+    const loose = s.match(/^(\d{4})-(\d{2})-(\d{2})/);    /* unparseable stamp: keep its date text */
+    return loose ? `${loose[1]}-${loose[2]}-${loose[3]}` : '';
+  }
+
+  function resMonthRange(monthOffset, base) {
+    const now = base instanceof Date ? base : new Date();
+    const start = new Date(now.getFullYear(), now.getMonth() + (monthOffset || 0), 1);
+    const end = new Date(start.getFullYear(), start.getMonth() + 1, 0);
+    return {
+      from: resDayKey(start),
+      to: resDayKey(end),
+      label: start.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+    };
+  }
+
+  function resPrettyDay(day) {
+    const m = String(day || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) return String(day || '—');
+    return new Date(+m[1], +m[2] - 1, +m[3]).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  }
+
+  function resDaysBetween(from, to) {
+    const a = String(from || '').match(/^(\d{4})-(\d{2})-(\d{2})$/), b = String(to || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!a || !b) return 0;
+    return Math.round((new Date(+b[1], +b[2] - 1, +b[3]) - new Date(+a[1], +a[2] - 1, +a[3])) / 86400000) + 1;
+  }
+
+  function resShiftDay(day, delta) {
+    const m = String(day || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) return '';
+    return resDayKey(new Date(+m[1], +m[2] - 1, +m[3] + (delta || 0)));
+  }
+
+  /* A period selection → a concrete range. Shared by the leaderboard and by every
+     profile summary, so "This month" always means the same 1st-to-last-day window. */
+  function resellerRangeFor(state) {
+    const s = state || {};
+    if (s.key === 'last') return Object.assign(resMonthRange(-1), { key: 'last' });
+    if (s.key === 'custom') {
+      let from = resDayKey(s.from), to = resDayKey(s.to);
+      if (!from && !to) return Object.assign(resMonthRange(0), { key: 'this' });
+      if (!from) from = to;
+      if (!to) to = from;
+      if (from > to) { const t = from; from = to; to = t; }
+      return { key: 'custom', from, to, label: from === to ? resPrettyDay(from) : `${resPrettyDay(from)} → ${resPrettyDay(to)}` };
+    }
+    return Object.assign(resMonthRange(0), { key: 'this' });
+  }
+
+  /* The comparable window immediately before `range` — drives the ▲/▼ deltas. */
+  function resellerPreviousRange(range) {
+    if (!range) return resMonthRange(-1);
+    if (range.key === 'this') return resMonthRange(-1);
+    if (range.key === 'last') return resMonthRange(-2);
+    const span = Math.max(1, resDaysBetween(range.from, range.to));
+    const to = resShiftDay(range.from, -1);
+    const from = resShiftDay(to, -(span - 1));
+    return { key: 'custom', from, to, label: `${resPrettyDay(from)} → ${resPrettyDay(to)}` };
+  }
+
+  /* Dated return / replacement events for one pickup (rule 3 + rule 4 above). */
+  function resellerAdjustmentEvents(tx) {
+    if (!tx) return [];
+    const txDay = resDayKey(tx.timestamp || tx.date || tx.created_at);
+    const events = [];
+    (Array.isArray(tx.return_audit) ? tx.return_audit : []).forEach(a => {
+      if (!a) return;
+      const day = resDayKey(a.at) || txDay;
+      const returned = Math.max(0, +a.returns || 0) - Math.max(0, +a.undone || 0);
+      const replaced = Math.max(0, +a.replacements || 0) - Math.max(0, +a.cancelled || 0);
+      if (!day || (!returned && !replaced)) return;
+      events.push({ day, returned, replaced, source: 'audit' });
+    });
+    /* Reconcile against what the invoice actually holds today. */
+    const stored = (tx.lines || []).reduce((acc, l) => {
+      acc.returned += Math.max(0, +l.returned_qty || 0);
+      acc.replaced += lineReplacements(l).reduce((a, r) => a + Math.max(0, +r.qty || 0), 0);
+      return acc;
+    }, { returned: 0, replaced: 0 });
+    const seenRet = events.reduce((a, e) => a + e.returned, 0);
+    const seenRep = events.reduce((a, e) => a + e.replaced, 0);
+    const missRet = +(stored.returned - seenRet).toFixed(3);
+    const missRep = +(stored.replaced - seenRep).toFixed(3);
+    if (missRet > 0.001 || missRep > 0.001) {
+      const day = resDayKey(tx.return_adjusted_at || tx.adjusted_at) || txDay;
+      if (day) events.push({ day, returned: Math.max(0, missRet), replaced: Math.max(0, missRep), source: 'derived' });
+    }
+    return events;
+  }
+
+  /* One reseller, one window: every number the two screens display. */
+  function resellerPeriodStats(f, reseller, range) {
+    const r = range || resellerRangeFor({ key: 'this' });
+    const from = r.from, to = r.to;
+    const inRange = day => !!day && (!from || day >= from) && (!to || day <= to);
+
+    const txs = resellerTransactionsFor(f, reseller).filter(tx => tx && !tx.voided);
+    const daily = {};
+    const bump = (day, key, n) => {
+      if (!n) return;
+      daily[day] = daily[day] || { dispatched: 0, returned: 0, replaced: 0 };
+      daily[day][key] += n;
+    };
+
+    let dispatched = 0, billed = 0, discounts = 0, pickups = 0, lineCount = 0;
+    let returned = 0, replaced = 0, returnedValue = 0, replacedValue = 0;
+    const breeds = {}, days = new Set(), reasons = {};
+    let lastActivity = '';
+
+    txs.forEach(tx => {
+      const day = resDayKey(tx.timestamp || tx.date || tx.created_at);
+      if (inRange(day)) {
+        pickups++;
+        days.add(day);
+        if (day > lastActivity) lastActivity = day;
+        billed += Math.max(0, +tx.total_amount || 0);
+        discounts += resellerTxDiscount(tx);
+        (tx.lines || []).forEach(l => {
+          const q = Math.max(0, +l.qty || 0);
+          dispatched += q;
+          lineCount++;
+          bump(day, 'dispatched', q);
+          const b = String(l.breed || l.boar || 'Unlabelled').trim() || 'Unlabelled';
+          breeds[b] = (breeds[b] || 0) + q;
+        });
+      }
+      /* Returns and replacements ride their own dates. */
+      const evs = resellerAdjustmentEvents(tx);
+      const perBottle = (() => {
+        const q = (tx.lines || []).reduce((a, l) => a + Math.max(0, +l.qty || 0), 0);
+        const money = (tx.lines || []).reduce((a, l) => a + Math.max(0, +l.qty || 0) * Math.max(0, +l.rate || 0), 0);
+        return q > 0 ? money / q : 0;
+      })();
+      evs.forEach(ev => {
+        if (!inRange(ev.day)) return;
+        returned += ev.returned;
+        replaced += ev.replaced;
+        returnedValue += ev.returned * perBottle;
+        replacedValue += ev.replaced * perBottle;
+        bump(ev.day, 'returned', ev.returned);
+        bump(ev.day, 'replaced', ev.replaced);
+        if (ev.day > lastActivity) lastActivity = ev.day;
+        days.add(ev.day);
+      });
+      if (inRange(resDayKey(tx.return_adjusted_at || tx.adjusted_at))) {
+        (tx.lines || []).forEach(l => {
+          const why = String(l.return_reason || '').trim();
+          if (why && (+l.returned_qty || 0) > 0) reasons[why] = (reasons[why] || 0) + Math.max(0, +l.returned_qty || 0);
+        });
+      }
+    });
+
+    const payments = resellerPaymentHistory(f, reseller).filter(p => inRange(resDayKey(p.date)));
+    const collected = payments.reduce((a, p) => a + Math.max(0, +p.amount || 0), 0);
+    if (payments.length) {
+      const lastPay = payments.map(p => resDayKey(p.date)).sort().pop();
+      if (lastPay > lastActivity) lastActivity = lastPay;
+    }
+
+    returned = Math.max(0, +returned.toFixed(3));
+    replaced = Math.max(0, +replaced.toFixed(3));
+    const netBilled = Math.max(0, billed - discounts);
+    const netBottles = Math.max(0, dispatched - returned + replaced);
+    const account = resellerAccountTotals(f, reseller);
+
+    return {
+      range: r,
+      pickups, lineCount,
+      dispatched, returned, replaced, netBottles,
+      keptBottles: Math.max(0, dispatched - returned),
+      returnRate: dispatched > 0 ? returned / dispatched : 0,
+      replaceRate: dispatched > 0 ? replaced / dispatched : 0,
+      replaceCoverage: returned > 0 ? Math.min(1, replaced / returned) : 0,
+      fulfillmentRate: dispatched > 0 ? Math.max(0, Math.min(1, (dispatched - returned + replaced) / dispatched)) : 0,
+      billed, discounts, netBilled, collected,
+      returnedValue: +returnedValue.toFixed(2),
+      replacedValue: +replacedValue.toFixed(2),
+      collectionRate: netBilled > 0 ? Math.min(1, collected / netBilled) : (collected > 0 ? 1 : 0),
+      unpaidInPeriod: Math.max(0, netBilled - collected),
+      openBalance: account.balance,
+      activeDays: days.size,
+      avgPerPickup: pickups > 0 ? dispatched / pickups : 0,
+      avgTicket: pickups > 0 ? netBilled / pickups : 0,
+      lastActivity,
+      daily,
+      breeds,
+      reasons,
+      payments: payments.length,
+      hasActivity: !!(pickups || returned || replaced || collected)
+    };
+  }
+
+  /* ── Scoring model ──────────────────────────────────────────────────────────
+     Five weighted metrics, 100 points in total. Volume/value/cash are scored
+     RELATIVE to the best performer of the month (share of the leader), the two
+     rate metrics are absolute (they are already percentages), so a small
+     reseller who sells everything he takes and pays on time still scores well
+     on 25 of the 100 points and a big sloppy one cannot hide behind volume. */
+  const RES_SCORE_MODEL = [
+    { key: 'volume',     label: 'Bottles delivered',  weight: 30, why: 'net bottles the reseller actually kept (dispatched − returned + replacements), measured against the month\'s best' },
+    { key: 'value',      label: 'Net sales value',    weight: 25, why: 'billed less discounts on pickups dated in the period, measured against the month\'s best' },
+    { key: 'cash',       label: 'Cash collected',     weight: 20, why: 'payments actually received in the period, measured against the month\'s best' },
+    { key: 'collection', label: 'Collection rate',    weight: 15, why: 'cash collected ÷ net billed for the period' },
+    { key: 'quality',    label: 'Low-return quality', weight: 10, why: '1 − return rate on the bottles dispatched to them' }
+  ];
+
+  function resellerLeaderboard(f, range) {
+    const r = range || resellerRangeFor({ key: 'this' });
+    const rows = (f.semenResellers || [])
+      .filter(Boolean)
+      .map(res => ({ reseller: res, stats: resellerPeriodStats(f, res, r) }))
+      .filter(x => x.stats.hasActivity);
+
+    const best = rows.reduce((m, x) => ({
+      bottles: Math.max(m.bottles, x.stats.netBottles),
+      value: Math.max(m.value, x.stats.netBilled),
+      cash: Math.max(m.cash, x.stats.collected)
+    }), { bottles: 0, value: 0, cash: 0 });
+
+    rows.forEach(x => {
+      const s = x.stats;
+      const ratios = {
+        volume: best.bottles > 0 ? s.netBottles / best.bottles : 0,
+        value: best.value > 0 ? s.netBilled / best.value : 0,
+        cash: best.cash > 0 ? s.collected / best.cash : 0,
+        collection: s.collectionRate,
+        quality: s.dispatched > 0 ? Math.max(0, 1 - s.returnRate) : (s.hasActivity ? 1 : 0)
+      };
+      x.components = RES_SCORE_MODEL.map(m => ({
+        key: m.key, label: m.label, weight: m.weight, why: m.why,
+        ratio: Math.max(0, Math.min(1, ratios[m.key] || 0)),
+        points: +(Math.max(0, Math.min(1, ratios[m.key] || 0)) * m.weight).toFixed(2)
+      }));
+      x.score = +x.components.reduce((a, c) => a + c.points, 0).toFixed(2);
+    });
+
+    rows.sort((a, b) =>
+      (b.score - a.score) ||
+      (b.stats.netBottles - a.stats.netBottles) ||
+      (b.stats.collected - a.stats.collected) ||
+      String(a.reseller.name || '').localeCompare(String(b.reseller.name || ''))
+    );
+    rows.forEach((x, i) => { x.rank = i + 1; });
+
+    const totals = rows.reduce((t, x) => ({
+      bottles: t.bottles + x.stats.netBottles,
+      dispatched: t.dispatched + x.stats.dispatched,
+      returned: t.returned + x.stats.returned,
+      replaced: t.replaced + x.stats.replaced,
+      value: t.value + x.stats.netBilled,
+      cash: t.cash + x.stats.collected,
+      pickups: t.pickups + x.stats.pickups
+    }), { bottles: 0, dispatched: 0, returned: 0, replaced: 0, value: 0, cash: 0, pickups: 0 });
+    totals.avgReturnRate = totals.dispatched > 0 ? totals.returned / totals.dispatched : 0;
+    totals.avgCollectionRate = totals.value > 0 ? Math.min(1, totals.cash / totals.value) : 0;
+    totals.contenders = rows.length;
+
+    return { range: r, rows, totals, model: RES_SCORE_MODEL };
+  }
+
+  /* Plain-language proof of WHY the leader leads — every sentence is a claim the
+     numbers above support, and a metric is only called "highest" when it is. */
+  function resellerTopReasons(board) {
+    const rows = board.rows;
+    if (!rows.length) return [];
+    const top = rows[0], runner = rows[1], t = board.totals;
+    const pct = (x) => `${((x || 0) * 100).toFixed(1)}%`;
+    const share = (v, whole) => whole > 0 ? `${((v / whole) * 100).toFixed(0)}%` : '0%';
+    const leads = (pick) => rows.every(x => pick(top.stats) >= pick(x.stats) - 0.0001);
+    const out = [];
+
+    if (top.stats.netBottles > 0) {
+      const lead = leads(s => s.netBottles);
+      const vs = runner && runner.stats.netBottles > 0
+        ? ` — ${(((top.stats.netBottles / runner.stats.netBottles) - 1) * 100).toFixed(0)}% ahead of ${escH(runner.reseller.name)} (${+runner.stats.netBottles.toFixed(0)})`
+        : '';
+      out.push(`${lead ? 'Moved the most bottles' : 'Strong volume'}: <b>${+top.stats.netBottles.toFixed(0)} net bottles</b> delivered${vs}, ${share(top.stats.netBottles, t.bottles)} of everything the resellers moved.`);
+    }
+    if (top.stats.netBilled > 0) {
+      out.push(`${leads(s => s.netBilled) ? 'Highest net sales' : 'Solid sales'}: <b>${peso(top.stats.netBilled)}</b> billed after discounts across ${top.stats.pickups} pickup${top.stats.pickups === 1 ? '' : 's'} — ${share(top.stats.netBilled, t.value)} of the field.`);
+    }
+    if (top.stats.collected > 0 || top.stats.netBilled > 0) {
+      out.push(`Paid like clockwork: <b>${peso(top.stats.collected)}</b> collected in the period = <b>${pct(top.stats.collectionRate)}</b> of what was billed to them (field average ${pct(t.avgCollectionRate)}).`);
+    }
+    if (top.stats.dispatched > 0) {
+      out.push(top.stats.returned > 0
+        ? `Return rate <b>${pct(top.stats.returnRate)}</b> (${+top.stats.returned.toFixed(0)} of ${top.stats.dispatched} bottles came back${top.stats.replaced > 0 ? `, ${+top.stats.replaced.toFixed(0)} replaced` : ''}) against a field average of ${pct(t.avgReturnRate)}.`
+        : `<b>Zero returns</b> on ${top.stats.dispatched} bottles dispatched — the field averaged ${pct(t.avgReturnRate)} returned.`);
+    }
+    if (top.stats.pickups > 0) {
+      out.push(`Consistency: ${top.stats.pickups} pickup${top.stats.pickups === 1 ? '' : 's'} on ${top.stats.activeDays} active day${top.stats.activeDays === 1 ? '' : 's'}, averaging ${top.stats.avgPerPickup.toFixed(1)} bottles and ${peso(top.stats.avgTicket)} each.`);
+    }
+    if (runner) {
+      out.push(`Final margin: <b>${top.score.toFixed(1)} pts</b> vs ${escH(runner.reseller.name)} on ${runner.score.toFixed(1)} pts — decided by ${topDecidingMetric(top, runner)}.`);
+    }
+    return out;
+  }
+
+  function topDecidingMetric(top, runner) {
+    let bestKey = null, bestGap = -Infinity;
+    top.components.forEach((c, i) => {
+      const gap = c.points - (runner.components[i] ? runner.components[i].points : 0);
+      if (gap > bestGap) { bestGap = gap; bestKey = c.label; }
+    });
+    return bestGap > 0 ? `${escH(bestKey)} (+${bestGap.toFixed(1)} pts)` : 'a near tie across every metric';
+  }
+
+  /* ── Presentation helpers ─────────────────────────────────────────────────── */
+  const resPct = (x, dp) => `${(Math.max(0, +x || 0) * 100).toFixed(dp === undefined ? 1 : dp)}%`;
+  const resNum = (x) => `${Math.round(+x || 0)}`;
+
+  function resCountUpAttrs(value, opts) {
+    const o = opts || {};
+    return `data-count-to="${+value || 0}" data-count-dec="${o.dec || 0}"${o.prefix ? ` data-count-prefix="${escH(o.prefix)}"` : ''}${o.suffix ? ` data-count-suffix="${escH(o.suffix)}"` : ''}${o.money ? ' data-count-money="1"' : ''}`;
+  }
+
+  function resDeltaChipHTML(now, before, opts) {
+    const o = opts || {};
+    const a = +now || 0, b = +before || 0;
+    if (!a && !b) return '';
+    const diff = a - b;
+    const flat = Math.abs(diff) < (o.epsilon || 0.0005);
+    const good = o.lowerIsBetter ? diff < 0 : diff > 0;
+    const pctTxt = b > 0 ? `${diff > 0 ? '+' : ''}${((diff / b) * 100).toFixed(0)}%` : (a > 0 ? 'new' : '0%');
+    const txt = o.asPct ? `${diff > 0 ? '+' : ''}${(diff * 100).toFixed(1)} pts` : pctTxt;
+    const cls = flat ? 'flat' : (good ? 'up' : 'down');
+    return `<span class="rps-delta ${cls}" title="Previous period: ${o.fmt ? o.fmt(b) : b}">${flat ? '±' : (diff > 0 ? '▲' : '▼')} ${escH(txt)}</span>`;
+  }
+
+  function resSparklineHTML(daily, range) {
+    const days = Object.keys(daily || {}).sort();
+    if (!days.length) return '';
+    const from = range.from, to = range.to;
+    const span = Math.max(1, resDaysBetween(from, to));
+    const cols = [];
+    if (span <= 62) {
+      for (let i = 0; i < span; i++) {
+        const d = resShiftDay(from, i);
+        cols.push({ day: d, v: (daily[d] && daily[d].dispatched) || 0, r: (daily[d] && daily[d].returned) || 0 });
+      }
+    } else {
+      days.forEach(d => cols.push({ day: d, v: daily[d].dispatched, r: daily[d].returned }));
+    }
+    const max = cols.reduce((m, c) => Math.max(m, c.v), 0);
+    if (max <= 0) return '';
+    return `<div class="rps-spark" role="img" aria-label="Daily bottles dispatched">
+      ${cols.map(c => `<i style="--h:${Math.max(4, Math.round((c.v / max) * 100))}%" class="${c.r > 0 ? 'ret' : ''}" title="${escH(resPrettyDay(c.day))}: ${resNum(c.v)} bottle(s)${c.r ? ` · ${resNum(c.r)} returned` : ''}"></i>`).join('')}
+    </div>`;
+  }
+
+  /* ── Top Resellers of the Month (interactive board) ───────────────────────── */
+  let resLeaderboardState = { key: 'this' };
+  const RES_MEDALS = ['🥇', '🥈', '🥉'];
+
+  function renderResellerLeaderboardHTML() {
+    const f = F();
+    const range = resellerRangeFor(resLeaderboardState);
+    const board = resellerLeaderboard(f, range);
+    const rows = board.rows;
+    const podium = rows.slice(0, 3);
+    const reasons = resellerTopReasons(board);
+    const chip = (key, label) => `<button type="button" class="rlb-chip${resLeaderboardState.key === key ? ' on' : ''}" onclick="window.arsResellerLeaderboardPeriod('${key}')">${label}</button>`;
+
+    return `
+      <section class="rlb-wrap" id="resellerLeaderboard" aria-label="Top resellers of the month">
+        <div class="rlb-glow" aria-hidden="true"></div>
+        <div class="rlb-head">
+          <div>
+            <div class="eyebrow rlb-eyebrow">🏆 TOP RESELLERS OF THE MONTH</div>
+            <b class="rlb-period">${escH(range.label)}</b>
+            <small class="muted rlb-sub">${board.totals.contenders} active reseller${board.totals.contenders === 1 ? '' : 's'} · ${resNum(board.totals.bottles)} net bottles · ${peso(board.totals.value)} net sales · ${peso(board.totals.cash)} collected</small>
+          </div>
+          <div class="rlb-chips">
+            ${chip('this', 'This month')}
+            ${chip('last', 'Last month')}
+          </div>
+        </div>
+
+        ${!rows.length ? `
+          <div class="rlb-empty">
+            <b>No reseller activity recorded for ${escH(range.label)} yet.</b>
+            <small class="muted">Record a pickup or a payment and the ranking builds itself — no extra encoding.</small>
+          </div>
+        ` : `
+          <div class="rlb-podium">
+            ${podium.map((x, i) => `
+              <button type="button" class="rlb-pod rank${i + 1}" style="--d:${i * 110}ms" onclick="window.arsResellerBoardFocus('${escH(x.reseller.id)}')" title="Open ${escH(x.reseller.name)}'s profile">
+                <span class="rlb-medal">${RES_MEDALS[i]}</span>
+                <span class="rlb-pod-name">${escH(x.reseller.name)}</span>
+                <span class="rlb-pod-score"><b ${resCountUpAttrs(x.score, { dec: 1 })}>${x.score.toFixed(1)}</b><small>pts</small></span>
+                <span class="rlb-pod-meta">${resNum(x.stats.netBottles)} bottles · ${peso(x.stats.netBilled)}</span>
+                <span class="rlb-pod-bar"><i data-perf-bar="${Math.max(6, Math.round(x.score))}"></i></span>
+              </button>
+            `).join('')}
+          </div>
+
+          <div class="rlb-why" id="rlbWhy">
+            <div class="rlb-why-head"><span class="rlb-crown">👑</span> Why <b>${escH(rows[0].reseller.name)}</b> is on top</div>
+            <ul class="rlb-why-list">
+              ${reasons.map((t, i) => `<li style="--d:${260 + i * 90}ms">${t}</li>`).join('')}
+            </ul>
+            <div class="rlb-score-strip">
+              ${rows[0].components.map(c => `
+                <div class="rlb-score-cell" title="${escH(c.why)}">
+                  <small>${escH(c.label)}</small>
+                  <span class="rlb-mini"><i data-perf-bar="${Math.round(c.ratio * 100)}"></i></span>
+                  <b>${c.points.toFixed(1)}<em>/${c.weight}</em></b>
+                </div>
+              `).join('')}
+            </div>
+            <small class="rlb-formula">Score = ${board.model.map(m => `${m.weight}% ${escH(m.label).toLowerCase()}`).join(' + ')}. Volume, value and cash are scored against the month's best performer; the two rates are absolute. Returns and replacements count in the month they were recorded.</small>
+          </div>
+
+          <div class="rlb-table">
+            ${rows.map(x => `
+              <div class="rlb-row${x.rank === 1 ? ' lead' : ''}" id="rlbRow_${escH(x.reseller.id)}" style="--d:${320 + x.rank * 60}ms">
+                <button type="button" class="rlb-row-main" onclick="window.arsResellerBoardToggle('${escH(x.reseller.id)}')" aria-expanded="false">
+                  <span class="rlb-rank">${x.rank <= 3 ? RES_MEDALS[x.rank - 1] : `#${x.rank}`}</span>
+                  <span class="rlb-name">
+                    <b>${escH(x.reseller.name)}</b>
+                    <small class="muted">${resNum(x.stats.netBottles)} bottles · ${peso(x.stats.netBilled)} · ${resPct(x.stats.returnRate)} returned · ${resPct(x.stats.collectionRate, 0)} collected</small>
+                  </span>
+                  <span class="rlb-bar"><i data-perf-bar="${Math.max(3, Math.round(x.score))}"></i></span>
+                  <span class="rlb-score"><b ${resCountUpAttrs(x.score, { dec: 1 })}>${x.score.toFixed(1)}</b><small>pts</small></span>
+                  <span class="rlb-caret" id="rlbCaret_${escH(x.reseller.id)}">▾</span>
+                </button>
+                <div class="rlb-break" id="rlbBreak_${escH(x.reseller.id)}" hidden>
+                  ${x.components.map(c => `
+                    <div class="rlb-break-row">
+                      <span class="rlb-break-label" title="${escH(c.why)}">${escH(c.label)} <small class="muted">${c.weight}%</small></span>
+                      <span class="rlb-mini"><i data-perf-bar="${Math.round(c.ratio * 100)}" style="width:0"></i></span>
+                      <b>${c.points.toFixed(1)} pts</b>
+                    </div>
+                  `).join('')}
+                  <div class="rlb-break-foot">
+                    <span>Dispatched <b>${resNum(x.stats.dispatched)}</b></span>
+                    <span>Returned <b>${resNum(x.stats.returned)}</b> (${resPct(x.stats.returnRate)})</span>
+                    <span>Replaced <b>${resNum(x.stats.replaced)}</b> (${resPct(x.stats.replaceRate)})</span>
+                    <span>Collected <b>${peso(x.stats.collected)}</b></span>
+                    <span>Open balance <b>${peso(x.stats.openBalance)}</b></span>
+                    <button type="button" class="btn ghost small" onclick="window.arsResellerBoardFocus('${escH(x.reseller.id)}')">Open profile →</button>
+                  </div>
+                </div>
+              </div>
+            `).join('')}
+          </div>
+        `}
+      </section>`;
+  }
+
+  window.arsResellerLeaderboardPeriod = function (key) {
+    resLeaderboardState = { key: key === 'last' ? 'last' : 'this' };
+    const host = document.getElementById('resellerLeaderboard');
+    if (!host) return;
+    host.outerHTML = renderResellerLeaderboardHTML();
+    armResellerPerfAnimations();
+  };
+
+  window.arsResellerBoardToggle = function (rId) {
+    const box = document.getElementById(`rlbBreak_${rId}`);
+    const caret = document.getElementById(`rlbCaret_${rId}`);
+    if (!box) return;
+    const open = box.hasAttribute('hidden');
+    if (open) box.removeAttribute('hidden'); else box.setAttribute('hidden', '');
+    if (caret) caret.textContent = open ? '▴' : '▾';
+    if (open) armResellerPerfAnimations();
+  };
+
+  /* Tapping a podium tile jumps to that reseller's profile card and opens it. */
+  window.arsResellerBoardFocus = function (rId) {
+    const body = document.getElementById(`resBody_${rId}`);
+    const card = document.getElementById(`resCard_${rId}`);
+    if (body && (body.classList.contains('collapsed') || body.style.display === 'none')) window.toggleResellerCollapse(rId);
+    if (card) {
+      try { card.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (_) { try { card.scrollIntoView(); } catch (__) {} }
+      card.classList.add('rlb-flash');
+      setTimeout(() => card.classList.remove('rlb-flash'), 1600);
+    }
+  };
+
+  /* ── Per-profile quick summary ────────────────────────────────────────────── */
+  const resSummaryState = {};   /* reseller id → { key, from, to } — survives hub re-renders */
+
+  function resellerSummaryState(rId) {
+    if (!resSummaryState[rId]) resSummaryState[rId] = { key: 'this', from: '', to: '' };
+    return resSummaryState[rId];
+  }
+
+  function renderResellerQuickSummaryHTML(r) {
+    const f = F();
+    const state = resellerSummaryState(r.id);
+    const range = resellerRangeFor(state);
+    const prev = resellerPreviousRange(range);
+    const s = resellerPeriodStats(f, r, range);
+    const p = resellerPeriodStats(f, r, prev);
+    const chip = (key, label) => `<button type="button" class="rps-chip${state.key === key ? ' on' : ''}" onclick="window.arsResellerSummaryPeriod('${escH(r.id)}','${key}')">${label}</button>`;
+    /* A percentage needs bottles dispatched INSIDE the window to divide by. A one-day
+       range that only holds a return has none, and "0.0%" there would be a lie. */
+    const rated = s.dispatched > 0;
+    const stack = (() => {
+      const total = Math.max(1, s.dispatched + s.replaced);
+      const w = n => `${Math.max(0, (n / total) * 100).toFixed(2)}`;
+      return `<div class="rps-stack" role="img" aria-label="Kept, returned and replaced bottles">
+        <i class="kept" data-perf-bar="${w(s.keptBottles)}" title="Kept & sold: ${resNum(s.keptBottles)} bottle(s)"></i>
+        <i class="ret" data-perf-bar="${w(s.returned)}" title="Returned: ${resNum(s.returned)} bottle(s)"></i>
+        <i class="rep" data-perf-bar="${w(s.replaced)}" title="Replaced: ${resNum(s.replaced)} bottle(s)"></i>
+      </div>`;
+    })();
+
+    return `
+      <div class="rps-card" id="rpsBox_${escH(r.id)}">
+        <div class="rps-head">
+          <div>
+            <div class="eyebrow rps-eyebrow">📊 PERFORMANCE SUMMARY</div>
+            <b class="rps-range">${escH(range.label)}</b>
+            <small class="muted rps-sub">${escH(resPrettyDay(range.from))} – ${escH(resPrettyDay(range.to))} · ${resDaysBetween(range.from, range.to)} day window · ${s.pickups} pickup${s.pickups === 1 ? '' : 's'}${s.lastActivity ? ` · last activity ${escH(resPrettyDay(s.lastActivity))}` : ''}</small>
+          </div>
+          <div class="rps-chips">
+            ${chip('this', 'This month')}
+            ${chip('last', 'Last month')}
+            ${chip('custom', 'Custom range')}
+          </div>
+        </div>
+
+        <div class="rps-custom" ${state.key === 'custom' ? '' : 'hidden'}>
+          <label>From <input type="date" id="rpsFrom_${escH(r.id)}" value="${escH(range.from)}"></label>
+          <label>To <input type="date" id="rpsTo_${escH(r.id)}" value="${escH(range.to)}"></label>
+          <button type="button" class="btn small" onclick="window.arsResellerSummaryCustom('${escH(r.id)}')">Apply range</button>
+          <button type="button" class="btn ghost small" onclick="window.arsResellerSummaryPeriod('${escH(r.id)}','this')">Reset</button>
+        </div>
+
+        <div class="rps-grid">
+          <div class="rps-tile primary">
+            <small>Bottles sold (net)</small>
+            <b ${resCountUpAttrs(s.netBottles)}>${resNum(s.netBottles)}</b>
+            <span>${resNum(s.dispatched)} dispatched${s.replaced ? ` + ${resNum(s.replaced)} replacement${s.replaced === 1 ? '' : 's'}` : ''}${s.returned ? ` − ${resNum(s.returned)} returned` : ''} ${resDeltaChipHTML(s.netBottles, p.netBottles)}</span>
+          </div>
+          <div class="rps-tile warn">
+            <small>Returned</small>
+            ${rated
+              ? `<b ${resCountUpAttrs(s.returnRate * 100, { dec: 1, suffix: '%' })}>${resPct(s.returnRate)}</b>`
+              : `<b title="No bottles were dispatched inside this window, so a percentage would have no denominator">${resNum(s.returned)} btl</b>`}
+            <span>${rated
+              ? `${resNum(s.returned)} of ${resNum(s.dispatched)} bottle(s) came back ${resDeltaChipHTML(s.returnRate, p.returnRate, { asPct: true, lowerIsBetter: true, fmt: v => resPct(v) })}`
+              : (s.returned > 0 ? 'returned against pickups dated outside this window' : 'nothing came back in this window')}</span>
+          </div>
+          <div class="rps-tile teal">
+            <small>Replaced</small>
+            ${rated
+              ? `<b ${resCountUpAttrs(s.replaceRate * 100, { dec: 1, suffix: '%' })}>${resPct(s.replaceRate)}</b>`
+              : `<b title="No bottles were dispatched inside this window, so a percentage would have no denominator">${resNum(s.replaced)} btl</b>`}
+            <span>${resNum(s.replaced)} bottle(s) re-issued · ${s.returned > 0 ? `${resPct(s.replaceCoverage, 0)} of returns covered` : 'no returns to cover'}</span>
+          </div>
+          <div class="rps-tile ok">
+            <small>Collected</small>
+            <b ${resCountUpAttrs(s.collected, { dec: 2, money: true })}>${peso(s.collected)}</b>
+            <span>${resPct(s.collectionRate, 0)} of ${peso(s.netBilled)} net billed ${resDeltaChipHTML(s.collected, p.collected, { fmt: v => peso(v) })}</span>
+          </div>
+        </div>
+
+        ${stack}
+        <div class="rps-legend">
+          <span><i class="kept"></i> Kept &amp; sold ${resNum(s.keptBottles)}</span>
+          <span><i class="ret"></i> Returned ${resNum(s.returned)}${rated ? ` (${resPct(s.returnRate)})` : ''}</span>
+          <span><i class="rep"></i> Replaced ${resNum(s.replaced)}${rated ? ` (${resPct(s.replaceRate)})` : ''}</span>
+          ${rated ? `<span class="rps-fulfil">Fulfilment ${resPct(s.fulfillmentRate, 0)}</span>` : ''}
+        </div>
+
+        ${resSparklineHTML(s.daily, range)}
+
+        <div class="rps-lines">
+          <div><small>Gross billed</small><b>${peso(s.billed)}</b></div>
+          <div><small>Discounts</small><b class="ok">−${peso(s.discounts)}</b></div>
+          <div><small>Net billed</small><b>${peso(s.netBilled)}</b></div>
+          <div><small>Unpaid this period</small><b class="${s.unpaidInPeriod > 0 ? 'warn' : 'ok'}">${peso(s.unpaidInPeriod)}</b></div>
+          <div><small>Avg per pickup</small><b>${s.avgPerPickup.toFixed(1)} btl · ${peso(s.avgTicket)}</b></div>
+          <div><small>Open balance (all time)</small><b class="${s.openBalance > 0 ? 'warn' : 'ok'}">${peso(s.openBalance)}</b></div>
+        </div>
+
+        ${Object.keys(s.breeds).length ? `<div class="rps-mix"><small class="muted">Mix dispatched:</small> ${Object.entries(s.breeds).sort((a, b) => b[1] - a[1]).slice(0, 6).map(([b, q]) => `<span class="rps-pill">${escH(b)} · ${resNum(q)}</span>`).join('')}</div>` : ''}
+        ${Object.keys(s.reasons).length ? `<div class="rps-mix"><small class="muted">Return reasons:</small> ${Object.entries(s.reasons).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([b, q]) => `<span class="rps-pill warn">${escH(b)} · ${resNum(q)}</span>`).join('')}</div>` : ''}
+
+        <small class="rps-foot">Pickups counted on their dispatch date; returns and replacements on the date they were recorded; payments on the date received. Voided pickups excluded. Compared against ${escH(prev.label)}.</small>
+      </div>`;
+  }
+
+  function refreshResellerQuickSummary(rId) {
+    const f = F();
+    const r = (f.semenResellers || []).find(x => x.id === rId);
+    const host = document.getElementById(`rpsBox_${rId}`);
+    if (!r || !host) return;
+    host.outerHTML = renderResellerQuickSummaryHTML(r);
+    armResellerPerfAnimations();
+  }
+
+  window.arsResellerSummaryPeriod = function (rId, key) {
+    const st = resellerSummaryState(rId);
+    st.key = (key === 'last' || key === 'custom') ? key : 'this';
+    if (st.key === 'custom' && !st.from && !st.to) {
+      const m = resMonthRange(0);
+      st.from = m.from; st.to = m.to;
+    }
+    refreshResellerQuickSummary(rId);
+  };
+
+  window.arsResellerSummaryCustom = function (rId) {
+    const st = resellerSummaryState(rId);
+    const from = (document.getElementById(`rpsFrom_${rId}`) || {}).value || '';
+    const to = (document.getElementById(`rpsTo_${rId}`) || {}).value || '';
+    if (!from && !to) { toast('Pick a start and an end date for the custom summary.'); return; }
+    st.key = 'custom';
+    st.from = from || to;
+    st.to = to || from;
+    refreshResellerQuickSummary(rId);
+  };
+
+  /* ── Animation driver ─────────────────────────────────────────────────────── */
+  function resReduceMotion() {
+    try { return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches); } catch (_) { return false; }
+  }
+
+  function resCountUp(el, instant) {
+    const to = +el.getAttribute('data-count-to') || 0;
+    const dec = +el.getAttribute('data-count-dec') || 0;
+    const prefix = el.getAttribute('data-count-prefix') || '';
+    const suffix = el.getAttribute('data-count-suffix') || '';
+    const money = el.getAttribute('data-count-money') === '1';
+    const paint = v => { el.textContent = money ? peso(v) : `${prefix}${v.toFixed(dec)}${suffix}`; };
+    if (instant || typeof requestAnimationFrame !== 'function') { paint(to); return; }
+    /* Safety net: if rAF never fires (hidden tab, throttled webview) the final figure
+       is painted anyway — the markup already carries it, so nothing is ever left at 0. */
+    let settled = false;
+    try { setTimeout(() => { if (!settled) paint(to); }, 1400); } catch (_) {}
+    const dur = 850, t0 = (typeof performance === 'object' && performance.now) ? performance.now() : Date.now();
+    const step = (now) => {
+      const t = Math.min(1, ((now || Date.now()) - t0) / dur);
+      paint(to * (1 - Math.pow(1 - t, 3)));      /* ease-out cubic */
+      if (t < 1) requestAnimationFrame(step); else settled = true;
+    };
+    requestAnimationFrame(step);
+  }
+
+  /* Replays the fill + count-up inside `scope` (the whole hub by default). Attributes
+     are intentionally left on the nodes so re-opening a card animates it again. */
+  function armResellerPerfAnimations(scope) {
+    if (typeof document === 'undefined') return;
+    const root = (scope && typeof scope.querySelectorAll === 'function') ? scope : document;
+    if (typeof root.querySelectorAll !== 'function') return;
+    const reduce = resReduceMotion();
+    let bars = [], counters = [];
+    try { bars = Array.prototype.slice.call(root.querySelectorAll('[data-perf-bar]')); } catch (_) {}
+    try { counters = Array.prototype.slice.call(root.querySelectorAll('[data-count-to]')); } catch (_) {}
+    bars.forEach(el => { if (el.style && !reduce) el.style.width = '0%'; });
+    const grow = () => bars.forEach(el => {
+      const w = +el.getAttribute('data-perf-bar') || 0;
+      if (el.style) el.style.width = `${Math.max(0, Math.min(100, w))}%`;
+    });
+    if (reduce) grow(); else { try { setTimeout(grow, 60); } catch (_) { grow(); } }
+    counters.forEach(el => { try { resCountUp(el, reduce); } catch (_) {} });
+  }
+
+  /* Exposed for QA and for other screens that want the same, single source of truth. */
+  window.arsResellerPeriodStats = (resellerOrId, state) => {
+    ensureResellerData();
+    const f = F();
+    const r = typeof resellerOrId === 'object' ? resellerOrId : (f.semenResellers || []).find(x => x.id === resellerOrId || x.name === resellerOrId);
+    return r ? resellerPeriodStats(f, r, resellerRangeFor(state)) : null;
+  };
+  window.arsResellerLeaderboard = (state) => { ensureResellerData(); return resellerLeaderboard(F(), resellerRangeFor(state)); };
+  window.arsResellerTopReasons = (state) => { ensureResellerData(); return resellerTopReasons(resellerLeaderboard(F(), resellerRangeFor(state))); };
+  window.arsResellerRangeFor = resellerRangeFor;
+
   function openSemenResellerHub() {
     ensureResellerData();
     ensureResellerOrderMenu();        /* [FIX 189] their page needs a menu to show */
@@ -2465,6 +3180,9 @@
           </div>
           <div class="reseller-discount-summary">⚖ Total discounts / readjustments applied: <b>${peso(totalDiscounts)}</b> · These reduce reseller receivables but do not count as cash collected.</div>
 
+          <!-- [FIX 198] Top Resellers of the Month — animated, and it shows its working -->
+          ${renderResellerLeaderboardHTML()}
+
           <!-- Action Toolbar -->
           <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px">
             <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
@@ -2496,6 +3214,9 @@
         </div>
       </div>
     `);
+
+    /* [FIX 198] bars grow and scores count up once the markup is in the document */
+    armResellerPerfAnimations();
   }
 
   function renderResellerAccountCardHTML(r, rIdx, allTxs) {
@@ -2529,6 +3250,9 @@
         </div>
 
         <div class="reseller-card-body collapsed" id="resBody_${r.id}" style="display:none">
+          <!-- [FIX 198] Quick performance summary: this month / last month / custom range -->
+          ${renderResellerQuickSummaryHTML(r)}
+
           <!-- Quick Action Buttons for this Reseller -->
           <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
             <button type="button" class="btn small" onclick="openResellerPickupModal('${r.id}')">＋ Record Pickup</button>
@@ -2609,6 +3333,7 @@
       body.classList.remove('collapsed');
       body.style.display = 'block';
       if (arrow) arrow.textContent = '▲';
+      armResellerPerfAnimations(body);   /* [FIX 198] replay the summary bars on open */
     } else {
       body.classList.add('collapsed');
       body.style.display = 'none';

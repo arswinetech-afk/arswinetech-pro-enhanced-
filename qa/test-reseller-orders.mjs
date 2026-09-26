@@ -754,7 +754,14 @@ async function bootOrderPage({ search, calls = [], barHeight, ...resp }) {
   ok('[14] and the offline fallback cannot hand a reseller the login screen', /js\/order-page\.js'\)\s*return;/.test(sw));
   ok('[14] order.html is in the deploy layout', /order\.html/.test(build));
   ok('[14] the page is served no-cache and kept out of search engines', /\/order\.html\n  Cache-Control: no-cache/.test(read('_headers')) && /noindex/.test(read('_headers')));
-  ok('[14] the build is bumped so phones drop the old shell', /arswinetech-pro-v241-board-contrast/.test(sw) && /v241-board-contrast/.test(cfg), sw.split('\n')[7] + ' | ' + cfg.split('\n')[2]);
+  /* [FIX 198] release-string invariant, not a pinned release: sw.js names its cache after
+     config.js's build string and both move on every deploy. */
+  ok('[14] the build is bumped so phones drop the old shell',
+    (() => {
+      const swV = (sw.match(/CACHE_NAME = 'arswinetech-pro-([^']+)'/) || [])[1] || '';
+      const cfgV = (cfg.match(/ARS_APP_VERSION = '([^']+)'/) || [])[1] || '';
+      return !!swV && swV === cfgV;
+    })(), sw.split('\n')[7] + ' | ' + cfg.split('\n')[2]);
   ok('[14] the page asks for breeds, not bottles', /Which breeds do you need\?/.test(page) && !/Choose your bottles/.test(page));
 
   /* the fixed basket bar used to steal the last row: a hardcoded 104px of body padding lost
