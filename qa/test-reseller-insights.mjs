@@ -282,9 +282,34 @@ ok('[5] a missing date is refused with a message', ctx.__toasts.length === befor
 ctx.arsResellerSummaryPeriod('R-AN', 'this');
 ok('[5] an idle month says so, and points at the comparison', /No pickups for Ana O'Neil in this period\. Aug 1 – 26, 2026 had 2 bottle\(s\) over 1 pickup\(s\)/.test(txt(ctx.document.getElementById('resSum_R-AN').innerHTML)), txt(ctx.document.getElementById('resSum_R-AN').innerHTML));
 
+/* ── [7] both panels ship collapsed and open only when asked (FIX 199) ───────── */
+ok('[7] the leaderboard ships collapsed', /class="rtop is-collapsed"/.test(hub) && /id="rtopBody" hidden/.test(hub), (hub.match(/class="rtop [^"]*"/) || [''])[0]);
+ok('[7] the collapsed bar still names the leader', /class="rtop-peek">🥇 Randy Sedeno · 23 net bottles sold · September 2026</.test(hub), (hub.match(/class="rtop-peek">[^<]*/) || [''])[0]);
+ok('[7] the collapsed board keeps every record in the DOM (nothing is thrown away)', /rtop-podium/.test(hub) && /Why #1/.test(hub));
+ctx.arsTopResellersToggle();
+const boardOpen = ctx.document.getElementById('resellerTopBoard').innerHTML;
+ok('[7] tapping the header opens the board', /class="rtop is-open"/.test(boardOpen) && /id="rtopBody">/.test(boardOpen) && /class="rtop-toggle" aria-expanded="true"/.test(boardOpen));
+ok('[7] the open board still shows the podium and the method', /rtop-podium/.test(boardOpen) && /Ranked by net bottles sold/.test(txt(boardOpen)));
+ctx.arsTopResellersToggle();
+const boardShut = ctx.document.getElementById('resellerTopBoard').innerHTML;
+ok('[7] tapping it again closes the board', /class="rtop is-collapsed"/.test(boardShut) && /class="rtop-toggle" aria-expanded="false"/.test(boardShut));
+
+ok('[7] every profile summary ships collapsed', /aria-expanded="false" aria-controls="rsumBody_R-JO"/.test(hub) && /id="rsumBody_R-JO" hidden/.test(hub));
+ok('[7] the collapsed summary previews the period at a glance', /class="rsum-peek">23 net bottles · 8\.3% returned ·/.test(hub), (hub.match(/class="rsum-peek">[^<]*/) || [''])[0]);
+ctx.arsResellerSummaryToggle('R-JO');
+const sumOpen = ctx.document.getElementById('resSum_R-JO').innerHTML;
+ok('[7] tapping the summary header opens it', /aria-expanded="true" aria-controls="rsumBody_R-JO"/.test(sumOpen) && /id="rsumBody_R-JO">/.test(sumOpen));
+ok('[7] the period chips live inside the opened body', /rsum-body[^>]*>\s*<div class="rsum-chips">/.test(sumOpen));
+ctx.arsResellerSummaryPeriod('R-JO', 'last');
+const sumStillOpen = ctx.document.getElementById('resSum_R-JO').innerHTML;
+ok('[7] switching period does not close it', /aria-expanded="true" aria-controls="rsumBody_R-JO"/.test(sumStillOpen) && /August 2026/.test(sumStillOpen));
+ctx.arsResellerSummaryToggle('R-JO');
+ok('[7] and it closes again on the next tap', /id="rsumBody_R-JO" hidden/.test(ctx.document.getElementById('resSum_R-JO').innerHTML));
+ok('[7] one reseller opening does not open the others', /id="rsumBody_R-AN" hidden/.test(ctx.document.getElementById('resSum_R-AN').innerHTML));
+
 /* ── [6] every class the templates emit exists in app.css ─────────────────────── */
 const css = fs.readFileSync(path.join(ROOT, 'app.css'), 'utf8');
-const emitted = [hub, board2, board3, ctx.document.getElementById('resSum_R-JO').innerHTML, ctx.document.getElementById('resSum_R-AN').innerHTML].join(' ');
+const emitted = [hub, board2, board3, boardOpen, boardShut, sumOpen, ctx.document.getElementById('resSum_R-JO').innerHTML, ctx.document.getElementById('resSum_R-AN').innerHTML].join(' ');
 const tokens = new Set();
 (emitted.match(/class="([^"]+)"/g) || []).forEach(c => c.slice(7, -1).split(/\s+/).forEach(t => { if (/^(rtop|rsum)/.test(t)) tokens.add(t); }));
 const missing = [...tokens].filter(t => !new RegExp('\\.' + t.replace(/[-]/g, '\\-') + '(?![\\w-])').test(css));

@@ -6171,7 +6171,22 @@ html, body, .shell, .main {
 .rtop:before{content:'';position:absolute;inset:-40% -10% auto;height:120px;background:linear-gradient(90deg,transparent,rgba(255,214,120,.12),transparent);transform:translateX(-100%);animation:rtopSweep 3.6s ease-in-out .6s infinite;pointer-events:none}
 .rtop-head{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
 .rtop-eyebrow{font-size:10.5px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:#f0b64b}
-.rtop-head h3{margin:2px 0 0;font-size:17px;color:var(--ink);letter-spacing:-.2px}
+.rtop-head h3,.rtop-title{display:block;margin:2px 0 0;font-size:17px;font-weight:800;color:var(--ink);letter-spacing:-.2px}
+/* [FIX 199] collapsed-by-default header: one tappable bar that says who leads */
+.rtop-toggle{display:flex;width:100%;align-items:center;gap:10px;padding:8px 10px;border-radius:12px;background:rgba(255,255,255,.03);border:0;color:var(--ink);text-align:left;cursor:pointer}
+.rtop-toggle .rtop-eyebrow{display:block}
+.rtop-caret{flex:0 0 auto;display:inline-block;font-size:13px;line-height:1;color:#f0b64b;transition:transform .25s ease}
+.rtop-toggle[aria-expanded="false"] .rtop-caret{transform:rotate(-90deg)}
+.rtop-toggle-main{flex:1 1 auto;min-width:0}
+.rtop-peek{display:block;margin-top:3px;font-size:11.5px;font-weight:700;color:#cfe3e1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rtop-toggle[aria-expanded="true"] .rtop-peek{display:none}
+.rtop-hint{flex:0 0 auto;font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:#f0b64b;border:1px solid rgba(240,182,75,.35);border-radius:999px;padding:4px 10px;background:rgba(240,182,75,.08)}
+.rtop-body{animation:rtopFadeUp .3s ease both}
+.rtop-body[hidden]{display:none}
+.rtop-controls{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
+.rtop-controls .rtop-tabs{margin:12px 0 0}
+.rtop-controls .rtop-month{margin-top:12px}
+.rtop.is-collapsed{padding-bottom:12px}
 .rtop-month{max-width:170px;padding:7px 9px;font-size:12px}
 .rtop-tabs{display:flex;gap:4px;margin:10px 0 4px;padding:3px;border-radius:11px;background:rgba(0,0,0,.25);border:1px solid var(--line);width:max-content;max-width:100%}
 .rtop-tab{background:transparent;color:var(--muted);font-weight:750;font-size:11.5px;padding:6px 11px;border-radius:8px;transition:background .2s,color .2s}
@@ -6240,6 +6255,17 @@ html, body, .shell, .main {
 .rsum-head small{display:block;font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:#4dd3c7;font-weight:800}
 .rsum-head b{font-size:14px;color:var(--ink)}
 .rsum-chips{display:flex;gap:3px;padding:3px;border-radius:10px;background:rgba(0,0,0,.25);border:1px solid var(--line)}
+/* [FIX 199] the summary is a single line until it is asked to open */
+.rsum-toggle{display:flex;width:100%;align-items:center;gap:10px;padding:7px 9px;border-radius:11px;background:rgba(255,255,255,.03);border:0;color:var(--ink);text-align:left;cursor:pointer}
+.rsum-caret{flex:0 0 auto;display:inline-block;font-size:12px;line-height:1;color:#4dd3c7;transition:transform .25s ease}
+.rsum-toggle[aria-expanded="false"] .rsum-caret{transform:rotate(-90deg)}
+.rsum-toggle-main{flex:1 1 auto;min-width:0}
+.rsum-peek{display:block;margin-top:2px;font-size:11px;font-weight:700;color:#9fc4c0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rsum-toggle[aria-expanded="true"] .rsum-peek{display:none}
+.rsum-hint{flex:0 0 auto;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:#4dd3c7;border:1px solid rgba(94,219,207,.35);border-radius:999px;padding:4px 9px;background:rgba(19,185,173,.1)}
+.rsum-body{animation:rtopFadeUp .3s ease both}
+.rsum-body[hidden]{display:none}
+.rsum-body>.rsum-chips{width:max-content;max-width:100%;margin-top:11px}
 .rsum-chip{background:transparent;color:var(--muted);font-weight:750;font-size:11.5px;padding:6px 10px;border-radius:7px;transition:background .2s,color .2s}
 .rsum-chip.is-on{background:linear-gradient(135deg,#13b9ad,#07988f);color:#fff}
 .rsum-custom{display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin-top:10px;animation:rtopFadeUp .3s ease both}
@@ -6291,4 +6317,11 @@ html, body, .shell, .main {
 .light-theme .rsum-custom input{background:#fff;color:#112126;border-color:#dce7e8}
 .light-theme .rsum-kpi.hl b,.light-theme .rsum-money b.ok{color:#2c7a5a}.light-theme .rsum-kpi.warn b,.light-theme .rsum-money b.warn,.light-theme .rsum-reason b{color:#a15d08}.light-theme .rsum-kpi.teal b{color:#075e63}
 .light-theme .rsum-delta.good{color:#2c7a5a}.light-theme .rsum-delta.bad{color:#b33f3f}
+.light-theme .rtop-title,.light-theme .rtop-toggle{color:#112126}
+.light-theme .rtop-caret,.light-theme .rtop-hint{color:#a15d08}
+.light-theme .rtop-peek{color:#33484c}
+.light-theme .rsum-toggle,.light-theme .rtop-toggle{background:rgba(0,0,0,.03)}
+.light-theme .rsum-toggle{color:#112126}
+.light-theme .rsum-caret,.light-theme .rsum-hint{color:#075e63}
+.light-theme .rsum-peek{color:#41595c}
 @media (prefers-reduced-motion:reduce){.rtop *,.rtop:before,.rsum *{animation:none!important;transition:none!important}}

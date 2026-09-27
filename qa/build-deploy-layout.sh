@@ -24,11 +24,16 @@ test -f "$REPO/neumorphic.css" || { echo "FATAL: neumorphic.css is missing from 
 cp "$REPO/neumorphic.css" "$OUT/css/neumorphic.css"
 
 # js = every root module except infra files that live at root / in supabase/
+# NOTE: register-sw.js is NOT excluded. index.html loads it as `js/register-sw.js`
+# and sw.js precaches './js/register-sw.js', so a root-only copy 404s and the
+# service worker is never registered at all (no offline, no update prompt). It is
+# copied to BOTH places: root (historical) and js/ (what the page actually asks for).
 for j in "$REPO"/*.js; do
   b="$(basename "$j")"
-  case "$b" in client.js|config.js|sw.js|register-sw.js|_worker.js) continue;; esac
+  case "$b" in client.js|config.js|sw.js|_worker.js) continue;; esac
   cp "$j" "$OUT/js/$b"
 done
+
 
 # supabase (config.js + client.js live at repo root, deploy under supabase/)
 cp "$REPO/config.js" "$OUT/supabase/config.js"
@@ -48,5 +53,11 @@ cp "$REPO/icon-512.png" "$OUT/icons/icon-512.png"
 if [ -f /home/user/download/arswinetech-pro-latest.zip ]; then
   cp /home/user/download/arswinetech-pro-latest.zip "$OUT/arswinetech-pro-latest.zip"
 fi
+
+# Every local path index.html asks for must exist in the build. A 404 here is the
+# difference between "the update published" and "the phone shows yesterday's app".
+while read -r ref; do
+  [ -e "$OUT/$ref" ] || { echo "FATAL: index.html references '$ref' but the build has no such file" >&2; exit 1; }
+done < <(grep -oE '(src|href)="[^"h][^"]*"' "$OUT/index.html" | sed -E 's/.*="([^"]*)"/\1/' | sed 's/\?.*//' | sort -u)
 
 echo "✔ build-deploy layout ready at $OUT"

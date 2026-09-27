@@ -30,6 +30,38 @@ match `index.html` / `sw.js` (`css/`, `js/`, `supabase/`, `assets/`, `icons/`).
 5. Click **Deploy**. Pages will serve it at
    `https://<project-name>.pages.dev` (HTTPS — required for the PWA).
 
+## Connect the GitHub branch instead (auto-publish on every push)
+
+The repo root is a **flat** working layout (`app.css`, `semen-sales.js`, `config.js` … all
+side by side), but `index.html` and `sw.js` ask for `css/`, `js/`, `supabase/`, `assets/`,
+`icons/`. So Cloudflare **must run the layout build** — pointing Pages at the repo root with
+no build command publishes a page that 404s every script.
+
+**Workers & Pages → Create → Pages → Connect to Git → pick this repo**, then:
+
+| Cloudflare field | What to put |
+|---|---|
+| Project name | `arswinetech-pro` (this becomes `arswinetech-pro.pages.dev`) |
+| Production branch | `arena/01a0e080-arswinetech-pro-enhanced` |
+| Framework preset | **None** |
+| Build command | `bash qa/build-deploy-layout.sh dist` |
+| Build output directory | `dist` |
+| Root directory (advanced) | leave empty (`/`) |
+| Environment variables | none required — Supabase keys are already in `config.js` |
+
+Nothing else is needed: the build script writes `dist/` in the exact shape `index.html`
+expects, copies `_headers` and `_worker.js` into it, and **fails the build** if any path
+`index.html` references is missing — so a broken release never reaches a phone.
+
+Optional, one time, for the edge head cache (see `README-EDGE.md`):
+**Settings → Functions → KV namespace bindings → Add**, variable name `ARS_HEADS`, bound to a
+KV namespace you create (e.g. `ars-head-cache`). Without it the app silently uses the direct
+Supabase probe.
+
+After it is connected, publishing an update is just `git push` to that branch. Bump
+`window.ARS_APP_VERSION` in `config.js` and `CACHE_NAME` in `sw.js` on each release so the
+service worker replaces the old shell on every installed phone.
+
 ## After deploying
 * **Open the site and sign in** — your Supabase project is already wired:
   * Project URL: `https://hgmrltewkxjmhlqevjrp.supabase.co`

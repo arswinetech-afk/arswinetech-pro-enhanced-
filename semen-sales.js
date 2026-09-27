@@ -2576,7 +2576,8 @@
     sales: { label: 'Net sales', unit: 'net sales', fmt: 'peso', get: s => s.netSales },
     collected: { label: 'Collected', unit: 'collected', fmt: 'peso', get: s => s.collected }
   };
-  const rsTopState = { month: '', metric: 'bottles', picked: '' };
+  /* [FIX 199] `open` starts false: the board is a one-line bar until it is asked for. */
+  const rsTopState = { month: '', metric: 'bottles', picked: '', open: false };
   const rsFmtMetric = (metric, v) => (RS_METRICS[metric].fmt === 'peso' ? peso(v) : rsInt(v));
 
   /* Months that have any (non-voided) pickup, newest first, plus the current one. */
@@ -2698,16 +2699,29 @@
     const monthOpts = months.map(m => `<option value="${m}"${m === board.ym ? ' selected' : ''}>${rsMonthLabel(m)}</option>`).join('');
     const tabs = Object.keys(RS_METRICS).map(k => `<button type="button" class="rtop-tab${k === board.metric ? ' is-on' : ''}" onclick="window.arsTopResellersMetric('${k}')">${RS_METRICS[k].label}</button>`).join('');
     const rest = rows.slice(3);
+    /* [FIX 199] collapsed by default — the header states who leads, the body opens on demand. */
+    const open = rsTopState.open === true;
+    const peek = rows.length
+      ? `🥇 ${escH(rows[0].r.name)} · ${rsFmtMetric(board.metric, rows[0].value)} ${escH(M.unit)} · ${escH(rsMonthLabel(board.ym))}`
+      : `No pickups in ${escH(rsMonthLabel(board.ym))} yet`;
     return `
-      <section class="rtop" aria-label="Top resellers of the month">
+      <section class="rtop ${open ? 'is-open' : 'is-collapsed'}" aria-label="Top resellers of the month">
         <div class="rtop-head">
-          <div>
-            <div class="rtop-eyebrow">🏆 Leaderboard</div>
-            <h3>Top Resellers of the Month</h3>
-          </div>
+          <button type="button" class="rtop-toggle" aria-expanded="${open ? 'true' : 'false'}" aria-controls="rtopBody" onclick="window.arsTopResellersToggle()">
+            <span class="rtop-caret" aria-hidden="true">▾</span>
+            <span class="rtop-toggle-main">
+              <span class="rtop-eyebrow">🏆 Leaderboard</span>
+              <span class="rtop-title">Top Resellers of the Month</span>
+              <span class="rtop-peek">${peek}</span>
+            </span>
+            <span class="rtop-hint">${open ? 'Hide' : 'Show'}</span>
+          </button>
+        </div>
+        <div class="rtop-body" id="rtopBody"${open ? '' : ' hidden'}>
+        <div class="rtop-controls">
+          <div class="rtop-tabs" role="tablist" aria-label="Rank by">${tabs}</div>
           <select class="select rtop-month" aria-label="Month" onchange="window.arsTopResellersMonth(this.value)">${monthOpts}</select>
         </div>
-        <div class="rtop-tabs" role="tablist" aria-label="Rank by">${tabs}</div>
         ${rows.length ? `
           <div class="rtop-podium">${podium.map((x, i) => col(x, [2, 1, 3][i])).join('')}</div>
           <div id="rtopWhy">${renderResellerWhyHTML(board, picked)}</div>
@@ -2722,6 +2736,7 @@
             <small>Ranked by ${M.unit} on pickups dated ${rsRangeLabel(board.from, board.to)} (voided excluded). Net bottles = picked up − returned + replacements. Ties go to net sales, then bottles, then the lower return rate. Tap a reseller to see why.</small>
           </div>` : `
           <div class="rtop-emptybox">No reseller pickups in ${rsMonthLabel(board.ym)} yet. The leaderboard fills in as pickups are recorded.</div>`}
+        </div>
       </section>`;
   }
 
@@ -2729,8 +2744,17 @@
     const host = document.getElementById('resellerTopBoard');
     if (!host) return;
     host.innerHTML = renderTopResellersHTML();
-    rsAnimateCountUps(host);
+    /* Only count up what can be seen — a collapsed board already carries its final numbers. */
+    if (rsTopState.open) rsAnimateCountUps(host);
   }
+  /* [FIX 199] open/close the board. Re-rendering (instead of just unhiding) lets the
+     podium play its rise/pop/count-up the moment it actually becomes visible. */
+  window.arsTopResellersToggle = function () {
+    rsTopState.open = !rsTopState.open;
+    rerenderTopResellers();
+    const host = document.getElementById('resellerTopBoard');
+    if (rsTopState.open && host && host.scrollIntoView) host.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  };
   window.arsTopResellersMonth = function (ym) { rsTopState.month = String(ym || ''); rsTopState.picked = ''; rerenderTopResellers(); };
   window.arsTopResellersMetric = function (m) { rsTopState.metric = RS_METRICS[m] ? m : 'bottles'; rsTopState.picked = ''; rerenderTopResellers(); };
   /* Picking a reseller swaps only the "why" panel — the podium keeps its place instead of replaying the animation. */
@@ -2753,7 +2777,10 @@
   };
 
   /* ── 2) PER-PROFILE PERFORMANCE SUMMARY ──────────────────────────────────── */
-  const rsSumState = {};   /* resellerId → { kind, from, to } — survives hub re-renders */
+  const rsSumState = {};   /* resellerId → { kind, from, to, open } — survives hub re-renders */
+  /* [FIX 199] every profile summary starts closed; the chosen period and the open/closed
+     state are remembered per reseller so a re-render never undoes a tap. */
+  const rsSumOpen = rId => !!(rsSumState[rId] && rsSumState[rId].open);
 
   function rsDelta(cur, prev, { unit = '', pts = false, goodUp = true } = {}) {
     const d = cur - prev;
@@ -2766,7 +2793,8 @@
 
   function renderResellerSummaryHTML(r) {
     const f = F();
-    const state = rsSumState[r.id] || { kind: 'this' };
+    const state = rsSumState[r.id] || { kind: 'this', open: false };
+    const open = state.open === true;
     const p = resellerPeriod(state.kind, state.from, state.to);
     const s = resellerPeriodStats(f, r, p.from, p.to);
     const prev = resellerPeriodStats(f, r, p.prevFrom, p.prevTo);
@@ -2778,11 +2806,24 @@
     const reasons = Object.entries(s.reasons).sort((a, b) => b[1] - a[1]).slice(0, 3);
     const hasPrev = prev.pickups > 0;
     const cmp = hasPrev ? `vs ${escH(p.prevLabel)}` : `no pickups in ${escH(p.prevLabel)} to compare`;
+    const bodyId = `rsumBody_${id}`;
+    const peek = s.pickups === 0
+      ? `No pickups · ${escH(p.label)}`
+      : `${rsInt(s.net)} net bottles · ${rsFmtPct(s.returnRate)} returned · ${peso(s.netSales)}`;
     return `
       <div class="rsum-head">
-        <div><small>📊 Performance summary</small><b>${escH(p.label)}</b></div>
-        <div class="rsum-chips">${chip('this', 'This month')}${chip('last', 'Last month')}<button type="button" class="rsum-chip${p.kind === 'custom' ? ' is-on' : ''}" onclick="window.arsResellerSummaryCustomOpen('${id}')">Custom</button></div>
+        <button type="button" class="rsum-toggle" aria-expanded="${open ? 'true' : 'false'}" aria-controls="${bodyId}" onclick="window.arsResellerSummaryToggle('${id}')">
+          <span class="rsum-caret" aria-hidden="true">▾</span>
+          <span class="rsum-toggle-main">
+            <small>📊 Performance summary</small>
+            <b>${escH(p.label)}</b>
+            <span class="rsum-peek">${peek}</span>
+          </span>
+          <span class="rsum-hint">${open ? 'Hide' : 'Show'}</span>
+        </button>
       </div>
+      <div class="rsum-body" id="${bodyId}"${open ? '' : ' hidden'}>
+      <div class="rsum-chips">${chip('this', 'This month')}${chip('last', 'Last month')}<button type="button" class="rsum-chip${p.kind === 'custom' ? ' is-on' : ''}" onclick="window.arsResellerSummaryCustomOpen('${id}')">Custom</button></div>
       ${showCustom ? `
         <div class="rsum-custom">
           <label>From<input type="date" id="rsFrom_${id}" value="${escA(state.from || p.from)}" max="${rsToday()}"></label>
@@ -2820,6 +2861,7 @@
           </div>
         </div>
         <div class="rsum-foot">${cmp}. Returns and replacements count against the pickup they came from; voided pickups excluded. Last pickup ${escH(rsShort(s.lastDay))}.</div>`}
+      </div>
     `;
   }
 
@@ -2828,23 +2870,28 @@
     const r = (F().semenResellers || []).find(x => x.id === rId);
     if (!host || !r) return;
     host.innerHTML = renderResellerSummaryHTML(r);
-    rsAnimateCountUps(host);
+    if (rsSumOpen(rId)) rsAnimateCountUps(host);
   }
+  window.arsResellerSummaryToggle = function (rId) {
+    const cur = rsSumState[rId] || { kind: 'this' };
+    rsSumState[rId] = Object.assign({}, cur, { open: !cur.open });
+    rerenderResellerSummary(rId);
+  };
   window.arsResellerSummaryPeriod = function (rId, kind) {
-    rsSumState[rId] = { kind: kind === 'last' ? 'last' : 'this' };
+    rsSumState[rId] = { kind: kind === 'last' ? 'last' : 'this', open: rsSumOpen(rId) };
     rerenderResellerSummary(rId);
   };
   window.arsResellerSummaryCustomOpen = function (rId) {
     const cur = rsSumState[rId] || { kind: 'this' };
     const p = resellerPeriod(cur.kind, cur.from, cur.to);
-    rsSumState[rId] = cur.kind === 'custom' ? cur : { kind: cur.kind, editing: true, from: p.from, to: p.to };
+    rsSumState[rId] = cur.kind === 'custom' ? cur : { kind: cur.kind, editing: true, from: p.from, to: p.to, open: !!cur.open };
     rerenderResellerSummary(rId);
   };
   window.arsResellerSummaryCustom = function (rId) {
     const from = String((document.getElementById(`rsFrom_${rId}`) || {}).value || '');
     const to = String((document.getElementById(`rsTo_${rId}`) || {}).value || '');
     if (!rsParseYMD(from) || !rsParseYMD(to)) { toast('⚠ Pick both a From and a To date.'); return; }
-    rsSumState[rId] = { kind: 'custom', from, to };
+    rsSumState[rId] = { kind: 'custom', from, to, open: rsSumOpen(rId) };
     rerenderResellerSummary(rId);
   };
   /* for the qa harness and on-device checks: the exact numbers both screens use */
@@ -2935,7 +2982,7 @@
         </div>
       </div>
     `);
-    rsAnimateCountUps(document.getElementById('resellerTopBoard'));
+    if (rsTopState.open) rsAnimateCountUps(document.getElementById('resellerTopBoard'));
   }
 
   function renderResellerAccountCardHTML(r, rIdx, allTxs) {
