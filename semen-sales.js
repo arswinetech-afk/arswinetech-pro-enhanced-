@@ -2470,7 +2470,7 @@
 
   /* Every number both screens show, for any set of pickups. */
   function resellerStatsFromTxs(txs) {
-    const st = { pickups: 0, picked: 0, returned: 0, replaced: 0, net: 0, billed: 0, discounts: 0, netSales: 0, collected: 0, outstanding: 0,
+    const st = { pickups: 0, picked: 0, returned: 0, replaced: 0, repReturned: 0, net: 0, billed: 0, discounts: 0, netSales: 0, collected: 0, outstanding: 0,
       replacedValue: 0, returnedValue: 0, breeds: {}, reasons: {}, lastDay: '', firstDay: '' };
     const breed = (key) => (st.breeds[key] = st.breeds[key] || { picked: 0, returned: 0, replacedIn: 0, net: 0 });
     txs.forEach(tx => {
@@ -2483,13 +2483,26 @@
         const ret = Math.min(qty, Math.max(0, +l.returned_qty || 0));
         const reps = lineReplacements(l);
         const rep = reps.reduce((a, r) => a + r.qty, 0);
-        st.picked += qty; st.returned += ret; st.replaced += rep;
-        st.returnedValue += ret * Math.max(0, +l.rate || 0);
-        st.replacedValue += reps.reduce((a, r) => a + r.qty * r.rate, 0);
+        /* [FIX 200] a replacement bottle can come back too. It is counted apart from the
+           dispatch return so "return rate" keeps meaning "of the bottles picked up, how
+           many came back" — the later cycles get their own figure instead of silently
+           re-basing every number this farm has already read. */
+        const repBack = reps.reduce((a, r) => a + Math.min(r.qty, Math.max(0, +r.returned_qty || 0)), 0);
+        st.picked += qty; st.returned += ret; st.replaced += rep; st.repReturned += repBack;
+        st.returnedValue += ret * Math.max(0, +l.rate || 0) + reps.reduce((a, r) => a + Math.min(r.qty, Math.max(0, +r.returned_qty || 0)) * (+r.rate || 0), 0);
+        st.replacedValue += reps.reduce((a, r) => a + replacementBilled(r), 0);
         const bk = String(l.breed || l.boar || 'Unspecified').trim() || 'Unspecified';
         const b = breed(bk); b.picked += qty; b.returned += ret; b.net += qty - ret;
-        reps.forEach(r => { const rb = breed(String(r.breed || r.boar || bk).trim() || bk); rb.replacedIn += r.qty; rb.net += r.qty; });
+        reps.forEach(r => {
+          const back = Math.min(r.qty, Math.max(0, +r.returned_qty || 0));
+          const rb = breed(String(r.breed || r.boar || bk).trim() || bk);
+          rb.replacedIn += r.qty; rb.returned += back; rb.net += r.qty - back;
+        });
         if (ret > 0) { const why = String(l.return_reason || 'Unspecified').trim() || 'Unspecified'; st.reasons[why] = (st.reasons[why] || 0) + ret; }
+        reps.forEach(r => {
+          const back = Math.min(r.qty, Math.max(0, +r.returned_qty || 0));
+          if (back > 0) { const why = String(r.return_reason || 'Unspecified').trim() || 'Unspecified'; st.reasons[why] = (st.reasons[why] || 0) + back; }
+        });
       });
       const billed = Math.max(0, +(tx.total_amount || 0));
       const disc = resellerTxDiscount(tx);
@@ -2498,12 +2511,20 @@
       st.collected += Math.min(due, Math.max(0, +(tx.paid_amount || 0)));
       st.outstanding += resellerTxBalance(tx);
     });
-    st.net = st.picked - st.returned + st.replaced;
+    /* net bottles sold = everything handed over minus everything that came back, at any
+       cycle. With no second cycle anywhere, `repReturned` is 0 and this is the figure
+       every earlier build reported. */
+    st.net = st.picked - st.returned + st.replaced - st.repReturned;
     st.netSales = Math.max(0, st.billed - st.discounts);
     st.returnRate = rsPct(st.returned, st.picked);
     st.replaceRate = rsPct(st.replaced, st.picked);
     st.collectRate = rsPct(st.collected, st.netSales);
     st.avgPerPickup = st.pickups ? st.picked / st.pickups : 0;
+    /* [FIX 200] everything that ever changed hands, and everything that came back */
+    st.handed = st.picked + st.replaced;
+    st.backTotal = st.returned + st.repReturned;
+    st.repReturnRate = rsPct(st.repReturned, st.replaced);
+    st.allReturnRate = rsPct(st.backTotal, st.handed);
     /* returned bottles that were swapped for another bottle vs simply credited back */
     st.swapped = Math.min(st.returned, st.replaced);
     st.credited = Math.max(0, st.returned - st.replaced);
@@ -2642,6 +2663,8 @@
     const retWord = s.returned === 0 ? 'no bottles came back' : Math.abs(s.returnRate - avgRet) < 0.05 ? 'on par with the group' : s.returnRate < avgRet ? 'better than the group' : 'higher than the group';
     out.push({ ico: s.returnRate <= avgRet ? '✅' : '⚠️', t: `Return rate <b>${rsFmtPct(s.returnRate)}</b> (${rsInt(s.returned)} of ${rsInt(s.picked)} bottles) vs <b>${rsFmtPct(avgRet)}</b> across all resellers — ${retWord}.` });
     if (s.returned > 0) out.push({ ico: '🔁', t: `${rsInt(s.swapped)} of ${rsInt(s.returned)} returned bottle(s) were swapped for replacements; ${rsInt(s.credited)} credited back.` });
+    /* [FIX 200] second and later cycles, only when there are any */
+    if (s.repReturned > 0) out.push({ ico: '↩️', t: `${rsInt(s.repReturned)} of the ${rsInt(s.replaced)} replacement bottle(s) came back too — <b>${rsInt(s.backTotal)}</b> of the ${rsInt(s.handed)} bottles that changed hands (${rsFmtPct(s.allReturnRate)}).` });
     out.push({ ico: s.collectRate >= 99.95 ? '💰' : '🧾', t: `Collected <b>${rsFmtPct(s.collectRate)}</b> of the ${peso(s.netSales)} billed on this month’s pickups${s.outstanding > 0 ? ` · ${peso(s.outstanding)} still open` : ' · fully paid'}.` });
     const topBreed = Object.entries(s.breeds).sort((a, b) => b[1].net - a[1].net)[0];
     out.push({ ico: '🧬', t: `${rsInt(s.pickups)} pickup(s) · avg ${(Math.round(s.avgPerPickup * 10) / 10)} bottles each${topBreed ? ` · mostly <b>${escH(topBreed[0])}</b> (${rsFmtPct(rsPct(topBreed[1].net, s.net))})` : ''}.` });
@@ -2845,6 +2868,7 @@
           <span><i class="s"></i>Returned → replaced ${rsInt(s.swapped)} (${rsFmtPct(swapPct)})</span>
           <span><i class="c"></i>Returned → credited ${rsInt(s.credited)} (${rsFmtPct(credPct)})</span>
         </div>
+        ${s.repReturned > 0 ? `<div class="rsum-cycle">🔁 <b>${rsInt(s.repReturned)}</b> of the ${rsInt(s.replaced)} replacement bottle(s) came back as well (${rsFmtPct(s.repReturnRate)}) — ${rsInt(s.handed)} bottles changed hands in all this period and ${rsInt(s.backTotal)} came back (${rsFmtPct(s.allReturnRate)}).</div>` : ''}
         <div class="rsum-money">
           <div><small>Net sales</small><b>${peso(s.netSales)}</b>${s.discounts > 0 ? `<span>after ${peso(s.discounts)} discount</span>` : `<span>billed on these pickups</span>`}</div>
           <div><small>Collected</small><b class="ok">${peso(s.collected)}</b><span>${rsFmtPct(s.collectRate)} of net sales</span></div>
@@ -3845,26 +3869,59 @@
      carried exactly one replacement (replaced_qty / replacement_rate / …); those are
      read as a one-entry array so their billing is unchanged, and are upgraded in place
      the next time the line is touched. An explicit empty array means "no replacement"
-     (after a cancellation) and must NOT fall back to the legacy fields. */
+     (after a cancellation) and must NOT fall back to the legacy fields.
+
+     [FIX 200] A replacement bottle is a bottle in the reseller's hands, so it can come
+     back too — and the bottle that replaces IT can come back after that. Every row
+     therefore carries its own return state (`returned_qty` / reason / action) and its
+     place in the chain (`uid`, `replaces`, `cycle`). Rows written before this build have
+     none of those: they read as 0 / cycle 1, which bills exactly as it did before. */
+  let rrUidSeq = 0;
+  const newReplacementUid = () => `R${Date.now().toString(36)}${(rrUidSeq++).toString(36)}`;
+
   function lineReplacements(l) {
-    const norm = r => ({
-      semen_id: String((r && r.semen_id) || ''),
-      boar: String((r && r.boar) || 'Replacement'),
-      breed: String((r && r.breed) || ''),
-      batch_no: String((r && r.batch_no) || ''),
-      qty: Math.max(0, +((r && r.qty) || 0)),
-      rate: Math.max(0, +((r && r.rate) || 0)),
-      reason: String((r && r.reason) || ''),
-      at: String((r && r.at) || '')
-    });
+    const norm = (r, i) => {
+      const qty = Math.max(0, +((r && r.qty) || 0));
+      return {
+        /* a positional id for legacy rows: they can have no children, so it can never
+           point at the wrong parent, and it is persisted on the next save. */
+        uid: String((r && r.uid) || '') || `#${i}`,
+        semen_id: String((r && r.semen_id) || ''),
+        boar: String((r && r.boar) || 'Replacement'),
+        breed: String((r && r.breed) || ''),
+        batch_no: String((r && r.batch_no) || ''),
+        qty,
+        rate: Math.max(0, +((r && r.rate) || 0)),
+        reason: String((r && r.reason) || ''),
+        at: String((r && r.at) || ''),
+        /* this row's own return (cycle N+1 starts here) */
+        returned_qty: Math.min(qty, Math.max(0, +((r && r.returned_qty) || 0))),
+        return_reason: String((r && r.return_reason) || ''),
+        return_action: String((r && r.return_action) || ''),
+        returned_restocked: Math.max(0, +((r && r.returned_restocked) || 0)),
+        returned_at: String((r && r.returned_at) || ''),
+        /* '' = replaces the dispatch line itself; otherwise the uid of the replacement
+           bottle this one was handed over for. */
+        replaces: String((r && r.replaces) || ''),
+        cycle: Math.max(1, parseInt((r && r.cycle), 10) || 1)
+      };
+    };
     if (Array.isArray(l.replacements)) return l.replacements.map(norm);
     const qty = Math.max(0, +l.replaced_qty || 0);
     if (!qty) return [];
     return [norm({
       semen_id: l.replacement_semen_id, boar: l.replacement_boar, breed: l.replacement_breed,
       batch_no: l.replacement_batch_no, qty, rate: l.replacement_rate, reason: l.return_reason, at: l.adjusted_at
-    })];
+    }, 0)];
   }
+
+  /* What one replacement row still bills: the bottles of it the reseller kept. A
+     replacement that came back is a credit exactly like a returned dispatch bottle, and
+     whatever was handed over in its place is its own row. */
+  const replacementKept = r => Math.max(0, (+r.qty || 0) - Math.max(0, +r.returned_qty || 0));
+  const replacementBilled = r => replacementKept(r) * Math.max(0, +r.rate || 0);
+  /* every later-cycle row handed over to replace this one */
+  const replacementChildren = (reps, uid) => reps.filter(x => x.replaces && x.replaces === uid);
 
   /* The semen batch a bottle belongs to: by semen id first, then by batch number
      (older rows only stored the batch number). */
@@ -3883,10 +3940,12 @@
   }
 
   /* What one dispatch line bills: the bottles the reseller kept, at the dispatch rate,
-     plus every replacement actually handed over at that batch's own rate. */
+     plus every replacement bottle they still hold at that batch's own rate. [FIX 200] a
+     replacement that itself came back stops being billed, the same way a returned
+     dispatch bottle does — the bottle handed over in its place is a row of its own. */
   function resellerLineAmount(l) {
     const kept = Math.max(0, (+l.qty || 0) - Math.max(0, +l.returned_qty || 0));
-    const repl = lineReplacements(l).reduce((a, r) => a + r.qty * r.rate, 0);
+    const repl = lineReplacements(l).reduce((a, r) => a + replacementBilled(r), 0);
     return +((kept * (+l.rate || 0)) + repl).toFixed(2);
   }
 
@@ -3896,12 +3955,20 @@
     l.replacements = reps;
     l.returned_qty = Math.max(0, +l.returned_qty || 0);
     l.replaced_qty = reps.reduce((a, r) => a + r.qty, 0);
-    const money = reps.reduce((a, r) => a + r.qty * r.rate, 0);
-    l.replacement_rate = l.replaced_qty ? +(money / l.replaced_qty).toFixed(2) : 0;
+    const gross = reps.reduce((a, r) => a + r.qty * r.rate, 0);
+    const money = reps.reduce((a, r) => a + replacementBilled(r), 0);
+    /* the per-bottle price stays the per-bottle price — it is a price, not a total */
+    l.replacement_rate = l.replaced_qty ? +(gross / l.replaced_qty).toFixed(2) : 0;
     l.replacement_boar = !reps.length ? '' : (reps.length === 1 ? reps[0].boar : `${reps[0].boar} +${reps.length - 1} more`);
     l.replacement_breed = !reps.length ? '' : (reps.length === 1 ? reps[0].breed : 'mixed');
     l.replacement_batch_no = !reps.length ? '' : (reps.length === 1 ? reps[0].batch_no : '');
-    l.replacement_amount = +money.toFixed(2);
+    l.replacement_amount = +money.toFixed(2);          /* what the replacements still add */
+    l.replacement_gross_amount = +gross.toFixed(2);    /* what was handed over in total */
+    /* [FIX 200] second-and-later-cycle facts, mirrored for the receipt, the slip and the
+       insights engine so no screen has to walk the chain itself. */
+    l.replacement_returned_qty = reps.reduce((a, r) => a + Math.max(0, +r.returned_qty || 0), 0);
+    l.replacement_net_qty = Math.max(0, l.replaced_qty - l.replacement_returned_qty);
+    l.replacement_cycles = reps.reduce((a, r) => Math.max(a, Math.max(1, +r.cycle || 1)), 0);
     l.is_returned_replaced = l.returned_qty > 0 || reps.length > 0;
     l.amount = resellerLineAmount(l);
     return l;
@@ -3962,19 +4029,43 @@
   let activeReturnTxId = null;
   /* Draft of what the open form intends to do — nothing here touches the ledger until
      Save validates the whole thing at once.
-     { txId, ret:{lIdx:{qty,reason,action}}, adds:{lIdx:[row]}, removes:{'lIdx:i':true},
-       undoes:{lIdx:n} }
+     { txId, ret:{lIdx:{qty,reason,action}}, adds:{target:[row]}, removes:{'lIdx:i':true},
+       undoes:{lIdx:n}, repRet:{'lIdx:uid':{qty,reason,action}}, repUndoes:{'lIdx:uid':n},
+       repOpen:{'lIdx:uid':true} }
      `undoes[lIdx]` = how many of the ALREADY RECORDED returns on that line are being put
      back on the invoice, because a mis-keyed return quantity is the most common mistake of
-     all on this screen (there is no way to un-ring one without it). */
+     all on this screen (there is no way to un-ring one without it).
+     [FIX 200] `adds` is keyed by a TARGET, not a line index: "3" means "replacing the
+     dispatch line", "3:Rk9f" means "replacing that replacement bottle". Object keys are
+     strings either way, so `adds[lIdx]` from the old call sites still lands in the same
+     bucket. `repRet` / `repUndoes` are the per-replacement twins of `ret` / `undoes`. */
   let returnDraft = null;
+
+  const emptyReturnDraft = () => ({ ret: {}, adds: {}, removes: {}, undoes: {}, repRet: {}, repUndoes: {}, repOpen: {} });
+  /* "3:Rk9f" → line 3; "3" → line 3 */
+  const rrTargetLine = t => Math.max(0, parseInt(String(t).split(':')[0], 10) || 0);
+  const rrTargetUid = t => { const p = String(t).split(':'); return p.length > 1 ? p.slice(1).join(':') : ''; };
 
   function ensureReturnDraft(txId) {
     if (!returnDraft || returnDraft.txId !== txId) {
-      returnDraft = { txId, ret: {}, adds: {}, removes: {}, undoes: {} };
+      returnDraft = Object.assign({ txId }, emptyReturnDraft());
       activeReturnTxId = txId;
     }
+    /* a draft carried over from an older build of this page has no repRet buckets */
+    ['ret', 'adds', 'removes', 'undoes', 'repRet', 'repUndoes', 'repOpen'].forEach(k => { returnDraft[k] = returnDraft[k] || {}; });
     return returnDraft;
+  }
+
+  /* What one stored replacement row looks like once the open form is taken into account. */
+  function rrReplacementState(d, lIdx, r) {
+    const key = `${lIdx}:${r.uid}`;
+    const storedRet = Math.max(0, +r.returned_qty || 0);
+    const undo = Math.min(storedRet, Math.max(0, parseInt((d.repUndoes || {})[key], 10) || 0));
+    const base = storedRet - undo;
+    const returnable = Math.max(0, (+r.qty || 0) - base);
+    const want = Math.max(0, parseInt(((d.repRet || {})[key] || {}).qty, 10) || 0);
+    const applied = Math.min(returnable, want);
+    return { key, storedRet, undo, base, returnable, want, applied, next: base + applied, over: want > returnable };
   }
 
   function openResellerReturnReplaceModal(txId) {
@@ -3990,6 +4081,24 @@
     if (!reseller) { toast('Reseller not found.'); return; }
 
     const semen = (f.semen || []).filter(s => lotOnHand(s) > 0);
+
+    /* One "pick a batch / how many / at what price" row. `target` says what it replaces:
+       "3" = the dispatch line, "3:Rk9f" = that replacement bottle. [FIX 200] */
+    function renderAddRows(target, adds) {
+      return adds.map((row, i) => {
+        const opts = ['<option value="">— select batch —</option>'].concat(semen.map(s => {
+          const val = String(s.id || s.semen_batch_no || '');
+          return `<option value="${escH(val)}" data-batch="${escH(s.semen_batch_no || '')}" ${String(row.semen_id) === val ? 'selected="selected"' : ''}>${escH(s.semen_batch_no || s.id)} — ${escH(s.boar_name || s.boar || '')} (${escH(s.breed || '—')}) · ₱${+(s.price_per_dose || 0)} · ${lotOnHand(s)} left</option>`;
+        })).join('');
+        return `<div class="rr-row field" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:5px 0;border-bottom:1px dashed var(--line)">
+          <select class="input" style="flex:1 1 165px;min-width:0;padding:6px 8px;font-size:12px" onchange="window.rrPick('${escA(target)}',${i},this.value)">${opts}</select>
+          <input class="input rr-num" type="number" min="1" step="1" value="${+row.qty || 1}" style="flex:0 1 58px;min-width:0;padding:6px 8px;font-size:12px;text-align:center" oninput="window.rrQty('${escA(target)}',${i},this.value)" title="Bottles of this batch" />
+          <div style="position:relative;flex:1 1 92px;min-width:0"><span style="position:absolute;left:8px;top:6px;font-size:11px;color:var(--muted)">₱</span><input class="input rr-num" type="number" min="0" step="0.01" value="${+row.rate || 0}" style="width:100%;padding:6px 8px 6px 18px;font-size:12px" oninput="window.rrRate('${escA(target)}',${i},this.value)" title="Price per bottle — prefilled from the batch, change it only for a price adjustment" /></div>
+          <span class="rr-lineamt" style="flex:0 0 auto;font-size:11.5px;font-weight:bold;white-space:nowrap;text-align:right">₱${((+row.qty || 0) * (+row.rate || 0)).toFixed(2)}</span>
+          <button type="button" class="btn ghost small" style="flex:0 0 auto;color:var(--danger);padding:4px 6px" onclick="window.rrDelRow('${escA(target)}',${i})" title="Remove this row before saving">✕</button>
+        </div>`;
+      }).join('');
+    }
 
     /* Every line keeps its own replacement list — unlimited rows, each with its own
        batch, quantity and price, because the batch price is the price indicator. */
@@ -4010,34 +4119,70 @@
       const retQty = retDraft.qty !== undefined ? retDraft.qty : 0;
       const adds = d.adds[lIdx] || [];
 
+      /* [FIX 200] Each replacement bottle is itself returnable and replaceable, with no
+         limit on how many times the cycle repeats: the reseller brings back a swap they
+         could not sell, and the bottle handed over for it is a new row pointing at this
+         one. The row therefore carries the same three controls the dispatch line has
+         (how many came back · why · restock or discard) plus its own replacement list. */
       const storedRows = !storedReps.length ? '' : `<div class="rr-stored" style="margin-top:6px">
         <div style="font-size:11px;font-weight:bold;color:var(--muted)">REPLACED SO FAR (already billed):</div>
         ${storedReps.map((r, i) => {
           const off = !!d.removes[`${lIdx}:${i}`];
           const onHandLot = findSemenLot(r);
-          return `<div class="rr-row" style="display:flex;flex-wrap:wrap;gap:4px 8px;align-items:center;padding:4px 0;border-bottom:1px dashed var(--line);${off ? 'opacity:.5' : ''}">
-            <span style="flex:1 1 150px;min-width:0;font-size:12px;${off ? 'text-decoration:line-through' : ''}"><b>${escH(r.boar)}</b>${r.batch_no ? ` <small class="muted">(${escH(r.batch_no)})</small>` : ''}${r.breed ? ` <small class="muted">${escH(r.breed)}</small>` : ''}</span>
-            <span style="flex:0 0 auto;font-size:12px;white-space:nowrap">${r.qty} × ₱${+r.rate||0} = <b>₱${(r.qty * (+r.rate || 0)).toFixed(2)}</b></span>
-            <span style="flex:0 0 auto">${off
-              ? `<button type="button" class="btn ghost small" onclick="window.rrUndelete(${lIdx},${i})">↩︎ Undo</button>`
-              : `<button type="button" class="btn ghost small" style="color:var(--danger)" onclick="window.rrRemoveExisting(${lIdx},${i})" title="Cancel this replacement and put the ${r.qty} bottle(s) back into ${escH(onHandLot ? (onHandLot.semen_batch_no || onHandLot.id) : 'that batch')}">✕ Cancel</button>`}</span>
+          const S = rrReplacementState(d, lIdx, r);
+          const kids = replacementChildren(storedReps, r.uid);
+          const parent = r.replaces ? storedReps.find(x => x.uid === r.replaces) : null;
+          const myAdds = d.adds[S.key] || [];
+          const open = !off && (!!d.repOpen[S.key] || S.want > 0 || S.undo > 0 || myAdds.length > 0);
+          /* Cancel un-bills a row and pushes its bottles back into the batch. That cannot
+             be squared with a row that has already come back or that has a later cycle
+             hanging off it, so it is refused by name instead of quietly corrupting the
+             chain — undo the later cycle first. */
+          const lockWhy = S.storedRet > 0
+            ? `${S.storedRet} of these bottle(s) are already recorded as returned — undo that first, then cancel.`
+            : kids.length ? `${kids.length} later replacement(s) were handed over for this row — cancel those first.` : '';
+          const billed = replacementKept({ qty: r.qty, returned_qty: S.next }) * (+r.rate || 0);
+          return `<div class="rr-rep adj-card" data-rep="${escA(S.key)}" style="padding:7px 8px;margin-top:5px;${off ? 'opacity:.5' : ''}">
+            <div class="rr-row" style="display:flex;flex-wrap:wrap;gap:4px 8px;align-items:center">
+              <span style="flex:1 1 150px;min-width:0;font-size:12px;${off ? 'text-decoration:line-through' : ''}"><b>${escH(r.boar)}</b>${r.batch_no ? ` <small class="muted">(${escH(r.batch_no)})</small>` : ''}${r.breed ? ` <small class="muted">${escH(r.breed)}</small>` : ''}${r.cycle > 1 ? ` <small class="rr-cyc" style="color:#f0b64b;font-weight:800">cycle ${r.cycle}</small>` : ''}</span>
+              <span style="flex:0 0 auto;font-size:12px;white-space:nowrap">${r.qty} × ₱${+r.rate||0} = <b>₱${billed.toFixed(2)}</b>${S.next > 0 ? ` <small class="muted">(${S.next} back)</small>` : ''}</span>
+            </div>
+            ${parent ? `<small class="muted" style="display:block;font-size:10.5px">↳ handed over for ${escH(parent.boar)}${parent.batch_no ? ` (${escH(parent.batch_no)})` : ''}</small>` : ''}
+            ${S.storedRet > 0 ? `<div style="font-size:11px;color:#d97706;margin-top:3px">↩︎ recorded returned: <b>${S.storedRet}</b>${r.return_reason ? ` · ${escH(r.return_reason)}` : ''}${r.return_action === 'restock' ? ' · restocked' : ''}${S.undo ? ` <b style="color:#f0b64b">· undoing ${S.undo}</b>` : ''}
+              <button type="button" class="btn ghost small" style="margin-left:6px;color:${S.undo ? 'var(--danger)' : '#b7e9c7'}" onclick="window.rrRepUndo('${escA(S.key)}')" ${isVoided ? 'disabled' : ''}>${S.undo ? '✕ Keep the return' : `↩︎ Undo all ${S.storedRet}`}</button></div>` : ''}
+            ${kids.length ? `<small class="muted" style="display:block;font-size:10.5px;color:#b7e9c7">🔁 already replaced by ${kids.map(k => `${k.qty} × ${escH(k.boar)}`).join(' + ')}</small>` : ''}
+            ${off ? `<div style="margin-top:5px"><button type="button" class="btn ghost small" onclick="window.rrUndelete(${lIdx},${i})">↩︎ Undo the cancel</button></div>` : `
+              <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:5px">
+                <button type="button" class="btn ghost small" style="color:#f0b64b" onclick="window.rrRepToggle('${escA(S.key)}')" ${isVoided || S.returnable <= 0 ? 'disabled' : ''} title="${S.returnable > 0 ? `Record bottles of this replacement coming back — up to ${S.returnable}` : 'Every bottle of this replacement is already recorded as returned'}">${open ? '▴ Hide' : '↩︎ Return / replace'} ${S.returnable > 0 ? `<small class="muted">(${S.returnable} left)</small>` : ''}</button>
+                <button type="button" class="btn ghost small" style="color:${lockWhy ? 'var(--muted)' : 'var(--danger)'}" onclick="window.rrRemoveExisting(${lIdx},${i})" title="${lockWhy ? escA(lockWhy) : `Cancel this replacement and put the ${r.qty} bottle(s) back into ${escH(onHandLot ? (onHandLot.semen_batch_no || onHandLot.id) : 'that batch')}`}" ${lockWhy ? 'disabled' : ''}>✕ Cancel</button>
+              </div>`}
+            ${open ? `<div class="rr-rep-form" style="margin-top:7px;padding-top:6px;border-top:1px dashed var(--line)">
+              <div class="rr-grid reminder-fields" style="gap:8px">
+                <label class="field" style="font-size:11px;font-weight:bold">Returned back to you
+                  <input class="input rr-reprq" type="number" min="0" max="${S.returnable}" step="1" value="${S.want}" style="padding:6px 8px;font-size:13px" oninput="window.rrRepRetQty('${escA(S.key)}',this.value)" ${isVoided ? 'readonly' : ''} />
+                  <small class="muted" style="font-weight:normal"> of ${r.qty} handed over · ${S.returnable} still returnable${S.undo ? ` <b style="color:#f0b64b">(${S.undo} freed by the undo)</b>` : ''}</small></label>
+                <label class="field" style="font-size:11px;font-weight:bold">Reason
+                  <select class="input" style="font-size:12px" onchange="window.rrRepReason('${escA(S.key)}',this.value)">
+                    <option value="">— select reason —</option>
+                    ${['Unused / Unsold', 'Damaged', 'Expired', 'Quality issue', 'Wrong batch', 'Other'].map(x => `<option ${((d.repRet[S.key] || {}).reason) === x ? 'selected' : ''}>${x}</option>`).join('')}
+                  </select></label>
+              </div>
+              <label class="field" style="font-size:11px;font-weight:bold;display:block;margin-top:8px">What happens to those bottles
+                <select class="input" style="font-size:12px" onchange="window.rrRepAction('${escA(S.key)}',this.value)">
+                  <option value="discard" ${(((d.repRet[S.key] || {}).action || 'discard') === 'discard') ? 'selected' : ''}>Discard — not restocked, no credit back</option>
+                  <option value="restock" ${(((d.repRet[S.key] || {}).action || '') === 'restock') ? 'selected' : ''}>Restock — add back into ${escH(r.batch_no || 'that batch')}</option>
+                </select></label>
+              <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:8px">
+                <span style="font-size:11px;font-weight:bold">Replace these again (cycle ${r.cycle + 1})</span>
+                <button type="button" class="btn ghost small" style="color:#b7e9c7" onclick="window.rrAddRow('${escA(S.key)}')" ${isVoided ? 'disabled' : ''}>+ Add replacement batch</button>
+              </div>
+              <div class="rr-adds" data-target="${escA(S.key)}">${renderAddRows(S.key, myAdds) || '<small class="muted">No replacement added — the returned bottles are a credit only.</small>'}</div>
+            </div>` : ''}
           </div>`;
         }).join('')}
       </div>`;
 
-      const addRows = adds.map((row, i) => {
-        const opts = ['<option value="">— select batch —</option>'].concat(semen.map(s => {
-          const val = String(s.id || s.semen_batch_no || '');
-          return `<option value="${escH(val)}" data-batch="${escH(s.semen_batch_no || '')}" ${String(row.semen_id) === val ? 'selected="selected"' : ''}>${escH(s.semen_batch_no || s.id)} — ${escH(s.boar_name || s.boar || '')} (${escH(s.breed || '—')}) · ₱${+(s.price_per_dose || 0)} · ${lotOnHand(s)} left</option>`;
-        })).join('');
-        return `<div class="rr-row field" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:5px 0;border-bottom:1px dashed var(--line)">
-          <select class="input" style="flex:1 1 165px;min-width:0;padding:6px 8px;font-size:12px" onchange="window.rrPick(${lIdx},${i},this.value)">${opts}</select>
-          <input class="input rr-num" type="number" min="1" step="1" value="${+row.qty || 1}" style="flex:0 1 58px;min-width:0;padding:6px 8px;font-size:12px;text-align:center" oninput="window.rrQty(${lIdx},${i},this.value)" title="Bottles of this batch" />
-          <div style="position:relative;flex:1 1 92px;min-width:0"><span style="position:absolute;left:8px;top:6px;font-size:11px;color:var(--muted)">₱</span><input class="input rr-num" type="number" min="0" step="0.01" value="${+row.rate || 0}" style="width:100%;padding:6px 8px 6px 18px;font-size:12px" oninput="window.rrRate(${lIdx},${i},this.value)" title="Price per bottle — prefilled from the batch, change it only for a price adjustment" /></div>
-          <span class="rr-lineamt" style="flex:0 0 auto;font-size:11.5px;font-weight:bold;white-space:nowrap;text-align:right">₱${((+row.qty || 0) * (+row.rate || 0)).toFixed(2)}</span>
-          <button type="button" class="btn ghost small" style="flex:0 0 auto;color:var(--danger);padding:4px 6px" onclick="window.rrDelRow(${lIdx},${i})" title="Remove this row before saving">✕</button>
-        </div>`;
-      }).join('');
+      const addRows = renderAddRows(String(lIdx), adds);
 
       return `<div class="rr-card adj-card" data-line="${lIdx}" data-qty="${+l.qty || 0}" data-rate="${+l.rate || 0}" data-returned="${Math.max(0, +l.returned_qty || 0)}" style="margin-bottom:8px">
         <div class="rr-head" style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap">
@@ -4078,9 +4223,9 @@
         <div class="rr-repl" style="margin-top:8px">
           <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
             <span style="font-size:11px;font-weight:bold">Replacement (any number of batches)</span>
-            <button type="button" class="btn ghost small" style="color:#b7e9c7" onclick="window.rrAddRow(${lIdx})" ${isVoided ? 'disabled' : ''}>+ Add replacement batch</button>
+            <button type="button" class="btn ghost small" style="color:#b7e9c7" onclick="window.rrAddRow('${lIdx}')" ${isVoided ? 'disabled' : ''}>+ Add replacement batch</button>
           </div>
-          <div class="rr-adds" data-lidx="${lIdx}">${addRows || (storedReps.length ? '' : '<small class="muted">No replacement added — the returned bottles are a credit only.</small>')}</div>
+          <div class="rr-adds" data-lidx="${lIdx}" data-target="${lIdx}">${addRows || (storedReps.length ? '' : '<small class="muted">No replacement added — the returned bottles are a credit only.</small>')}</div>
           ${storedRows}
         </div>
       </div>`;
@@ -4148,14 +4293,26 @@
     const tx = (f.semenResellerTx || []).find(x => x.id === activeReturnTxId);
     const modal = document.getElementById('resellerReturnModal');
     if (!tx || !modal) return;
-    const d = returnDraft && returnDraft.txId === activeReturnTxId ? returnDraft : { ret: {}, adds: {}, removes: {}, undoes: {} };
+    const d = returnDraft && returnDraft.txId === activeReturnTxId ? returnDraft : emptyReturnDraft();
+    ['ret', 'adds', 'removes', 'undoes', 'repRet', 'repUndoes', 'repOpen'].forEach(k => { d[k] = d[k] || {}; });
     let derivedNow = +(tx.lines || []).reduce((a, l) => a + (+l.amount || 0), 0).toFixed(2);
     let derivedNew = 0;
     let stockWarn = 0;
     (tx.lines || []).forEach((l, lIdx) => {
       const stored = lineReplacements(l);
-      const keptReps = stored.filter((r, i) => !d.removes[`${lIdx}:${i}`]);
-      const adds = (d.adds[lIdx] || []).map(row => ({ ...row, qty: Math.max(0, +row.qty || 0), rate: Math.max(0, +row.rate || 0) }))
+      /* [FIX 200] a kept replacement row is projected WITH whatever return is staged
+         against it, so the money shown is the money the save will write. */
+      let repBack = 0, repOver = 0;
+      const keptReps = stored.filter((r, i) => !d.removes[`${lIdx}:${i}`]).map(r => {
+        const S = rrReplacementState(d, lIdx, r);
+        repBack += S.next;
+        if (S.over) repOver++;
+        return { ...r, returned_qty: S.next };
+      });
+      /* every add row on this line bills into this line, whichever cycle it belongs to */
+      const addTargets = [String(lIdx)].concat(stored.map(r => `${lIdx}:${r.uid}`));
+      const adds = addTargets.reduce((acc, t) => acc.concat(d.adds[t] || []), [])
+        .map(row => ({ ...row, qty: Math.max(0, +row.qty || 0), rate: Math.max(0, +row.rate || 0) }))
         .filter(row => row.qty > 0);
       const retNow = Math.max(0, +l.returned_qty || 0);
       const undoN = Math.min(retNow, Math.max(0, parseInt((d.undoes || {})[lIdx], 10) || 0));
@@ -4172,6 +4329,7 @@
       if (card) {
         const st = card.querySelector('.rr-state');
         if (st) st.innerHTML = `<span class="muted">returned ${retNow} → <b>${retNew}</b>${over ? ` <span style="color:#f0b64b">(only ${maxRet} still returnable here)</span>` : ''}</span>
+          ${repBack ? `<div style="color:#d97706">${repBack} replacement bottle(s) back${repOver ? ' <b style="color:#f0b64b">(more than were handed over)</b>' : ''}</div>` : ''}
           ${adds.length ? `<div style="color:#b7e9c7">+ ${adds.reduce((a, r) => a + r.qty, 0)} replacing = ₱${replMoney.toFixed(2)}</div>` : ''}
           <div>line: ₱${before.toFixed(2)} → <b>₱${amount.toFixed(2)}</b></div>`;
         const inp = card.querySelector('.rr-retqty');
@@ -4182,6 +4340,17 @@
         if (howMany && String(howMany.max) !== String(retNow)) howMany.max = String(retNow);
       }
       if (over) stockWarn++;   /* same reason the save would refuse — surfaced before saving */
+      stockWarn += repOver;    /* [FIX 200] a replacement return larger than what was handed over */
+      /* restocking a returned replacement, and undoing one that was restocked, move the
+         replacement's own batch — flagged here exactly as the save will refuse it. */
+      stored.forEach((r, i) => {
+        if (d.removes[`${lIdx}:${i}`]) return;
+        const S = rrReplacementState(d, lIdx, r);
+        if (S.undo > 0) {
+          const back = Math.min(S.undo, Math.max(0, +r.returned_restocked || 0));
+          if (back > 0) { const rl = findSemenLot(r); if (!rl || lotOnHand(rl) < back) stockWarn++; }
+        }
+      });
       if (undoN && l.return_action === 'restock') {
         /* undoing a restocked return takes the bottles back out of the batch they went into */
         const rlot = findSemenLot({ semen_id: l.semen_id, batch_no: l.semen_batch_no });
@@ -4209,19 +4378,23 @@
     }
   }
 
-  window.rrAddRow = function (lIdx) {
+  /* [FIX 200] `target` is "lIdx" (replacing the dispatch line) or "lIdx:uid" (replacing a
+     replacement bottle). The old call sites pass a number, which keys the same bucket. */
+  window.rrAddRow = function (target) {
     const d = ensureReturnDraft(activeReturnTxId);
-    (d.adds[lIdx] = d.adds[lIdx] || []).push({ semen_id: '', boar: '', breed: '', batch_no: '', qty: 1, rate: 0 });
+    const t = String(target);
+    (d.adds[t] = d.adds[t] || []).push({ semen_id: '', boar: '', breed: '', batch_no: '', qty: 1, rate: 0 });
+    if (rrTargetUid(t)) d.repOpen[t] = true;
     openResellerReturnReplaceModalRerender();
   };
-  window.rrDelRow = function (lIdx, i) {
+  window.rrDelRow = function (target, i) {
     const d = ensureReturnDraft(activeReturnTxId);
-    (d.adds[lIdx] || []).splice(i, 1);
+    (d.adds[String(target)] || []).splice(i, 1);
     openResellerReturnReplaceModalRerender();
   };
-  window.rrPick = function (lIdx, i, val) {
+  window.rrPick = function (target, i, val) {
     const d = ensureReturnDraft(activeReturnTxId);
-    const row = (d.adds[lIdx] || [])[i];
+    const row = (d.adds[String(target)] || [])[i];
     if (!row) return;
     row.semen_id = val || '';
     const s = (F().semen || []).find(x => String(x.id || x.semen_batch_no || '') === val);
@@ -4232,15 +4405,48 @@
     if (!(+row.qty > 0)) row.qty = 1;
     openResellerReturnReplaceModalRerender();
   };
-  window.rrQty = function (lIdx, i, v) {
-    const row = ((ensureReturnDraft(activeReturnTxId).adds[lIdx] || [])[i]);
+  window.rrQty = function (target, i, v) {
+    const row = ((ensureReturnDraft(activeReturnTxId).adds[String(target)] || [])[i]);
     if (row) row.qty = Math.max(0, parseInt(v, 10) || 0);
     rrRefreshPreview();
   };
-  window.rrRate = function (lIdx, i, v) {
-    const row = ((ensureReturnDraft(activeReturnTxId).adds[lIdx] || [])[i]);
+  window.rrRate = function (target, i, v) {
+    const row = ((ensureReturnDraft(activeReturnTxId).adds[String(target)] || [])[i]);
     if (row) row.rate = Math.max(0, +v || 0);
     rrRefreshPreview();
+  };
+
+  /* ── [FIX 200] the same three controls, aimed at one replacement bottle ── */
+  window.rrRepToggle = function (key) {
+    const d = ensureReturnDraft(activeReturnTxId);
+    if (d.repOpen[key]) delete d.repOpen[key]; else d.repOpen[key] = true;
+    openResellerReturnReplaceModalRerender();
+  };
+  window.rrRepRetQty = function (key, v) {
+    const d = ensureReturnDraft(activeReturnTxId);
+    (d.repRet[key] = d.repRet[key] || {}).qty = Math.max(0, parseInt(v, 10) || 0);
+    rrRefreshPreview();
+  };
+  window.rrRepReason = function (key, v) {
+    const d = ensureReturnDraft(activeReturnTxId);
+    (d.repRet[key] = d.repRet[key] || {}).reason = v || '';
+  };
+  window.rrRepAction = function (key, v) {
+    const d = ensureReturnDraft(activeReturnTxId);
+    (d.repRet[key] = d.repRet[key] || {}).action = v || 'discard';
+  };
+  /* Put an already-recorded replacement return back on the invoice — the twin of
+     rrUndoReturn for the dispatch line, because the same number gets mis-keyed here. */
+  window.rrRepUndo = function (key) {
+    if (!activeReturnTxId) return;
+    const d = ensureReturnDraft(activeReturnTxId);
+    if (+d.repUndoes[key] || 0) { delete d.repUndoes[key]; openResellerReturnReplaceModalRerender(); return; }
+    const tx = (F().semenResellerTx || []).find(x => x.id === activeReturnTxId);
+    const l = tx && (tx.lines || [])[rrTargetLine(key)];
+    const r = l && lineReplacements(l).find(x => x.uid === rrTargetUid(key));
+    if (!r) return;
+    d.repUndoes[key] = Math.max(0, +r.returned_qty || 0);
+    openResellerReturnReplaceModalRerender();
   };
   window.rrRetQty = function (lIdx, v) {
     const d = ensureReturnDraft(activeReturnTxId);
@@ -4289,6 +4495,18 @@
   };
   window.rrRemoveExisting = function (lIdx, i) {
     const d = ensureReturnDraft(activeReturnTxId);
+    /* [FIX 200] "Cancel" says the replacement never happened: the charge comes off and the
+       bottles go back into their batch. A row that has already come back, or that a later
+       cycle was handed over for, cannot honestly be un-happened — refuse and say why. */
+    const tx = (F().semenResellerTx || []).find(x => x.id === activeReturnTxId);
+    const l = tx && (tx.lines || [])[lIdx];
+    const reps = l ? lineReplacements(l) : [];
+    const r = reps[i];
+    if (r) {
+      if (Math.max(0, +r.returned_qty || 0) > 0) { toast(`⚠ ${r.returned_qty} bottle(s) of this replacement are recorded as returned. Undo that return first, then cancel the row.`); return; }
+      const kids = replacementChildren(reps, r.uid);
+      if (kids.length) { toast(`⚠ ${kids.reduce((a, k) => a + k.qty, 0)} bottle(s) were handed over to replace this row. Cancel those later replacement(s) first.`); return; }
+    }
     d.removes[`${lIdx}:${i}`] = true;
     openResellerReturnReplaceModalRerender();
   };
@@ -4313,11 +4531,12 @@
     const tx = (f.semenResellerTx || []).find(x => x.id === txId);
     if (!tx) { toast('Transaction not found.'); return; }
     if (tx.voided === true) { toast('Voided transactions cannot be adjusted.'); return; }
-    const d = (returnDraft && returnDraft.txId === txId) ? returnDraft : { ret: {}, adds: {}, removes: {}, undoes: {} };
+    const d = (returnDraft && returnDraft.txId === txId) ? returnDraft : emptyReturnDraft();
+    ['ret', 'adds', 'removes', 'undoes', 'repRet', 'repUndoes', 'repOpen'].forEach(k => { d[k] = d[k] || {}; });
     const totalBefore = +tx.total_amount || 0;
     const linesBefore = (tx.lines || []).map(l => +l.amount || 0);   /* snapshot for the audit trail */
     const notes = [];
-    const audit = { at: new Date().toISOString(), returns: 0, replacements: 0, cancelled: 0, undone: 0, lines: [] };
+    const audit = { at: new Date().toISOString(), returns: 0, replacements: 0, cancelled: 0, undone: 0, repReturns: 0, repUndone: 0, lines: [] };
 
     /* ── pass 1: validate the whole form before a single peso or bottle moves ──
        A half-applied adjustment is worse than a refused one: the invoice and the batch
@@ -4343,21 +4562,51 @@
       if (wantReturn > returnable) {
         blocked.push(`Line ${lIdx + 1}: you asked to return ${wantReturn} bottle(s), but ${returnable === 0 ? `all ${+l.qty || 0} on this line are already returned` : `only ${returnable} of the ${+l.qty || 0} dispatched is still unreturned`}.`);
       }
-      lineReplacements(l).forEach((r, i) => {
-        if (!d.removes[`${lIdx}:${i}`]) return;
-        const lot = findSemenLot(r);
-        if (lot) { const k = lotKey(lot); freed[k] = (freed[k] || 0) + r.qty; }
+      const repsNow = lineReplacements(l);
+      repsNow.forEach((r, i) => {
+        const S = rrReplacementState(d, lIdx, r);
+        if (d.removes[`${lIdx}:${i}`]) {
+          /* [FIX 200] cancelling says it never happened — impossible once it came back or
+             once a later cycle hangs off it. */
+          if (S.storedRet > 0) { blocked.push(`Line ${lIdx + 1}: the ${r.qty} × ${r.boar} replacement cannot be cancelled — ${S.storedRet} of those bottle(s) are recorded as returned. Undo that return first.`); return; }
+          const kids = replacementChildren(repsNow, r.uid);
+          if (kids.length) { blocked.push(`Line ${lIdx + 1}: the ${r.qty} × ${r.boar} replacement cannot be cancelled — ${kids.reduce((a, k) => a + k.qty, 0)} bottle(s) were handed over to replace it. Cancel those first.`); return; }
+          const lot = findSemenLot(r);
+          if (lot) { const k = lotKey(lot); freed[k] = (freed[k] || 0) + r.qty; }
+          return;
+        }
+        /* this replacement's own return / undo */
+        const undoWant = Math.max(0, parseInt((d.repUndoes || {})[S.key], 10) || 0);
+        if (undoWant > S.storedRet) blocked.push(`Line ${lIdx + 1}: you asked to undo ${undoWant} returned bottle(s) of the ${r.boar} replacement, but only ${S.storedRet} ${S.storedRet === 1 ? 'is' : 'are'} recorded.`);
+        if (S.over) blocked.push(`Line ${lIdx + 1}: you asked to return ${S.want} bottle(s) of the ${r.boar} replacement, but ${S.returnable === 0 ? `all ${r.qty} handed over are already returned` : `only ${S.returnable} of the ${r.qty} handed over ${S.returnable === 1 ? 'is' : 'are'} still with the reseller`}.`);
+        if (S.undo > 0 || S.applied > 0) {
+          const rLot = findSemenLot(r);
+          const rk = lotKey(rLot);
+          if (rLot) {
+            if (S.undo > 0) lotDelta[rk] = (lotDelta[rk] || 0) - Math.min(S.undo, Math.max(0, +r.returned_restocked || 0));
+            if (S.applied > 0 && (((d.repRet || {})[S.key] || {}).action || 'discard') === 'restock') lotDelta[rk] = (lotDelta[rk] || 0) + S.applied;
+          } else if (S.undo > 0 && Math.max(0, +r.returned_restocked || 0) > 0) {
+            blocked.push(`Line ${lIdx + 1}: undoing the ${r.boar} replacement return needs ${r.batch_no || 'its batch'} back in semen inventory to take the bottles out again.`);
+          }
+        }
       });
-      (d.adds[lIdx] || []).forEach(row => {
-        const qty = Math.max(0, Math.floor(+row.qty || 0));
-        if (!qty) return;
-        const lot = findSemenLot(row);
-        if (!lot) { blocked.push(`Line ${lIdx + 1}: replacement batch "${row.batch_no || row.semen_id || '?'}" is no longer in semen inventory — pick a live batch or drop the row.`); return; }
-        const k = lotKey(lot);
-        /* on hand + what this very save is putting back − what other rows already take */
-        const avail = lotOnHand(lot) + (freed[k] || 0) - (claimed[k] || 0);
-        if (qty > avail) blocked.push(`Line ${lIdx + 1}: ${lot.boar_name || lot.boar || 'that batch'} has only ${Math.max(0, avail)} bottle(s) available for this save, ${qty} asked for.`);
-        claimed[k] = (claimed[k] || 0) + qty;
+      /* every add bucket on this line: the dispatch line itself and each replacement row */
+      [String(lIdx)].concat(repsNow.map(r => `${lIdx}:${r.uid}`)).forEach(target => {
+        const uid = rrTargetUid(target);
+        const parentIdx = uid ? repsNow.findIndex(r => r.uid === uid) : -1;
+        (d.adds[target] || []).forEach(row => {
+          const qty = Math.max(0, Math.floor(+row.qty || 0));
+          if (!qty) return;
+          if (uid && parentIdx < 0) { blocked.push(`Line ${lIdx + 1}: a replacement row was added for a bottle that is no longer on this pick-up — remove that row.`); return; }
+          if (uid && d.removes[`${lIdx}:${parentIdx}`]) { blocked.push(`Line ${lIdx + 1}: you cancelled the ${repsNow[parentIdx].boar} replacement and also asked to replace it — keep one or the other.`); return; }
+          const lot = findSemenLot(row);
+          if (!lot) { blocked.push(`Line ${lIdx + 1}: replacement batch "${row.batch_no || row.semen_id || '?'}" is no longer in semen inventory — pick a live batch or drop the row.`); return; }
+          const k = lotKey(lot);
+          /* on hand + what this very save is putting back − what other rows already take */
+          const avail = lotOnHand(lot) + (freed[k] || 0) - (claimed[k] || 0);
+          if (qty > avail) blocked.push(`Line ${lIdx + 1}: ${lot.boar_name || lot.boar || 'that batch'} has only ${Math.max(0, avail)} bottle(s) available for this save, ${qty} asked for.`);
+          claimed[k] = (claimed[k] || 0) + qty;
+        });
       });
       /* restock side of this line: the undone bottles leave the batch again, the newly
          restocked ones enter it — summed per batch, then checked once below so two lines
@@ -4446,25 +4695,73 @@
          needs this number instead of guessing from the last reason/action picked. */
       l.returned_restocked = restocked;
 
-      /* 3) new replacement rows: validated against on-hand stock, then deducted. */
-      const added = [];
-      (d.adds[lIdx] || []).forEach(row => {
-        const qty = Math.max(0, Math.floor(+row.qty || 0));
-        if (!qty) return;
-        const rate = Math.max(0, +row.rate || 0);
-        const lot = findSemenLot(row);
-        if (!lot) return;                       /* pass 1 refused this save; unreachable */
-        const onHand = lotOnHand(lot);
-        const qtyOk = Math.min(onHand, qty);     /* belt and braces; pass 1 guaranteed enough stock */
-        if (qtyOk <= 0) return;
-        lotSetOnHand(lot, onHand - qtyOk);
-        added.push({
-          semen_id: lot.id || '', boar: lot.boar_name || lot.boar || 'Boar', breed: lot.breed || '',
-          batch_no: lot.semen_batch_no || '', qty: qtyOk, rate,
-          reason: (lineDraft.reason || '').trim(), at: new Date().toISOString()
-        });
-        notes.push(`Line ${lIdx + 1}: replaced with ${qtyOk} × ${lot.boar_name || lot.boar}${lot.semen_batch_no ? ` (${lot.semen_batch_no})` : ''} @ ₱${rate} = ₱${(qtyOk * rate).toFixed(2)}.`);
+      /* 2b) [FIX 200] the same two moves aimed at a replacement bottle: undo a mis-keyed
+         replacement return, then record the bottles the reseller just brought back. The
+         row keeps its identity, so the cycle that follows can point at it. */
+      remaining.forEach(r => {
+        const S = rrReplacementState(d, lIdx, r);
+        if (!r.uid) r.uid = newReplacementUid();
+        if (S.undo > 0) {
+          const back = Math.min(S.undo, Math.max(0, +r.returned_restocked || 0));
+          r.returned_qty = S.base;
+          r.returned_restocked = Math.max(0, (+r.returned_restocked || 0) - back);
+          if (back > 0) {
+            const rl = findSemenLot(r);
+            if (rl) { lotSetOnHand(rl, Math.max(0, lotOnHand(rl) - back)); notes.push(`Line ${lIdx + 1}: ${back} bottle(s) taken back out of ${rl.semen_batch_no || rl.id} — that many of the undone ${r.boar} replacement returns had been restocked.`); }
+            else notes.push(`Line ${lIdx + 1}: undoing the ${r.boar} replacement return means ${back} bottle(s) leave ${r.batch_no || 'that batch'} again — it is no longer in semen inventory, so check its count by hand.`);
+          }
+          if (r.returned_qty <= 0) { r.return_reason = ''; r.return_action = ''; r.returned_at = ''; }
+          audit.repUndone += S.undo;
+          notes.push(`Line ${lIdx + 1}: undid ${S.undo} of the ${S.storedRet} returned ${r.boar} replacement bottle(s) — back on the invoice at ₱${(S.undo * (+r.rate || 0)).toFixed(2)}.`);
+        }
+        if (S.applied > 0) {
+          const draft = (d.repRet || {})[S.key] || {};
+          r.returned_qty = Math.max(0, +r.returned_qty || 0) + S.applied;
+          r.return_reason = (draft.reason || r.return_reason || 'Unused / Unsold');
+          r.return_action = draft.action || 'discard';
+          r.returned_at = new Date().toISOString();
+          if (r.return_action === 'restock') {
+            r.returned_restocked = Math.max(0, +r.returned_restocked || 0) + S.applied;
+            const rl = findSemenLot(r);
+            if (rl) { lotSetOnHand(rl, lotOnHand(rl) + S.applied); notes.push(`Line ${lIdx + 1}: ${S.applied} returned ${r.boar} replacement bottle(s) restocked into ${rl.semen_batch_no || rl.id}.`); }
+            else notes.push(`Line ${lIdx + 1}: ${S.applied} ${r.boar} replacement bottle(s) marked restocked, but that batch is no longer in semen inventory — add it there if the stock is real.`);
+          } else {
+            notes.push(`Line ${lIdx + 1}: ${S.applied} ${r.boar} replacement bottle(s) came back and were discarded — credited off the invoice, no batch stock added.`);
+          }
+          audit.repReturns += S.applied;
+        }
       });
+
+      /* 3) new replacement rows: validated against on-hand stock, then deducted. Each one
+         records WHAT it replaces, so an unlimited return→replace→return→replace chain
+         stays readable instead of becoming a flat pile of batches. [FIX 200] */
+      const added = [];
+      const addFrom = (target, parent) => {
+        (d.adds[target] || []).forEach(row => {
+          const qty = Math.max(0, Math.floor(+row.qty || 0));
+          if (!qty) return;
+          const rate = Math.max(0, +row.rate || 0);
+          const lot = findSemenLot(row);
+          if (!lot) return;                       /* pass 1 refused this save; unreachable */
+          const onHand = lotOnHand(lot);
+          const qtyOk = Math.min(onHand, qty);     /* belt and braces; pass 1 guaranteed enough stock */
+          if (qtyOk <= 0) return;
+          lotSetOnHand(lot, onHand - qtyOk);
+          const why = parent ? ((d.repRet[`${lIdx}:${parent.uid}`] || {}).reason || parent.return_reason || '') : (lineDraft.reason || '');
+          added.push({
+            uid: newReplacementUid(),
+            semen_id: lot.id || '', boar: lot.boar_name || lot.boar || 'Boar', breed: lot.breed || '',
+            batch_no: lot.semen_batch_no || '', qty: qtyOk, rate,
+            reason: String(why || '').trim(), at: new Date().toISOString(),
+            returned_qty: 0, return_reason: '', return_action: '', returned_restocked: 0, returned_at: '',
+            replaces: parent ? parent.uid : '',
+            cycle: parent ? Math.max(1, +parent.cycle || 1) + 1 : 1
+          });
+          notes.push(`Line ${lIdx + 1}: ${parent ? `cycle ${Math.max(1, +parent.cycle || 1) + 1} — the returned ${parent.boar} replacement was` : 'replaced'} ${parent ? 'swapped for' : 'with'} ${qtyOk} × ${lot.boar_name || lot.boar}${lot.semen_batch_no ? ` (${lot.semen_batch_no})` : ''} @ ₱${rate} = ₱${(qtyOk * rate).toFixed(2)}.`);
+        });
+      };
+      addFrom(String(lIdx), null);
+      remaining.forEach(r => addFrom(`${lIdx}:${r.uid}`, r));
       if (added.length) audit.replacements += added.reduce((a, r) => a + r.qty, 0);
 
       l.replacements = remaining.concat(added);
@@ -4477,7 +4774,7 @@
       });
     });
 
-    if (!audit.returns && !audit.replacements && !audit.cancelled && !audit.undone) {
+    if (!audit.returns && !audit.replacements && !audit.cancelled && !audit.undone && !audit.repReturns && !audit.repUndone) {
       closeResellerModal('resellerReturnModal');
       /* The form may hold only rejected input (an over-sized return): say why nothing
          was written instead of pretending the operator typed nothing. */
@@ -4491,6 +4788,9 @@
        old save, which is why a return could look "unadjusted" on paper. */
     tx.returned_count = +(tx.lines || []).reduce((a, l) => a + Math.max(0, +l.returned_qty || 0), 0);
     tx.replaced_count = +(tx.lines || []).reduce((a, l) => a + Math.max(0, +l.replaced_qty || 0), 0);
+    /* [FIX 200] replacement bottles that came back, and how deep the chain went */
+    tx.replacement_returned_count = +(tx.lines || []).reduce((a, l) => a + Math.max(0, +l.replacement_returned_qty || 0), 0);
+    tx.return_cycles = (tx.lines || []).reduce((a, l) => Math.max(a, Math.max(0, +l.replacement_cycles || 0)), 0);
     tx.has_return_adjustment = true;
     tx.return_reason = (tx.lines || []).map(l => l.return_reason).filter(Boolean)[0] || tx.return_reason || 'Return adjustment';
     tx.replacement_notes = notes.join(' ');
@@ -4508,7 +4808,9 @@
     closeResellerModal('resellerReturnModal');
     const drift = `Invoice ₱${totalBefore.toFixed(2)} → ₱${tx.total_amount.toFixed(2)}`;
     const undoneMsg = audit.undone ? ` · ${audit.undone} returned bottle(s) undone` : '';
-    toast(`✓ Return & Replacement saved for #${tx.id}. ${drift}${undoneMsg}${recalc.manualKept ? ` · hand correction kept (${tx.total_amount >= recalc.derived ? '+' : '−'}₱${Math.abs(tx.total_amount - recalc.derived).toFixed(2)} over the lines)` : ''}`);
+    const cycleMsg = audit.repReturns ? ` · ${audit.repReturns} replacement bottle(s) came back` : '';
+    const repUndoMsg = audit.repUndone ? ` · ${audit.repUndone} replacement return(s) undone` : '';
+    toast(`✓ Return & Replacement saved for #${tx.id}. ${drift}${undoneMsg}${cycleMsg}${repUndoMsg}${recalc.manualKept ? ` · hand correction kept (${tx.total_amount >= recalc.derived ? '+' : '−'}₱${Math.abs(tx.total_amount - recalc.derived).toFixed(2)} over the lines)` : ''}`);
     activeReturnTxId = null;
     returnDraft = null;
     openSemenResellerHub();
@@ -4521,9 +4823,18 @@
   function resellerReplLinesHTML(l) {
     const reps = lineReplacements(l);
     if (!reps.length) return '';
-    const inner = reps.map(r => `${escH(r.boar)}${r.batch_no ? ` (${escH(r.batch_no)})` : ''} × ${r.qty} @ ${peso(+r.rate || 0)}`).join(' <b>+</b> ');
-    const money = +(reps.reduce((a, r) => a + r.qty * (+r.rate || 0), 0)).toFixed(2);
-    return `<small style="color:var(--teal2);display:block">🔁 Replaced with: <b>${inner}</b> = ${peso(money)}${reps.length > 1 ? ` <span class="muted">(${reps.length} batches)</span>` : ''}</small>`;
+    /* [FIX 200] a replacement can itself have come back, so each row says how many of it
+       the reseller still holds and the money is what is still billed, not what was ever
+       handed over — otherwise the tag would disagree with the line total beside it. */
+    const inner = reps.map(r => {
+      const back = Math.max(0, +r.returned_qty || 0);
+      return `${escH(r.boar)}${r.batch_no ? ` (${escH(r.batch_no)})` : ''} × ${r.qty} @ ${peso(+r.rate || 0)}${(+r.cycle || 1) > 1 ? ` <span style="color:#f0b64b">·cycle ${+r.cycle || 1}</span>` : ''}${back ? ` <span style="color:#d97706">·↩${back} back</span>` : ''}`;
+    }).join(' <b>+</b> ');
+    const money = +(reps.reduce((a, r) => a + replacementBilled(r), 0)).toFixed(2);
+    const back = reps.reduce((a, r) => a + Math.max(0, +r.returned_qty || 0), 0);
+    const cycles = reps.reduce((a, r) => Math.max(a, Math.max(1, +r.cycle || 1)), 1);
+    return `<small style="color:var(--teal2);display:block">🔁 Replaced with: <b>${inner}</b> = ${peso(money)}${reps.length > 1 ? ` <span class="muted">(${reps.length} batches)</span>` : ''}</small>${
+      back ? `<small style="color:#d97706;display:block">↩ ${back} of those replacement bottle(s) came back${cycles > 1 ? ` · ${cycles} return cycles on this line` : ''}</small>` : ''}`;
   }
 
   function resellerPaymentPreview(fromDiscount = false) {
@@ -5341,7 +5652,13 @@
         add(row(`  ${l.qty} bottle(s) x ${P(l.rate)}`, P(l.amount)));
         if (l.returned_qty) add(`  [!] RET: ${l.returned_qty} bottle(s)`);
         /* [FIX 187] one line per replacement batch, each with its own price */
-        lineReplacements(l).forEach(r => add(`  [+] REP: ${r.boar}${r.batch_no ? ` (${r.batch_no})` : ''} x${r.qty} @ ${P(r.rate)} = ${P(r.qty * r.rate)}`));
+        /* [FIX 200] a replacement can itself have come back — print what is still billed,
+           and the bottles that went back, or the slip disagrees with the invoice. */
+        lineReplacements(l).forEach(r => {
+          const back = Math.max(0, +r.returned_qty || 0);
+          add(`  [+] REP${(+r.cycle || 1) > 1 ? ` c${+r.cycle || 1}` : ''}: ${r.boar}${r.batch_no ? ` (${r.batch_no})` : ''} x${r.qty} @ ${P(r.rate)} = ${P(replacementBilled(r))}`);
+          if (back) add(`      [!] ${back} returned back${r.return_reason ? ` (${r.return_reason})` : ''}`);
+        });
       });
 
       add(sep);
