@@ -3454,6 +3454,35 @@
     }
   }
 
+  /* [FIX 201] a toast that names no line is useless on a three-line pickup, and
+     it disappears while the farm is still scrolling. Problems are painted onto
+     the offending line cards and stay there until they are fixed. */
+  function clearPickupLineProblems() {
+    for (let i = 0; i < activePickupLines.length; i++) {
+      const slot = document.getElementById(`pickupLineErr_${i}`);
+      if (slot) { slot.textContent = ''; slot.style.display = 'none'; }
+      const card = document.getElementById(`pickupLineCard_${i}`);
+      if (card) card.style.borderColor = 'var(--line)';
+    }
+  }
+  function showPickupLineProblems(problems) {
+    clearPickupLineProblems();
+    let first = null;
+    (problems || []).forEach(p => {
+      const idx = (+p.lineNo || 0) - 1;
+      const slot = document.getElementById(`pickupLineErr_${idx}`);
+      const card = document.getElementById(`pickupLineCard_${idx}`);
+      if (card) card.style.borderColor = '#f0b64b';
+      if (slot) { slot.textContent = `⚠ ${p.msg}`; slot.style.display = 'block'; }
+      if (first === null) first = card;
+    });
+    if (first && first.scrollIntoView) { try { first.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (_) { first.scrollIntoView(); } }
+    const one = problems && problems.length === 1 ? problems[0] : null;
+    toast(one
+      ? `⚠️ Line ${one.lineNo}: ${one.msg} Nothing was saved.`
+      : `⚠️ ${problems.length} pickup lines need attention — see the highlighted lines. Nothing was saved.`);
+  }
+
   function renderPickupLines() {
     const wrap = document.getElementById('pickupLinesWrap');
     if (!wrap) return;
@@ -3495,7 +3524,7 @@
         <!-- Row 1: the label carries breed × qty (their red box), the picker follows -->
         <div class="field" style="margin:0 0 10px 0">
           <label style="font-size:11.5px;font-weight:750">Semen Batch / Boar Line ${lIdx + 1} ${labelTail}</label>
-          <select class="rfid-select" onchange="window.onPickupBatchSelect(${lIdx}, this.value)" style="width:100%">
+          <select class="rfid-select" onchange="window.onPickupBatchSelect(${lIdx}, this.value)" style="width:100%${line.semen_id ? '' : ';border-color:#f0b64b'}">
             <option value="">— Choose Available Semen —</option>
             ${ordered.map(s => `
               <option value="${s.id}" ${line.semen_id === s.id ? 'selected' : ''}>
@@ -3504,6 +3533,7 @@
             `).join('')}
           </select>
           ${clue}
+          <div id="pickupLineErr_${lIdx}" style="display:none;font-size:11.5px;font-weight:700;color:#f0b64b;margin:6px 0 0;padding:6px 9px;border-radius:9px;background:rgba(240,182,75,.10);border:1px solid rgba(240,182,75,.30)"></div>
         </div>
 
         <!-- Row 2: Qty and Price side by side; Row 3: money and the remove tap. Four
@@ -3557,6 +3587,16 @@
     const s = (f.semen || []).find(x => x.id === semenId);
     const l = activePickupLines[lIdx];
     if (!l) return;
+
+    /* [FIX 201] picking a real lot clears that line's warning on the spot */
+    const errSlot = document.getElementById(`pickupLineErr_${lIdx}`);
+    const card = document.getElementById(`pickupLineCard_${lIdx}`);
+    const sel = card && card.querySelector ? card.querySelector('select.rfid-select') : null;
+    if (s) {
+      if (errSlot) { errSlot.textContent = ''; errSlot.style.display = 'none'; }
+      if (card) card.style.borderColor = 'var(--line)';
+    }
+    if (sel) sel.style.borderColor = s ? 'var(--line)' : '#f0b64b';
 
     if (s) {
       l.semen_id = s.id;
@@ -3723,24 +3763,69 @@
     const reseller = (f.semenResellers || []).find(x => x.id === rId);
     if (!reseller) { toast('Reseller profile not found.'); return; }
 
+    clearPickupLineProblems();
     const validLines = activePickupLines.filter(l => l.boar && l.qty > 0);
     if (!validLines.length) { toast('Please choose at least one valid semen bottle line.'); return; }
     const changedSemenLots = new Set();
 
     /* [FIX M8] the old pickup silently clamped stock at 0 (max(0, stock − qty)),
        so a 50-bottle line against 10 on hand still billed 50 bottles. Validate
-       every line against real on-hand stock before any deduction. */
+       every line against real on-hand stock before any deduction.
+
+       [FIX 201] and validate WHICH lot, not just how many. A line that came from
+       an accepted reseller order carries `boar: "<breed>"` with an empty
+       semen_id — the picker deliberately pre-selects nothing, because choosing
+       the boar is the farm's call. The old resolver then guessed anyway: it
+       matched that BREED string against every lot's boar name, so a legacy lot
+       that happens to be filed under the breed ("Duroc Pietrain") absorbed the
+       whole deduction while the batch the office was actually looking at never
+       moved — the pickup billed, the card stayed put, and the saved line kept
+       semen_id:"" so returns could not restock it either.
+
+       Now: exact id → exact batch no → (hand-written lines only) a real boar
+       name. Nothing resolves? the line is refused by name and NOTHING is saved.
+       Every line is also charged against the running remainder, so two lines on
+       the same batch can no longer both pass and then clamp at zero. */
     const resolved = [];
-    for (const l of validLines) {
+    const claimed = new Map();
+    const problems = [];
+    validLines.forEach(l => {
+      const lineNo = activePickupLines.indexOf(l) + 1;
+      const asked = String(l.ordered_breed || l.breed || l.boar || 'this line').trim();
       let s = null;
       if (l.semen_id) s = (f.semen || []).find(x => x.id === l.semen_id);
       if (!s && l.semen_batch_no) s = (f.semen || []).find(x => x.semen_batch_no === l.semen_batch_no);
-      if (!s && l.boar) s = (f.semen || []).find(x => (x.boar === l.boar || x.boar_name === l.boar) && +(x.available_bottles ?? x.bottles ?? 0) > 0);
-      if (!s) { toast(`⚠️ Semen batch for "${l.boar}" could not be found. Re-select the stock lot and try again.`); return; }
+      /* the loose boar-name match survives only for hand-written lines, and only
+         when the name is a boar name rather than the breed echoed back at us */
+      if (!s && l.boar && !l.from_order && String(l.boar).trim() !== String(l.breed || '').trim())
+        s = (f.semen || []).find(x => (x.boar === l.boar || x.boar_name === l.boar) && +(x.available_bottles ?? x.bottles ?? 0) > 0);
+      if (!s) {
+        problems.push({ lineNo, msg: l.from_order
+          ? `Choose the collection batch you are handing over for ${asked}.`
+          : `That semen batch is no longer on file — re-select the stock lot.` });
+        return;
+      }
       const stock = Math.max(0, +(s.available_bottles ?? s.bottles ?? 0));
-      if (l.qty > stock) { toast(`⚠️ Only ${stock} bottle(s) on hand for ${s.boar_name || s.boar} — reduce the line quantity (or restock first). Nothing was saved.`); return; }
-      resolved.push({ lot: s, qty: Math.floor(l.qty) });
-    }
+      const already = claimed.get(s) || 0;
+      const free = Math.max(0, stock - already);
+      const qty = Math.floor(l.qty);
+      if (qty > free) {
+        problems.push({ lineNo, msg: already
+          ? `Only ${free} bottle(s) of ${s.semen_batch_no || s.boar_name || s.boar} left after the earlier line on this pickup — reduce the quantity.`
+          : `Only ${free} bottle(s) on hand for ${s.boar_name || s.boar} — reduce the quantity, or restock first.` });
+        return;
+      }
+      claimed.set(s, already + qty);
+      /* stamp the lot the farm actually chose back onto the line: the receipt,
+         the drill-down and the return / replace machinery all resolve stock by
+         semen_id, and an order-sourced line used to be saved with none */
+      l.semen_id = s.id;
+      l.semen_batch_no = s.semen_batch_no || l.semen_batch_no || '';
+      l.boar = s.boar_name || s.boar || l.boar;
+      l.breed = s.breed || l.breed || '';
+      resolved.push({ lot: s, qty });
+    });
+    if (problems.length) { showPickupLineProblems(problems); return; }
 
     // Deduct stock from available semen (stock already validated)
     resolved.forEach(({ lot: s, qty }) => {

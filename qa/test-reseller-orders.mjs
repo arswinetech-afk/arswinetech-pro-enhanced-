@@ -602,7 +602,12 @@ async function bootOrderPage({ search, calls = [], barHeight, ...resp }) {
   const ctx = bootApp(db);
   ctx.acceptResellerOrder('rsord_test1');
   await ctx.window.saveResellerPickup({ preventDefault() {}, target: fakeEl('form') });
-  ok('[9] saving without choosing a boar is refused, not guessed', !db.semenResellerTx.length && /could not be found/.test(ctx.lastToast()), ctx.lastToast());
+  /* [FIX 201] the refusal now names the line and the breed it is asking about —
+     this fixture only ever passed because no lot happened to be filed under the
+     breed name; on a real 147-record farm one was, and the guess drained it. */
+  ok('[9] saving without choosing a boar is refused, not guessed',
+    !db.semenResellerTx.length && /Line 1/.test(ctx.lastToast()) && /Choose the collection batch/.test(ctx.lastToast()), ctx.lastToast());
+  ok('[9] and the refusal says nothing was saved', /Nothing was saved/i.test(ctx.lastToast()), ctx.lastToast());
   eq('[9] nothing written', db.semenResellerTx.length, 0);
   ok('[9] the order keeps its decision so the office can go back to it', db.semenResellerOrders[0].status === 'accepted');
 
