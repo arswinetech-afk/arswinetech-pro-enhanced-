@@ -39,27 +39,51 @@
     </div>
   </div>
   <div class="login-card-wrap">
-    <form class="login-card" onsubmit="login(event)" novalidate>
+    <!-- [FIX 202] Sign in and Create account are now two visibly different
+         screens on one card. "Create account" used to be a button under the
+         sign-in form that silently reused the same two boxes: the heading still
+         said "Sign in to access your farm workspace", nothing opened, and a new
+         member who tapped it just got a red error. The card now switches mode —
+         tabs, heading, fields, button and footer all change — while still
+         calling the same login() / registerAccount() cloud functions. -->
+    <form class="login-card" id="loginCard" data-auth-mode="signin" onsubmit="arsAuthSubmit(event)" novalidate>
       <div class="brand"><img class="logo-img" src="assets/arswinetech-logo.png" alt="AR SwineTech · Breed. Feed. Predict."></div>
-      <h2>Welcome Ka-Hog Mates!</h2>
-      <p>Sign in to access your farm workspace.</p>
-      <label>Email address</label>
+
+      <div class="auth-tabs" role="tablist" aria-label="Account access">
+        <button type="button" class="auth-tab is-on" id="authTabSignin" role="tab" aria-selected="true" aria-controls="loginCard" onclick="setAuthMode('signin')">Sign in</button>
+        <button type="button" class="auth-tab" id="authTabSignup" role="tab" aria-selected="false" aria-controls="loginCard" onclick="setAuthMode('signup')">Create account</button>
+      </div>
+
+      <h2 id="authTitle">Welcome Ka-Hog Mates!</h2>
+      <p id="authSubtitle">Sign in to access your farm workspace.</p>
+
+      <label for="loginEmailInput">Email address</label>
       <input type="email" id="loginEmailInput" autocomplete="email" placeholder="Enter your account email">
-      <label>Password</label>
+
+      <label for="loginPasswordInput" id="authPasswordLabel">Password</label>
       <input type="password" id="loginPasswordInput" autocomplete="current-password" placeholder="••••••••">
-      <button type="button" class="btn" onclick="login(event)">Sign in securely →</button>
-      <button type="button" class="btn ghost" style="width:100%;margin-top:10px" onclick="registerAccount()">Create account</button>
+      <small class="auth-hint auth-only-signup">Use at least 6 characters. You will need this password every time you sign in.</small>
+
+      <div class="auth-only-signup">
+        <label for="loginConfirmInput">Confirm password</label>
+        <input type="password" id="loginConfirmInput" autocomplete="new-password" placeholder="Re-type your password">
+      </div>
+
+      <button type="submit" class="btn" id="authPrimaryBtn">Sign in securely →</button>
+      <button type="button" class="btn ghost" style="width:100%;margin-top:10px" id="authSwitchBtn" onclick="toggleAuthMode()">Create account</button>
       <!-- [FIX 104] 15-day full-access trial, no account needed -->
       <!-- [FIX 149] the separate trial button was removed: every new account
            that creates its own farm now gets the 15-day trial automatically. -->
-      <button type="button" class="link-btn" onclick="showResetRequest()">Forgot password?</button>
+      <div class="auth-only-signup auth-note">New accounts get a 15-day full-access trial as soon as you set up your farm.</div>
+      <button type="button" class="link-btn auth-only-signin" onclick="showResetRequest()">Forgot password?</button>
       <!-- [REBUILD FIX 87] restore a device backup file even before signing in
            (e.g. after clearing browser data) -->
       <button type="button" class="link-btn" style="margin-top:6px" onclick="document.getElementById('restoreBackupInput').click()">📂 Restore offline backup from a device file</button>
       <input type="file" id="restoreBackupInput" accept="application/json,.json" style="display:none" onchange="window.arsRestoreFromBackupFile && window.arsRestoreFromBackupFile(this.files[0]); this.value='';">
       <div class="login-error" id="loginError" role="alert" aria-live="polite"></div>
+      <div class="login-notice" id="loginNotice" role="status" aria-live="polite"></div>
       <div class="auth-status" id="authStatus">Checking secure sign-in service…</div>
-      <div class="login-help">Secure email account · cloud sync activates after administrator setup</div>
+      <div class="login-help" id="authHelp">Secure email account · cloud sync activates after administrator setup</div>
     </form>
   </div>
 </div>

@@ -6337,3 +6337,30 @@ html, body, .shell, .main {
 .light-theme .rsum-caret,.light-theme .rsum-hint{color:#075e63}
 .light-theme .rsum-peek{color:#41595c}
 @media (prefers-reduced-motion:reduce){.rtop *,.rtop:before,.rsum *{animation:none!important;transition:none!important}}
+
+/* ═══ [FIX 202] Sign in / Create account — one card, two visible modes ═══
+   "Create account" used to be a plain ghost button under the sign-in form that
+   reused the same two boxes and changed nothing on screen, so a new member had
+   no way to tell a registration form had opened (it hadn't). The card now
+   declares its mode: tabs on top, and every mode-specific row is scoped to
+   [data-auth-mode] so the markup is the single source of truth. */
+.auth-tabs{display:grid;grid-template-columns:1fr 1fr;gap:5px;padding:5px;margin:15px 0 19px;border-radius:13px;background:rgba(5,21,25,.52);border:1px solid var(--line)}
+.auth-tab{appearance:none;-webkit-appearance:none;border:0;cursor:pointer;padding:11px 8px;border-radius:9px;background:transparent;color:#9dbab7;font:inherit;font-size:13px;font-weight:750;letter-spacing:.005em;line-height:1.2;transition:background .18s ease,color .18s ease,box-shadow .18s ease}
+.auth-tab:hover{color:#dcf7f4}
+/* keyboard focus is deliberately NOT styled here: neumorphic.css owns the one
+   --neo-focus ring for every button in the app, and the tabs are buttons */
+.auth-tab.is-on{background:linear-gradient(135deg,#13b9ad,#07988f);color:#02211f;box-shadow:0 5px 15px rgba(4,154,143,.26),inset 0 1px 0 rgba(255,255,255,.22)}
+.auth-hint{display:block;margin-top:7px;color:#86a3a1;font-size:11px;line-height:1.45}
+.auth-note{margin-top:12px;padding:9px 11px;border-radius:9px;background:rgba(14,165,233,.10);border:1px solid rgba(110,200,255,.20);color:#a6cfe0;font-size:11.5px;line-height:1.45;text-align:center}
+.login-card[data-auth-mode="signin"] .auth-only-signup{display:none}
+.login-card[data-auth-mode="signup"] .auth-only-signin{display:none}
+.login-notice{display:none;margin-top:13px;padding:10px 11px;border-radius:8px;background:rgba(18,92,66,.38);border:1px solid rgba(87,212,141,.34);color:#a9edc7;font-size:12px;line-height:1.4}
+.login-notice.show{display:block}
+.login-card .btn[disabled]{cursor:progress}
+.light-theme .auth-tabs{background:#eef7f6;border-color:#d8eae8}
+.light-theme .auth-tab{color:#5a7675}
+.light-theme .auth-tab:hover{color:#0c4f52}
+.light-theme .auth-tab.is-on{background:linear-gradient(135deg,#0d8d91,#075e63);color:#fff;box-shadow:0 5px 14px rgba(7,94,99,.22)}
+.light-theme .auth-hint{color:#657d7f}
+.light-theme .auth-note{background:#eaf5fb;border-color:#c5e2f0;color:#2b5f77}
+.light-theme .login-notice{background:#e7f8ef;border-color:#a9dfc2;color:#1c6b45}

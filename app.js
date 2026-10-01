@@ -2692,6 +2692,8 @@ async function logout() {
     img.src = 'assets/arswinetech-logo.png';
   });
   document.getElementById('loginScreen').style.display = 'grid';
+  /* [FIX 202] come back to the sign-in side, never to a half-filled sign-up */
+  if (typeof setAuthMode === 'function') setAuthMode('signin', { focus: false });
   setFarmSelect();
   toast('You have been logged out');
 }
@@ -3377,6 +3379,26 @@ function clearLoginError() {
     box.textContent = '';
     box.classList.remove('show')
   }
+  clearLoginNotice();
+}
+
+/* [FIX 202] "Account created! Please sign in." was being shown through
+   showLoginError — a red failure box for the one thing that went right. Good
+   news gets its own green box. */
+function showLoginNotice(message) {
+  let box = document.getElementById('loginNotice');
+  if (box) {
+    box.textContent = message;
+    box.classList.add('show');
+  }
+}
+
+function clearLoginNotice() {
+  let box = document.getElementById('loginNotice');
+  if (box) {
+    box.textContent = '';
+    box.classList.remove('show');
+  }
 }
 
 function authError(id, message) {
@@ -3625,12 +3647,113 @@ async function finishAuthenticated(email, suppliedUser = null, options = {}) {
   toast(`Welcome back, ${account?.name || cleanEmail.split('@')[0]}`);
   return true;
 }
+/* ── [FIX 202] sign in / create account are two modes of one card ──────────────
+   The old card had a single "Create account" button underneath the sign-in
+   form. Tapping it opened nothing: the heading still read "Sign in to access
+   your farm workspace", the fields were the same two boxes, and an empty form
+   answered with a red "Enter an email and a password with at least 6
+   characters" — which reads like a sign-in failure, not a registration form.
+   New members could not tell that they had started registering at all.
+
+   The card now has a visible mode. Everything the member reads changes with it;
+   the cloud calls underneath (ARSCloud.signIn / ARSCloud.signUp) do not. */
+window.arsAuthMode = 'signin';
+
+const AUTH_COPY = {
+  signin: {
+    title: 'Welcome Ka-Hog Mates!',
+    subtitle: 'Sign in to access your farm workspace.',
+    passwordLabel: 'Password',
+    primary: 'Sign in securely →',
+    primaryBusy: 'Signing you in…',
+    secondary: 'New here? Create your account',
+    help: 'Secure email account · cloud sync activates after administrator setup',
+    autocomplete: 'current-password'
+  },
+  signup: {
+    title: 'Create your account',
+    subtitle: 'A few seconds and your farm workspace is yours.',
+    passwordLabel: 'Choose a password',
+    primary: 'Create my account →',
+    primaryBusy: 'Creating your account…',
+    secondary: 'Already have an account? Sign in',
+    help: 'You set up your farm right after this step · no payment details needed',
+    autocomplete: 'new-password'
+  }
+};
+
+function setAuthMode(mode, opts) {
+  const next = mode === 'signup' ? 'signup' : 'signin';
+  const card = document.getElementById('loginCard');
+  if (!card) return;
+  const copy = AUTH_COPY[next];
+  window.arsAuthMode = next;
+  card.dataset.authMode = next;
+
+  const set = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text; };
+  set('authTitle', copy.title);
+  set('authSubtitle', copy.subtitle);
+  set('authPasswordLabel', copy.passwordLabel);
+  set('authPrimaryBtn', copy.primary);
+  set('authSwitchBtn', copy.secondary);
+  set('authHelp', copy.help);
+
+  const tabIn = document.getElementById('authTabSignin');
+  const tabUp = document.getElementById('authTabSignup');
+  if (tabIn) { tabIn.classList.toggle('is-on', next === 'signin'); tabIn.setAttribute('aria-selected', String(next === 'signin')); }
+  if (tabUp) { tabUp.classList.toggle('is-on', next === 'signup'); tabUp.setAttribute('aria-selected', String(next === 'signup')); }
+
+  const pw = document.getElementById('loginPasswordInput');
+  if (pw) pw.setAttribute('autocomplete', copy.autocomplete);
+  const confirm = document.getElementById('loginConfirmInput');
+  if (confirm && next === 'signin') confirm.value = '';
+
+  /* switching mode is not a failure — drop whatever the other mode complained
+     about, but keep a notice the switch itself just produced */
+  if (!opts || !opts.keepNotice) clearLoginError();
+  else { const box = document.getElementById('loginError'); if (box) { box.textContent = ''; box.classList.remove('show'); } }
+
+  if (!opts || opts.focus !== false) {
+    const email = document.getElementById('loginEmailInput');
+    const target = email && !email.value.trim() ? email : pw;
+    try { target && target.focus({ preventScroll: true }); } catch (_) { target && target.focus(); }
+  }
+}
+window.setAuthMode = setAuthMode;
+
+function toggleAuthMode() {
+  setAuthMode(window.arsAuthMode === 'signup' ? 'signin' : 'signup');
+}
+window.toggleAuthMode = toggleAuthMode;
+
+/* one submit handler for the card, so Enter does the right thing in both modes
+   (the form used to be hard-wired to login(), which meant pressing Enter while
+   registering tried to sign in with an account that did not exist yet) */
+function arsAuthSubmit(e) {
+  if (e) e.preventDefault();
+  return window.arsAuthMode === 'signup' ? registerAccount() : login(e);
+}
+window.arsAuthSubmit = arsAuthSubmit;
+
+function authBusy(on) {
+  const btn = document.getElementById('authPrimaryBtn');
+  if (!btn) return;
+  const copy = AUTH_COPY[window.arsAuthMode] || AUTH_COPY.signin;
+  btn.disabled = !!on;
+  btn.textContent = on ? copy.primaryBusy : copy.primary;
+  btn.style.opacity = on ? '.72' : '';
+}
+
+function authField(id, legacySelector) {
+  const el = document.getElementById(id) || document.querySelector(legacySelector);
+  return el ? el.value : '';
+}
+
 async function login(e) {
   if (e) e.preventDefault();
   clearLoginError();
-  let field = document.querySelector('.login-card input[type="email"]'),
-    password = document.querySelector('.login-card input[type="password"]')?.value || '',
-    email = (field?.value || '').trim().toLowerCase();
+  let password = authField('loginPasswordInput', '.login-card input[type="password"]'),
+    email = (authField('loginEmailInput', '.login-card input[type="email"]') || '').trim().toLowerCase();
   if (!email || !password) {
     showLoginError('Enter your email address and password, then try again.');
     return;
@@ -3640,6 +3763,7 @@ async function login(e) {
     return;
   }
   try {
+    authBusy(true);
     await ARSCloud.signIn(email, password);
     await finishAuthenticated(email);
   } catch (err) {
@@ -3650,34 +3774,64 @@ async function login(e) {
     } else {
       showLoginError(msg || 'Unable to sign in. Check your email and password.');
     }
+  } finally {
+    authBusy(false);
   }
 }
 async function registerAccount() {
+  /* [FIX 202] if a member reaches registration from somewhere that has not
+     switched the card yet, switch it now — nobody should ever be registering on
+     a card that still says "Sign in". */
+  if (window.arsAuthMode !== 'signup') setAuthMode('signup', { focus: false });
   clearLoginError();
-  let email = document.querySelector('.login-card input[type="email"]')?.value.trim().toLowerCase(),
-    password = document.querySelector('.login-card input[type="password"]')?.value || '';
-  if (!email || !password || password.length < 6) {
-    showLoginError('Enter an email and a password with at least 6 characters.');
-    return;
-  }
+
+  const email = (authField('loginEmailInput', '.login-card input[type="email"]') || '').trim().toLowerCase();
+  const password = authField('loginPasswordInput', '.login-card input[type="password"]');
+  const confirmEl = document.getElementById('loginConfirmInput');
+  const confirm = confirmEl ? confirmEl.value : password;
+
+  /* one problem at a time, named for the box it belongs to — the old single
+     "Enter an email and a password with at least 6 characters" covered three
+     different mistakes at once */
+  if (!email) { showLoginError('Enter the email address you want to use for your account.'); return; }
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { showLoginError('That email address does not look right. Check it and try again.'); return; }
+  if (!password) { showLoginError('Choose a password for your new account.'); return; }
+  if (password.length < 6) { showLoginError(`Your password needs at least 6 characters — that one has ${password.length}.`); return; }
+  if (confirmEl && confirm !== password) { showLoginError('The two passwords do not match. Re-type them and try again.'); return; }
+
   if (!window.ARSCloud) {
     showLoginError('The cloud registration service did not load. Refresh this page and try again.');
     return;
   }
   try {
+    authBusy(true);
     let result = await ARSCloud.signUp(email, password);
     if (result && (result.session || result.access_token)) {
       await finishAuthenticated(email);
     } else {
-      showLoginError('Account created! Please sign in with your password.');
+      /* email confirmation is on: send them back to the sign-in side with the
+         address already filled in, and say so in green, not red */
+      setAuthMode('signin', { focus: false, keepNotice: true });
+      const emailEl = document.getElementById('loginEmailInput');
+      if (emailEl) emailEl.value = email;
+      const pwEl = document.getElementById('loginPasswordInput');
+      if (pwEl) pwEl.value = '';
+      showLoginNotice(`✓ Account created for ${email}. Check your inbox (and spam folder) to confirm it, then sign in here.`);
     }
   } catch (err) {
     const msg = err && err.message ? err.message : '';
     if (msg.includes('User already registered') || msg.includes('user_already_exists')) {
-      showLoginError('This email is already registered in Supabase. Please sign in with your password.');
+      setAuthMode('signin', { focus: false, keepNotice: true });
+      const emailEl = document.getElementById('loginEmailInput');
+      if (emailEl) emailEl.value = email;
+      showLoginNotice(`${email} already has an account — signing you in instead. Enter your password, or tap "Forgot password?".`);
+    } else if (/password/i.test(msg) && /(weak|short|6)/i.test(msg)) {
+      showLoginError('That password was refused as too weak. Use at least 6 characters, mixing letters and numbers.');
     } else {
-      showLoginError(msg || 'Unable to create account.');
+      showLoginError(msg || 'Unable to create your account. Check your connection and try again.');
     }
+  } finally {
+    authBusy(false);
   }
 }
 
