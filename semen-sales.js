@@ -5688,7 +5688,10 @@
         </div>
         <div class="no-print" style="flex:0 0 auto;display:flex;gap:8px;justify-content:center;flex-wrap:wrap;padding:10px 12px;background:rgba(7,22,27,.97);border-top:1px solid var(--line)">
           <button type="button" class="btn ghost" onclick="document.getElementById('resellerStatementModal').remove()">← Back</button>
-          <button type="button" class="btn ghost" onclick="window.print()">🖨 Print / PDF</button>
+          <!-- [FIX 203] was window.print(), which printed the hidden app shell behind
+               this fixed overlay and produced blank pages. It now opens the real
+               A4 Statement of Account, with a period picker. -->
+          <button type="button" class="btn ghost" onclick="window.openResellerSOA('${r.id}')">🖨 Print / PDF</button>
           <button type="button" class="btn" style="background:#0ea5e9;color:#fff" onclick="window.btPrintResellerStatement('${r.id}')">📶 Print via Bluetooth</button>
         </div>
       </div>
@@ -5696,6 +5699,338 @@
     btUi();
   }
   window.openResellerStatement = openResellerStatement;
+
+  /* ═══════════════════════════════════════════════════════════════════════════
+     [FIX 203] RESELLER STATEMENT OF ACCOUNT — a real A4 document, with a period
+     picker.
+
+     The old "🖨 Print / PDF" button on the statement called the bare
+     window.print(). That printed the WHOLE app: #resellerStatementModal is a
+     .drill-bg, i.e. position:fixed;inset:0, and no @media print rule in the app
+     ever claimed it. So the browser laid out the hidden app shell behind it,
+     paginated that into six sheets, and clipped the fixed overlay away — six
+     blank pages, exactly what the field reported.
+
+     Rather than bolt one more print-isolation block onto a 58 mm thermal
+     receipt that was never meant for Letter paper, this builds the document the
+     office actually needs: a Statement of Account on A4, printed through the
+     app's proven new-window path (the same one printFeedReport uses), so the
+     app shell can never leak into it again.
+
+     The money must RECONCILE. For "All time" the opening balance is zero and
+     the closing balance is, by construction, the same max(0, net − collected)
+     the hub and the thermal statement already show. For a single month the
+     statement opens with the balance brought forward, so month after month
+     chains into the same figure.                                           */
+
+  const SOA_MONTHS = ['January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December'];
+
+  /* dates are compared as plain YYYY-MM-DD strings on purpose — [FIX 197] showed
+     that putting farm dates through Date() shifts months across the timezone */
+  const soaDay = v => String(v || '').slice(0, 10);
+  const soaMonthKey = v => soaDay(v).slice(0, 7);
+  function soaMonthLabel(key) {
+    const m = /^(\d{4})-(\d{2})$/.exec(String(key || ''));
+    return m ? `${SOA_MONTHS[+m[2] - 1] || m[2]} ${m[1]}` : String(key || '');
+  }
+  function soaMonthEnd(key) {
+    const m = /^(\d{4})-(\d{2})$/.exec(String(key || ''));
+    if (!m) return '9999-12-31';
+    const last = new Date(Date.UTC(+m[1], +m[2], 0)).getUTCDate();
+    return `${m[1]}-${m[2]}-${String(last).padStart(2, '0')}`;
+  }
+
+  /* every month this reseller has any activity in, newest first */
+  function resellerSOAPeriods(f, r) {
+    const keys = new Set();
+    resellerTransactionsFor(f, r).forEach(tx => { if (!tx.voided) { const k = soaMonthKey(tx.date || tx.timestamp); if (k) keys.add(k); } });
+    resellerPaymentHistory(f, r).forEach(p => { const k = soaMonthKey(p.date); if (k) keys.add(k); });
+    (f.semenResellerAdjustments || []).forEach(a => { if (a.reseller_id === r.id) { const k = soaMonthKey(a.date || a.timestamp); if (k) keys.add(k); } });
+    const months = [...keys].filter(Boolean).sort().reverse();
+    return [{ key: 'all', label: 'All time — full account history' }]
+      .concat(months.map(k => ({ key: k, label: soaMonthLabel(k) })))
+      .concat([{ key: 'custom', label: 'Custom date range…' }]);
+  }
+
+  /* The ledger. `from`/`to` are inclusive YYYY-MM-DD, or '' for open-ended. */
+  function resellerSOAData(f, r, from, to) {
+    const lo = soaDay(from), hi = soaDay(to);
+    const inPeriod = d => (!lo || d >= lo) && (!hi || d <= hi);
+    const beforePeriod = d => !!lo && d < lo;
+
+    const txs = resellerTransactionsFor(f, r).filter(tx => tx && !tx.voided);
+    const pays = resellerPaymentHistory(f, r);
+
+    /* opening = everything that happened strictly before the window. It is left
+       UNCLAMPED so an advance payment carries forward as a credit instead of
+       silently vanishing at zero. */
+    let openBilled = 0, openDisc = 0, openPaid = 0;
+    txs.forEach(tx => { if (beforePeriod(soaDay(tx.date || tx.timestamp))) { openBilled += Math.max(0, +(tx.total_amount || 0)); openDisc += resellerTxDiscount(tx); } });
+    pays.forEach(p => { if (beforePeriod(soaDay(p.date))) openPaid += Math.max(0, +p.amount || 0); });
+    const opening = openBilled - openDisc - openPaid;
+
+    const charges = txs
+      .filter(tx => inPeriod(soaDay(tx.date || tx.timestamp)))
+      .map(tx => {
+        const gross = Math.max(0, +(tx.total_amount || 0));
+        const discount = resellerTxDiscount(tx);
+        const bottles = (tx.lines || []).reduce((a, l) => a + Math.max(0, Math.floor(+l.qty || 0)), 0);
+        const detail = (tx.lines || []).map(l => `${escH(l.boar || l.breed || 'Semen')}${l.semen_batch_no ? ` · ${escH(l.semen_batch_no)}` : ''} × ${Math.floor(+l.qty || 0)}`).join('<br>');
+        return { date: soaDay(tx.date || tx.timestamp), id: tx.id, bottles, detail, gross, discount, net: gross - discount, type: tx.type || 'pickup' };
+      })
+      .sort((a, b) => a.date.localeCompare(b.date) || String(a.id).localeCompare(String(b.id)));
+
+    const payments = pays
+      .filter(p => inPeriod(soaDay(p.date)))
+      .map(p => ({ date: soaDay(p.date), method: p.method || 'payment', amount: Math.max(0, +p.amount || 0) }))
+      .sort((a, b) => a.date.localeCompare(b.date));
+
+    /* the dated discount log is a REFERENCE list: the money it represents is
+       already inside each transaction's discount_amount above, so it is never
+       added a second time */
+    const adjustments = (f.semenResellerAdjustments || [])
+      .filter(a => a && a.reseller_id === r.id && inPeriod(soaDay(a.date || a.timestamp)))
+      .map(a => ({ date: soaDay(a.date || a.timestamp), reason: a.reason || '—', amount: Math.max(0, +a.amount || 0) }))
+      .sort((a, b) => a.date.localeCompare(b.date));
+
+    const grossCharges = charges.reduce((s, c) => s + c.gross, 0);
+    const discounts = charges.reduce((s, c) => s + c.discount, 0);
+    const netCharges = grossCharges - discounts;
+    const collected = payments.reduce((s, p) => s + p.amount, 0);
+    const bottles = charges.reduce((s, c) => s + c.bottles, 0);
+    const closingRaw = opening + netCharges - collected;
+
+    return {
+      from: lo, to: hi, opening, openingIsCredit: opening < -0.005,
+      charges, payments, adjustments,
+      grossCharges, discounts, netCharges, collected, bottles,
+      closingRaw,
+      /* the hub, the thermal slip and this document must never disagree */
+      closing: Math.max(0, closingRaw),
+      credit: Math.max(0, -closingRaw)
+    };
+  }
+
+  /* exported: the ledger is the money model for this document, and QA pins it
+     against resellerAccountTotals so the two can never drift apart */
+  window.resellerSOAData = (f, r, from, to) => resellerSOAData(f || F(), r, from, to);
+  window.resellerSOAPeriods = (f, r) => resellerSOAPeriods(f || F(), r);
+
+  let soaState = { rId: '', period: 'all', from: '', to: '' };
+
+  function soaBounds(state) {
+    if (state.period === 'all') return { from: '', to: '', label: 'All time' };
+    if (state.period === 'custom') {
+      const a = soaDay(state.from), b = soaDay(state.to);
+      return { from: a, to: b, label: a || b ? `${a ? fmtDate(a) : 'start'} — ${b ? fmtDate(b) : 'today'}` : 'All time' };
+    }
+    return { from: state.period + '-01', to: soaMonthEnd(state.period), label: soaMonthLabel(state.period) };
+  }
+
+  function openResellerSOA(rId, period) {
+    ensureResellerData();
+    const f = F();
+    const r = (f.semenResellers || []).find(x => x.id === rId);
+    if (!r) { toast('Reseller profile not found.'); return; }
+    soaState = {
+      rId,
+      period: period || (soaState.rId === rId ? soaState.period : 'all'),
+      from: soaState.rId === rId ? soaState.from : '',
+      to: soaState.rId === rId ? soaState.to : ''
+    };
+    renderResellerSOA();
+  }
+  window.openResellerSOA = openResellerSOA;
+
+  window.resellerSOASetPeriod = function (value) {
+    soaState.period = value || 'all';
+    renderResellerSOA();
+  };
+  window.resellerSOASetRange = function (which, value) {
+    soaState[which === 'to' ? 'to' : 'from'] = soaDay(value);
+    soaState.period = 'custom';
+    renderResellerSOA();
+  };
+  window.closeResellerSOA = function () {
+    document.getElementById('resellerSOA')?.remove();
+    document.body.classList.remove('soa-report-open');
+  };
+
+  function renderResellerSOA() {
+    const f = F();
+    const r = (f.semenResellers || []).find(x => x.id === soaState.rId);
+    if (!r) return;
+    const bounds = soaBounds(soaState);
+    const d = resellerSOAData(f, r, bounds.from, bounds.to);
+    const periods = resellerSOAPeriods(f, r);
+    const farmLogo = document.querySelector('.sidebar .logo-img')?.src || '';
+    const appLogo = document.querySelector('.sidebar .logo-img')?.dataset.defaultSrc || farmLogo;
+    const created = new Date();
+    const soaNo = `SOA-${String(r.id || '').replace(/[^A-Za-z0-9]/g, '').slice(-6).toUpperCase() || 'RES'}-${(bounds.from || 'ALL').replace(/-/g, '').slice(0, 6)}`;
+    const money = n => peso(Math.round((+n || 0) * 100) / 100);
+
+    const tr = (cells, head) => `<tr>${cells.map(c => head ? `<th>${c}</th>` : `<td>${c}</td>`).join('')}</tr>`;
+    const right = 'style="text-align:right;white-space:nowrap"';
+
+    const chargeTable = d.charges.length
+      ? `<table class="vax-rep">${tr(['Date', 'Reference', 'Bottles dispatched', `<span ${right}>Gross</span>`, `<span ${right}>Discount</span>`, `<span ${right}>Net charge</span>`], true)}${
+        d.charges.map(c => tr([
+          `<b>${fmtDate(c.date)}</b>`,
+          `#${escH(c.id)}<br><small>${escH(c.type)}</small>`,
+          c.detail || `${c.bottles} bottle${c.bottles === 1 ? '' : 's'}`,
+          `<span ${right}>${money(c.gross)}</span>`,
+          `<span ${right}>${c.discount > 0.005 ? '−' + money(c.discount) : '—'}</span>`,
+          `<span ${right}><b>${money(c.net)}</b></span>`
+        ])).join('')
+      }${tr([`<b>TOTAL — ${d.charges.length} dispatch${d.charges.length === 1 ? '' : 'es'}</b>`, '', `<b>${d.bottles} bottle${d.bottles === 1 ? '' : 's'}</b>`, `<span ${right}><b>${money(d.grossCharges)}</b></span>`, `<span ${right}><b>${d.discounts > 0.005 ? '−' + money(d.discounts) : '—'}</b></span>`, `<span ${right}><b>${money(d.netCharges)}</b></span>`])}</table>`
+      : '<p class="vax-rep-empty">No bottles were dispatched in this period.</p>';
+
+    const payTable = d.payments.length
+      ? `<table class="vax-rep">${tr(['Date received', 'Method / reference', `<span ${right}>Amount</span>`], true)}${
+        d.payments.map(p => tr([`<b>${fmtDate(p.date)}</b>`, escH(p.method), `<span ${right}><b>${money(p.amount)}</b></span>`])).join('')
+      }${tr([`<b>TOTAL COLLECTED</b>`, '', `<span ${right}><b>${money(d.collected)}</b></span>`])}</table>`
+      : '<p class="vax-rep-empty">No payments were received in this period.</p>';
+
+    const adjTable = d.adjustments.length
+      ? `<table class="vax-rep">${tr(['Date', 'Reason', `<span ${right}>Amount</span>`], true)}${
+        d.adjustments.map(a => tr([`<b>${fmtDate(a.date)}</b>`, escH(a.reason), `<span ${right}>−${money(a.amount)}</span>`])).join('')
+      }</table><p class="vax-rep-note">Already deducted in the dispatch table above — shown here for the audit trail, not charged twice.</p>`
+      : '';
+
+    const openingLabel = d.openingIsCredit ? 'Advance / credit brought forward' : 'Previous balance brought forward';
+    const summary = `<table class="vax-rep soa-summary">
+      ${tr([openingLabel, `<span ${right}>${d.openingIsCredit ? '−' : ''}${money(Math.abs(d.opening))}</span>`])}
+      ${tr(['Add: bottles dispatched this period (gross)', `<span ${right}>${money(d.grossCharges)}</span>`])}
+      ${tr(['Less: discounts / readjustments', `<span ${right}>${d.discounts > 0.005 ? '−' + money(d.discounts) : money(0)}</span>`])}
+      ${tr(['<b>Net charges this period</b>', `<span ${right}><b>${money(d.netCharges)}</b></span>`])}
+      ${tr(['Less: payments received', `<span ${right}>−${money(d.collected)}</span>`])}
+      ${tr([`<b class="soa-due">${d.credit > 0.005 ? 'CREDIT IN FAVOUR OF RESELLER' : 'BALANCE DUE'}</b>`, `<span ${right}><b class="soa-due">${money(d.credit > 0.005 ? d.credit : d.closing)}</b></span>`])}
+    </table>`;
+
+    const periodOptions = periods.map(p => `<option value="${escH(p.key)}" ${soaState.period === p.key ? 'selected' : ''}>${escH(p.label)}</option>`).join('');
+
+    document.getElementById('resellerSOA')?.remove();
+    document.body.insertAdjacentHTML('beforeend', `
+      <div class="drill-bg" id="resellerSOA">
+        <div class="feed-report-toolbar no-print soa-toolbar">
+          <button type="button" class="btn ghost" onclick="closeResellerSOA()">× Close</button>
+          <span>Statement of Account · ${escH(r.name)}</span>
+          <label class="soa-period">Period
+            <select onchange="window.resellerSOASetPeriod(this.value)">${periodOptions}</select>
+          </label>
+          ${soaState.period === 'custom' ? `<label class="soa-period">From <input type="date" value="${escH(soaState.from)}" onchange="window.resellerSOASetRange('from', this.value)"></label>
+          <label class="soa-period">To <input type="date" value="${escH(soaState.to)}" onchange="window.resellerSOASetRange('to', this.value)"></label>` : ''}
+          <button type="button" class="btn" onclick="window.printResellerSOA()">🖨 Print / Save PDF</button>
+        </div>
+        <article class="certificate soa-cert">
+          <header class="cert-header">
+            <div class="cert-logo"><img src="${farmLogo}" alt="${escH(f.name || 'Farm')} logo"></div>
+            <div class="cert-actions no-print"><button class="btn" onclick="window.printResellerSOA()">🖨 Print / Save PDF</button><button class="btn ghost" onclick="closeResellerSOA()">Close</button></div>
+            <div class="cert-title"><small>ARSWINETECH PRO · SEMEN RESELLER ACCOUNT</small><h1>Statement of Account</h1><h2>${escH(f.name || 'Farm')}</h2></div>
+            <div class="cert-app-logo"><img src="${appLogo}" alt="ARSwineTech"><b>Breed. Feed. Predict.</b></div>
+            <button class="close-reminder no-print" onclick="closeResellerSOA()">×</button>
+          </header>
+          <main class="cert-grid">
+            <section class="cert-card soa-parties">
+              <h3>Billed to</h3>
+              <p class="soa-party"><b>${escH(r.name)}</b></p>
+              <p class="soa-line">${escH(r.address || 'Address not on file')}</p>
+              <p class="soa-line">${escH(r.contact || 'Contact not on file')}</p>
+            </section>
+            <section class="cert-card soa-parties">
+              <h3>Statement details</h3>
+              <p class="soa-line"><span>Statement no.</span><b>${escH(soaNo)}</b></p>
+              <p class="soa-line"><span>Period covered</span><b>${escH(bounds.label)}</b></p>
+              <p class="soa-line"><span>Date issued</span><b>${created.toLocaleDateString('en-PH', { month: 'long', day: 'numeric', year: 'numeric' })}</b></p>
+              <p class="soa-line"><span>Currency</span><b>Philippine Peso (PHP)</b></p>
+            </section>
+            <section class="cert-card cert-wide">
+              <h3>📦 Bottles dispatched</h3>
+              <p class="vax-rep-note">Every consignment dispatched to this reseller inside the period, at the price agreed on the day.</p>
+              ${chargeTable}
+              ${adjTable}
+            </section>
+            <section class="cert-card cert-wide">
+              <h3>💵 Payments received</h3>
+              <p class="vax-rep-note">Dated on the day the money was actually received, not on the dispatch date.</p>
+              ${payTable}
+            </section>
+            <section class="cert-card cert-wide soa-summary-card">
+              <h3>🧾 Account summary</h3>
+              ${summary}
+              <p class="vax-rep-note">${d.from || d.to
+                ? 'The previous balance carries the account forward, so each monthly statement continues from the last one.'
+                : 'This is the complete account history, so the balance due is the reseller’s full outstanding amount.'}</p>
+            </section>
+          </main>
+          <footer class="cert-footer">
+            <div>▣<span>Generated On<b>${created.toLocaleString('en-PH')}</b></span></div>
+            <div>♙<span>Generated By<b>${escH(f.name || 'Farm')}</b></span></div>
+            <div>📦<span>Dispatches In Period<b>${d.charges.length} · ${d.bottles} bottles</b></span></div>
+            <div>◇<span>Payments In Period<b>${d.payments.length} · ${money(d.collected)}</b></span></div>
+          </footer>
+          <div class="cert-end"><span>This document is system generated by ARSwineTech Pro</span><b>${d.credit > 0.005 ? 'Account in credit — thank you.' : (d.closing > 0.005 ? 'Please settle the balance due above.' : 'Account fully settled — thank you.')}</b></div>
+          <div class="cert-sign"><span>Prepared by (Farm Representative)</span><span>Received / Conforme (${escH(r.name)})</span></div>
+        </article>
+      </div>
+    `);
+    document.body.classList.add('soa-report-open');
+    const scroller = document.getElementById('resellerSOA');
+    if (scroller) scroller.scrollTop = 0;
+  }
+
+  /* The app shell can never reach the paper: only the <article> is written into
+     a fresh window that carries its own A4 stylesheet. */
+  window.printResellerSOA = function () {
+    const article = document.querySelector('#resellerSOA .certificate');
+    if (!article) { toast('Open the statement first, then print it.'); return; }
+    const f = F();
+    const r = (f.semenResellers || []).find(x => x.id === soaState.rId);
+    const title = `Statement of Account — ${(r && r.name) || 'Reseller'} — ${soaBounds(soaState).label}`;
+    const win = window.open('', '_blank');
+    if (!win) { toast('Please allow pop-ups so the statement can be printed or saved as PDF.'); return; }
+    const css = `
+      @page{size:A4;margin:12mm}
+      *{box-sizing:border-box}
+      body{margin:0;background:#fff;color:#172327;font-family:Arial,Helvetica,sans-serif;font-size:11px;line-height:1.35}
+      .certificate{width:100%;max-width:100%;background:#fff;color:#172327;padding:0}
+      .cert-header{display:grid;grid-template-columns:70px 1fr auto;gap:10px;align-items:center;border-bottom:3px solid #0e7c74;padding:8px 0 10px;margin-bottom:12px}
+      .cert-logo img,.cert-app-logo img{width:60px;height:48px;object-fit:contain}
+      .cert-title small{font-size:8px;letter-spacing:.12em;color:#0e7c74;font-weight:800}
+      .cert-title h1{font-size:21px;line-height:1.1;margin:3px 0;color:#10282c;letter-spacing:-.3px}
+      .cert-title h2{font-size:13px;margin:0;color:#37505a}
+      .cert-app-logo{text-align:center;font-size:8px;color:#0e7c74}
+      .cert-grid{display:block}
+      .cert-card{border:1px solid #cfdddd;border-radius:7px;padding:9px 11px;margin:0 0 10px;break-inside:avoid}
+      .cert-card h3{margin:0 0 6px;color:#0e7c74;font-size:12px;border-bottom:1px solid #d7e6e4;padding-bottom:4px}
+      .soa-parties{display:inline-block;width:49%;vertical-align:top}
+      .soa-parties:first-of-type{margin-right:1.4%}
+      .soa-party{margin:0 0 3px;font-size:13px}
+      .soa-line{display:flex;justify-content:space-between;gap:10px;margin:0 0 2px;font-size:10px;color:#44575c}
+      .soa-line b{color:#172327}
+      .vax-rep{width:100%;border-collapse:collapse;font-size:9.5px}
+      .vax-rep th{background:#eaf6f4;color:#0e6963;text-align:left;font-size:9px;text-transform:uppercase;padding:5px;border-bottom:1px solid #9ccbc5}
+      .vax-rep td{padding:5px;border-bottom:1px solid #e4eded;vertical-align:top}
+      .vax-rep tr:last-child td{border-bottom:0;background:#f4faf9;font-weight:700}
+      .vax-rep-note{font-size:9px;color:#637174;margin:0 0 6px}
+      .vax-rep-empty{color:#637174;font-size:10px;margin:4px 0}
+      .soa-summary{font-size:11px;max-width:420px;margin-left:auto}
+      .soa-summary td{padding:5px 6px}
+      .soa-summary tr:last-child td{background:#0e7c74;color:#fff;font-size:13px}
+      .soa-due{font-size:13px}
+      .cert-footer{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;border-top:1px solid #cfdddd;padding:8px 0;font-size:9px;break-inside:avoid}
+      .cert-footer>div{display:flex;gap:5px;color:#0e7c74}.cert-footer span{color:#637174}.cert-footer b{display:block;color:#172327}
+      .cert-end{display:flex;justify-content:space-between;border-top:1px solid #0e7c74;padding:7px 0;font-size:9px;break-inside:avoid}
+      .cert-sign{display:flex;justify-content:space-between;padding:26px 28px 0;font-size:9px;break-inside:avoid}
+      .cert-sign span{width:220px;border-top:1px solid #637174;padding-top:4px}
+      .no-print{display:none!important}
+    `;
+    win.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${escH(title)}</title><style>${css}</style></head><body>${article.outerHTML}</body></html>`);
+    win.document.close();
+    win.focus();
+    setTimeout(() => { try { win.print(); } catch (_) {} }, 350);
+  };
 
   /* ── Direct Web Bluetooth ESC/POS Printing for Reseller Receipts & Statements ── */
   async function btPrintResellerTx(txId) {

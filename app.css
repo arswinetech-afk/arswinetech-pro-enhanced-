@@ -6364,3 +6364,62 @@ html, body, .shell, .main {
 .light-theme .auth-hint{color:#657d7f}
 .light-theme .auth-note{background:#eaf5fb;border-color:#c5e2f0;color:#2b5f77}
 .light-theme .login-notice{background:#e7f8ef;border-color:#a9dfc2;color:#1c6b45}
+
+/* ═══ [FIX 203] Reseller Statement of Account — A4 document ═══
+   The statement's "Print / PDF" used to call window.print() on a .drill-bg
+   overlay (position:fixed;inset:0) that no @media print rule ever claimed: the
+   browser paginated the hidden app shell behind it and clipped the overlay
+   away, which is the six blank pages the field reported. The document now has
+   its own screen skin here and prints through a fresh window carrying its own
+   A4 stylesheet, so the app shell cannot reach the paper at all. The rules
+   below deliberately mirror #feedReport, the report layout already proven on
+   these phones. */
+#resellerSOA{padding:14px;overflow:auto;align-items:flex-start!important}
+#resellerSOA .soa-toolbar{position:sticky;top:0;z-index:4;display:flex;align-items:center;justify-content:flex-start;flex-wrap:wrap;gap:8px;width:min(1000px,96vw);margin:0 auto 8px;padding:7px 9px;border:1px solid rgba(91,226,213,.22);border-radius:10px;background:rgba(8,28,33,.96);color:#bfe9e5;font-size:11px}
+#resellerSOA .soa-toolbar>span{flex:1 1 140px;font-weight:700}
+#resellerSOA .soa-toolbar .btn{padding:7px 10px}
+#resellerSOA .soa-period{display:flex;align-items:center;gap:5px;font-size:10.5px;color:#9fd2cc;font-weight:700;white-space:nowrap}
+#resellerSOA .soa-period select,#resellerSOA .soa-period input{background:#0b1b1f;border:1px solid #2a4a50;color:#e7f6f5;border-radius:7px;padding:6px 8px;font-size:11.5px;font-weight:700;max-width:210px}
+#resellerSOA .certificate{width:min(1000px,96vw);max-width:1000px;background:#fff;color:#172327;border-radius:10px;padding:18px;line-height:1.4}
+#resellerSOA .cert-header{display:grid;grid-template-columns:70px 1fr auto 30px;gap:10px;align-items:center;border-bottom:3px solid #0e7c74;padding:8px 0 11px;margin-bottom:12px}
+#resellerSOA .cert-logo img,#resellerSOA .cert-app-logo img{width:60px;height:48px;object-fit:contain}
+#resellerSOA .cert-title small{font-size:8px;letter-spacing:.12em;color:#0e7c74;font-weight:800}
+#resellerSOA .cert-title h1{font-size:22px;line-height:1.1;margin:3px 0;color:#10282c;letter-spacing:-.3px}
+#resellerSOA .cert-title h2{font-size:13px;margin:0;color:#37505a}
+#resellerSOA .cert-app-logo{text-align:center;font-size:8px;color:#0e7c74}
+#resellerSOA .cert-grid{display:block}
+#resellerSOA .cert-card{border:1px solid #cfdddd;border-radius:7px;padding:10px 11px;margin:0 0 10px;background:#fff}
+#resellerSOA .cert-card h3{margin:0 0 7px;color:#0e7c74;font-size:12px;border-bottom:1px solid #d7e6e4;padding-bottom:4px}
+#resellerSOA .soa-parties{display:inline-block;width:49%;vertical-align:top}
+#resellerSOA .soa-parties:first-of-type{margin-right:1.3%}
+#resellerSOA .soa-party{margin:0 0 3px;font-size:14px;color:#10282c}
+#resellerSOA .soa-line{display:flex;justify-content:space-between;gap:10px;margin:0 0 2px;font-size:10.5px;color:#44575c}
+#resellerSOA .soa-line b{color:#172327}
+#resellerSOA .vax-rep{width:100%;border-collapse:collapse;font-size:10px;color:#172327}
+#resellerSOA .vax-rep th{background:#eaf6f4;color:#0e6963;text-align:left;font-size:9px;text-transform:uppercase;padding:6px;border-bottom:1px solid #9ccbc5}
+#resellerSOA .vax-rep td{padding:6px;border-bottom:1px solid #e4eded;vertical-align:top}
+#resellerSOA .vax-rep tr:last-child td{border-bottom:0;background:#f4faf9;font-weight:700}
+#resellerSOA .vax-rep-note{font-size:9px;color:#637174;margin:0 0 6px}
+#resellerSOA .vax-rep-empty{color:#637174;font-size:10px;margin:4px 0}
+#resellerSOA .soa-summary{font-size:11.5px;max-width:430px;margin-left:auto}
+#resellerSOA .soa-summary td{padding:6px 7px}
+#resellerSOA .soa-summary tr:last-child td{background:#0e7c74;color:#fff}
+#resellerSOA .soa-due{font-size:13.5px}
+#resellerSOA .cert-footer{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;border-top:1px solid #cfdddd;padding:8px 0;font-size:9px}
+#resellerSOA .cert-footer>div{display:flex;gap:5px;color:#0e7c74}#resellerSOA .cert-footer span{color:#637174}#resellerSOA .cert-footer b{display:block;color:#172327}
+#resellerSOA .cert-end{display:flex;justify-content:space-between;border-top:1px solid #0e7c74;padding:7px 0;font-size:9px}
+#resellerSOA .cert-sign{display:flex;justify-content:space-between;padding:24px 28px 0;font-size:9px}
+#resellerSOA .cert-sign span{width:220px;border-top:1px solid #637174;padding-top:4px}
+@media(max-width:700px){#resellerSOA{padding:8px}#resellerSOA .soa-toolbar{width:100%}#resellerSOA .soa-period{flex:1 1 100%}#resellerSOA .soa-period select,#resellerSOA .soa-period input{flex:1;max-width:none}#resellerSOA .certificate{width:100%;padding:12px}#resellerSOA .cert-header{grid-template-columns:46px 1fr 28px;gap:7px}#resellerSOA .cert-app-logo{display:none}#resellerSOA .cert-title h1{font-size:17px}#resellerSOA .soa-parties{display:block;width:100%;margin-right:0}#resellerSOA .soa-summary{max-width:none}#resellerSOA .cert-footer{grid-template-columns:1fr 1fr}#resellerSOA .cert-end{display:block}#resellerSOA .cert-end b{display:block;margin-top:4px}#resellerSOA .cert-sign{padding:22px 8px 0;gap:12px}#resellerSOA .cert-sign span{width:50%}}
+/* Ctrl+P / the system share sheet must behave too: everything but the document
+   leaves the print tree, and the fixed overlay is un-fixed. Same shape as the
+   vaccination and feed reports. */
+@media print{
+  body.soa-report-open:has(>#resellerSOA)>*:not(#resellerSOA){display:none!important}
+  body.soa-report-open #resellerSOA{position:static!important;inset:auto!important;display:block!important;background:#fff!important;backdrop-filter:none!important;filter:none!important;padding:0!important;margin:0!important;z-index:auto!important;overflow:visible!important}
+  body.soa-report-open #resellerSOA,body.soa-report-open #resellerSOA *{visibility:visible!important}
+  body.soa-report-open #resellerSOA .no-print{display:none!important}
+  body.soa-report-open #resellerSOA .certificate{position:static!important;width:100%!important;max-width:none!important;max-height:none!important;height:auto!important;overflow:visible!important;box-shadow:none!important;border-radius:0!important;margin:0!important;padding:0!important;break-inside:auto!important}
+  body.soa-report-open #resellerSOA .cert-card{break-inside:avoid}
+  body.soa-report-open #resellerSOA .vax-rep tr{break-inside:avoid}
+}
