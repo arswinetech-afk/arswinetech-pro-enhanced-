@@ -132,3 +132,50 @@ balance ₱4,650).
 11. the `@media print` isolation block exists — the blank-page cause, pinned
 
 Whole suite: **14 files, 1,080 checks, all green.**
+
+---
+
+# FIX 203b — the document was opening behind the statement
+
+**Reported:** 2026-10-03, immediately after FIX 203 shipped — *"When I try to click now
+after the update, nothing happens. It seems the button is not responding."*
+**Version:** `v253-soa-stacking-2026-10-03`
+**File:** `app.css` (one line)
+
+The handler was never broken. Driven through the real code, the click resolves
+`window.openResellerSOA`, runs end to end without throwing, and renders the complete
+5,956-byte document onto the page.
+
+It just could not be seen.
+
+| element | z-index | where from |
+|---|---|---|
+| `#resellerStatementModal` | **9 999 999** | inline, in `semen-sales.js:5628` |
+| `#resellerSOA` | **9 997** | inherited from `.drill-bg` in `app.css` |
+
+The Statement of Account is opened *from* the statement modal, and the statement modal
+stays on screen behind it. At `9997` against `9999999`, the brand-new A4 document was
+painted underneath an opaque overlay. From the phone, a perfectly rendered invisible page
+and a dead button are the same thing.
+
+```css
+#resellerSOA{…;z-index:100000000!important}
+```
+
+`100 000 000` is above every overlay the app uses (the highest is `99 999 999`) and still
+below `.toast` at `999 999 999`, which has to stay readable over everything. Closing the
+document still reveals the statement underneath, so "× Close" goes back where you came
+from.
+
+## QA
+
+Section `[12]` added to `qa/test-reseller-soa.mjs` — **95/95**. It does not merely assert
+a number: it scans **every** `z-index:…!important` in `app.css` and `semen-sales.js`,
+and requires the document to outrank all of them except the toast. A future overlay that
+tries to sit on top of it fails this test.
+
+It also drives the real button: resolves the `onclick` out of the rendered statement
+footer, asserts the function is exported, calls it, asserts it does not throw and that a
+document lands on the page.
+
+Whole suite: **14 files, 1,089 checks, all green.**

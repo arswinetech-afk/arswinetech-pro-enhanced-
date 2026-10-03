@@ -379,5 +379,49 @@ const R = () => seed().semenResellers[0];
   ok('[11] closing the document clears the print flag', /classList\.remove\('soa-report-open'\)/.test(SOURCE));
 }
 
+/* ══ 12. [FIX 203b] it has to be VISIBLE when it opens ═══════════════════════
+   First field report after shipping FIX 203: "nothing happens, the button is
+   not responding." The handler was fine — it rendered the whole document — but
+   #resellerSOA is a .drill-bg (z-index:9997) and it is opened from the
+   statement modal, which carries an inline z-index:9999999. The document was
+   drawn behind an opaque overlay. A dead-looking button and a perfectly
+   rendered, invisible page are the same thing to the person holding the phone. */
+{
+  console.log('\n[12] The document opens ON TOP of the statement it was opened from');
+  const zOf = (re) => { const m = re.exec(CSS); return m ? +m[1] : NaN; };
+  const soaZ = zOf(/#resellerSOA\{[^}]*z-index:(\d+)!important/);
+  ok('[12] #resellerSOA pins its own z-index', Number.isFinite(soaZ), String(soaZ));
+
+  /* every stacking value any overlay in this app actually uses */
+  const modalZ = [...SOURCE.matchAll(/z-index:(\d+)!important/g)].map(m => +m[1]);
+  const cssZ = [...CSS.matchAll(/z-index:(\d+)!important/g)].map(m => +m[1]);
+  const statementZ = (/id="resellerStatementModal" style="z-index:(\d+)!important/.exec(SOURCE) || [])[1];
+  ok('[12] the statement modal still declares the value we must beat', +statementZ === 9999999, String(statementZ));
+  ok('[12] the document outranks the statement modal', soaZ > +statementZ, `${soaZ} vs ${statementZ}`);
+
+  /* …measured without the document's own rule, and without the toast */
+  const cssWithoutSOA = CSS.replace(/#resellerSOA\{[^}]*\}/g, '');
+  const otherZ = [...cssWithoutSOA.matchAll(/z-index:(\d+)!important/g)].map(m => +m[1]);
+  const highestModal = Math.max(...modalZ, ...otherZ.filter(z => z < 999999999));
+  ok('[12] it outranks every other overlay in the app too', soaZ > highestModal, `${soaZ} vs ${highestModal}`);
+
+  const toastZ = zOf(/\.toast\{z-index:(\d+)!important/);
+  ok('[12] but it stays below the toast, which must always be readable', soaZ < toastZ, `${soaZ} vs ${toastZ}`);
+
+  /* and the handler really is reachable + non-throwing from the statement */
+  const db = seed(); const ctx = boot(db);
+  ctx.openResellerStatement('R-JO');
+  const btn = /onclick="window\.openResellerSOA\('([^']*)'\)"/.exec(ctx.html());
+  ok('[12] the statement footer wires the button to a real exported function',
+    !!btn && typeof ctx.openResellerSOA === 'function', String(btn && btn[1]));
+  let threw = null;
+  try { ctx.openResellerSOA(btn[1]); } catch (e) { threw = e.message; }
+  ok('[12] clicking it does not throw', threw === null, String(threw));
+  ok('[12] and it actually puts a document on the page', /id="resellerSOA"/.test(ctx.html()) && ctx.html().length > 2000, String(ctx.html().length));
+  ok('[12] closing it leaves the statement underneath to go back to',
+    /closeResellerSOA[\s\S]{0,220}getElementById\('resellerSOA'\)\?\.remove\(\)/.test(SOURCE) &&
+    !/closeResellerSOA[\s\S]{0,220}resellerStatementModal/.test(SOURCE));
+}
+
 console.log(`\n${failures ? 'FAILED' : 'OK'} — ${checks - failures}/${checks} checks passed\n`);
 process.exit(failures ? 1 : 0);

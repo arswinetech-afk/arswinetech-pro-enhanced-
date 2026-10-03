@@ -6374,7 +6374,13 @@ html, body, .shell, .main {
    A4 stylesheet, so the app shell cannot reach the paper at all. The rules
    below deliberately mirror #feedReport, the report layout already proven on
    these phones. */
-#resellerSOA{padding:14px;overflow:auto;align-items:flex-start!important}
+/* [FIX 203b] The document is opened FROM the statement, which is a .drill-bg
+   carrying an inline z-index:9999999. #resellerSOA only had the stock
+   .drill-bg{z-index:9997}, so the statement of account rendered perfectly —
+   underneath an opaque modal. From the phone it looked like a dead button.
+   It now sits above every modal in the app (the highest is 99999999) and still
+   below .toast (999999999), which must always be readable. */
+#resellerSOA{padding:14px;overflow:auto;align-items:flex-start!important;z-index:100000000!important}
 #resellerSOA .soa-toolbar{position:sticky;top:0;z-index:4;display:flex;align-items:center;justify-content:flex-start;flex-wrap:wrap;gap:8px;width:min(1000px,96vw);margin:0 auto 8px;padding:7px 9px;border:1px solid rgba(91,226,213,.22);border-radius:10px;background:rgba(8,28,33,.96);color:#bfe9e5;font-size:11px}
 #resellerSOA .soa-toolbar>span{flex:1 1 140px;font-weight:700}
 #resellerSOA .soa-toolbar .btn{padding:7px 10px}
